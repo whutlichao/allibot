@@ -29,6 +29,7 @@ import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './mem
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
+import { readTeamWakeState } from './team.js';
 import { countUnread } from './unread.js';
 
 /**
@@ -170,6 +171,7 @@ interface AgentMemberRow {
 export function collectWakes(
   db: Database.Database,
   message: { targetId: string; authorMemberId: string; kind: string; seq: number },
+  env: NodeJS.ProcessEnv = process.env,
 ): Wake[] {
   if (message.kind !== 'human' && message.kind !== 'agent') {
     return [];
@@ -177,11 +179,23 @@ export function collectWakes(
 
   const mentions = listMentionedAgents(db, message.targetId, message.seq);
   const mentioned = new Set(mentions.map((member) => member.id));
+  const targetKind = readTargetKind(db, message.targetId);
+
+  // team 模式收窄（D3.2 / D3.8）：the channel-type target's ordinary wake
+  // surface is only the leader. A team channel with an unusable leader delivers
+  // zero leader wakes and never falls back to the M1 member surface; the
+  // channel @mention penetration stays outside the team pipeline (D3.6).
+  if (targetKind === 'channel') {
+    const team = readTeamWakeState(db, message.targetId, env);
+    if (team !== null) {
+      return collectTeamChannelWakes(message, mentions, mentioned, team);
+    }
+  }
+
   const wakes: Wake[] = [];
   const woken = new Set<string>();
 
-  const isDm = readTargetKind(db, message.targetId) === 'dm';
-  const wakesTargetMembers = !(message.kind === 'agent' && isDm);
+  const wakesTargetMembers = !(message.kind === 'agent' && targetKind === 'dm');
   if (wakesTargetMembers) {
     for (const member of listTargetAgentMembers(db, message.targetId)) {
       if (member.id === message.authorMemberId) {
@@ -217,6 +231,52 @@ export function collectWakes(
     woken.add(member.id);
   }
 
+  return wakes;
+}
+
+/**
+ * The team channel's wake set (D3.2 / D3.6 / D3.8):
+ * - the leader is the whole ordinary surface, and only while it is usable;
+ * - a leader-authored message wakes nobody at all — not the ordinary surface
+ *   and not the mention penetration (the leader's final reply must not loop);
+ * - an @mention of a non-leader is still the M1 penetration path: it is
+ *   delivered once, member or not, and never changes the leader identity.
+ */
+function collectTeamChannelWakes(
+  message: { targetId: string; authorMemberId: string; kind: string; seq: number },
+  mentions: readonly { id: string }[],
+  mentioned: ReadonlySet<string>,
+  team: { leaderMemberId: string; available: boolean },
+): Wake[] {
+  if (team.leaderMemberId === message.authorMemberId) {
+    return [];
+  }
+  const wakes: Wake[] = [];
+  const delivered = new Set<string>();
+  if (team.leaderMemberId.length > 0) {
+    delivered.add(team.leaderMemberId);
+    if (team.available) {
+      wakes.push({
+        memberId: team.leaderMemberId,
+        targetId: message.targetId,
+        fromSeq: message.seq,
+        // A mention of the leader is the more specific readable reason.
+        reason: mentioned.has(team.leaderMemberId) ? 'mention' : 'channel-message',
+      });
+    }
+  }
+  for (const member of mentions) {
+    if (member.id === message.authorMemberId || delivered.has(member.id)) {
+      continue;
+    }
+    wakes.push({
+      memberId: member.id,
+      targetId: message.targetId,
+      fromSeq: message.seq,
+      reason: 'mention',
+    });
+    delivered.add(member.id);
+  }
   return wakes;
 }
 
