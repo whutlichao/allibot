@@ -85,7 +85,7 @@ export interface WorkspaceShellProps {
   /** Read the Agent's mcp.json when the detail opens; the host fetches. */
   onAgentMcpNeeded?: (agentId: string) => void;
   /** The one mcp.json write shared by the structured form and raw textarea. */
-  onAgentMcpChange?: (agentId: string, body: McpSaveBody) => Promise<AgentMcpView | void>;
+  onAgentMcpChange?: (agentId: string, body: McpSaveBody) => void | Promise<AgentMcpView | void>;
   /** Effective rules per Agent id, read on demand when the detail opens. */
   agentRules?: Record<string, AgentRulesView>;
   viewportWidth?: number;

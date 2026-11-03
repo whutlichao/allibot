@@ -56,7 +56,7 @@ export interface AppProps {
   onAgentMcpChange?: (
     agentId: string,
     body: { entries: import('@allibot/shared').McpServerEntry[] } | { raw: string },
-  ) => Promise<AgentMcpView | void>;
+  ) => void | Promise<AgentMcpView | void>;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
   onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;

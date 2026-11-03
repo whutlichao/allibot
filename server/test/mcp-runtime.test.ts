@@ -315,6 +315,17 @@ test('a missing mcp.json is zero MCP without an error; old mcp_server rows are n
     assert.doesNotMatch(reply, /legacy/);
     assert.doesNotMatch(latestOutcomeReason(fixture), /MCP/);
     assert.equal(existsSync(path.join(fixture.dataDir, 'mcp-hosts')), false);
+    const after = new Database(path.join(fixture.dataDir, 'allibot.db'), { readonly: true });
+    try {
+      assert.equal(
+        (after.prepare('SELECT count(*) AS total FROM mcp_server').get() as { total: number })
+          .total,
+        2,
+        'the historical table rows are left untouched',
+      );
+    } finally {
+      after.close();
+    }
   } finally {
     await fixture.stop();
   }
@@ -505,6 +516,44 @@ test('http and sse servers stay disconnected until their per-name consent; stdio
   } finally {
     await http.stop();
     await sse.stop();
+    await fixture.stop();
+  }
+});
+
+test('renaming a remote server drops its old consent and requires reconfirmation', async () => {
+  const fixture = await startFixture('allibot-mcp-rename-', { root: true });
+  const remote = await startRemoteMcp(fixture, 'http');
+  try {
+    const consent = await postJson(fixture, '/api/remote-data-flow/consent', {
+      scope_kind: 'mcp',
+      scope_id: 'before-name',
+    });
+    assert.equal(consent.status, 200);
+    writeMcp(fixture, [
+      {
+        name: 'after-name',
+        transport: 'http',
+        enabled: true,
+        url: `http://127.0.0.1:${remote.port}/mcp`,
+      },
+    ]);
+    await allowMcpRules(fixture, ['after-name']);
+    await sendMessage(fixture);
+    const reply = await latestReply(fixture);
+    assert.match(reply, /\[mcp\] servers:0/, 'the renamed server has no consent row');
+    assert.match(reply, /\[mcp\] diagnostic:.*after-name.*未确认/);
+    assert.doesNotMatch(remote.log(), /http initialize/);
+
+    const reconfirm = await postJson(fixture, '/api/remote-data-flow/consent', {
+      scope_kind: 'mcp',
+      scope_id: 'after-name',
+    });
+    assert.equal(reconfirm.status, 200);
+    await sendMessage(fixture);
+    assert.match(await latestReply(fixture), /\[mcp\] servers:1/);
+    assert.match(remote.log(), /http initialize/);
+  } finally {
+    await remote.stop();
     await fixture.stop();
   }
 });

@@ -25,7 +25,7 @@ export interface McpPanelProps {
   /** The same file the backend assembles from; null states "not read yet". */
   mcp: AgentMcpView | null;
   /** Host write: PUT /api/agents/{id}/mcp with exactly one of entries / raw. */
-  onSave?: (body: McpSaveBody) => Promise<AgentMcpView | void>;
+  onSave?: (body: McpSaveBody) => void | Promise<AgentMcpView | void>;
 }
 
 /**
@@ -61,7 +61,7 @@ export function McpPanel({ locale, mcp, onSave }: McpPanelProps) {
     }
     setSaving('entries');
     setFailed(null);
-    onSave(entriesSaveBody(entries))
+    Promise.resolve(onSave(entriesSaveBody(entries)))
       .then((view) => {
         applySaved(view);
         setSaving(null);
@@ -78,7 +78,7 @@ export function McpPanel({ locale, mcp, onSave }: McpPanelProps) {
     }
     setSaving('raw');
     setFailed(null);
-    onSave(rawSaveBody(raw))
+    Promise.resolve(onSave(rawSaveBody(raw)))
       .then((view) => {
         applySaved(view);
         setSaving(null);

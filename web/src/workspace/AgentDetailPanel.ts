@@ -65,7 +65,7 @@ export interface AgentDetailPanelProps {
   /** The Agent-home mcp.json reading (#47); null while it is loading. */
   mcp?: AgentMcpView | null;
   /** The one mcp.json write shared by the structured form and raw textarea. */
-  onMcpChange?: (body: McpSaveBody) => Promise<AgentMcpView | void>;
+  onMcpChange?: (body: McpSaveBody) => void | Promise<AgentMcpView | void>;
 }
 
 /**
