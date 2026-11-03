@@ -101,3 +101,4 @@ export function publishRoundOutcome(outcome: {
 
 /** How long one connection lives before the server rotates it (30 minutes). */
 export const DEFAULT_SSE_LIFETIME_MS = 30 * 60 * 1000;
+

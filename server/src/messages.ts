@@ -126,9 +126,8 @@ export function appendMessage(
   });
   const appended = write();
   // A stored message is the fact the global subscription relays. A replay
-  // writes nothing, so it announces nothing; the frame is sent only after the
-  // write transaction returned, so a rolled-back write never reaches a
-  // subscriber.
+  // writes nothing, so it announces nothing; a failed write never returns, so
+  // its rollback reaches no subscriber either.
   if (appended.created) {
     publishMessageCreated({ targetId: input.targetId, id: appended.id, seq: appended.seq });
   }
