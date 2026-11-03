@@ -30,8 +30,12 @@ import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
 import { readTeamTargetState, readTeamWakeState } from './team.js';
-import { recordInvalidLeaderRun } from './team-runs.js';
-import { closeTeamRun, startTeamRun, type StartedTeamRun } from './team-runs.js';
+import {
+  closeTeamRun,
+  recordInvalidLeaderRun,
+  startTeamRun,
+  type StartedTeamRun,
+} from './team-runs.js';
 import { countUnread } from './unread.js';
 import { transferTaskAsMember } from './tasks.js';
 
@@ -822,7 +826,14 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     messages,
     consumedSeq,
     memories,
-    systemPrompt: composeSystemPrompt(db, member, targetKind, triggeredByHuman, wake.reason, memories),
+    systemPrompt: composeSystemPrompt(
+      db,
+      member,
+      targetKind,
+      triggeredByHuman,
+      wake.reason,
+      memories,
+    ),
   };
 }
 
