@@ -8,6 +8,8 @@ import {
   CopilotChatMessageView,
   CopilotKitProvider,
   HttpAgent,
+  useAgent,
+  useCopilotKit,
 } from '@copilotkit/react-core/v2';
 import type { Message } from '@copilotkit/react-core/v2';
 import {
@@ -102,6 +104,45 @@ test('CopilotKitProvider and CopilotChat accept the contract props and render th
   const html = renderProviderChat(undefined);
 
   assert.match(html, /data-testid="copilot-chat"/, 'the main area is a CopilotChat');
+});
+
+test('the provider hands the chat a rest-transport agent under the multi-route base path', () => {
+  const seen: { runtimeUrl?: string; transport?: string; agentUrl?: string } = {};
+  function Probe() {
+    const { copilotkit } = useCopilotKit();
+    const { agent } = useAgent({ agentId: ALLIBOT_AGENT_ID });
+    seen.runtimeUrl = copilotkit.runtimeUrl;
+    seen.transport = copilotkit.runtimeTransport;
+    seen.agentUrl = (agent as unknown as { url?: string } | undefined)?.url;
+    return null;
+  }
+
+  renderToStaticMarkup(
+    createElement(
+      CopilotKitProvider as never,
+      {
+        runtimeUrl: AGUI_RUNTIME_URL,
+        useSingleEndpoint: AGUI_USE_SINGLE_ENDPOINT,
+      } as never,
+      createElement(Probe as never),
+      createElement(CopilotChat as never, {
+        agentId: ALLIBOT_AGENT_ID,
+        threadId: TARGET_ID,
+      } as never),
+    ),
+  );
+
+  assert.equal(seen.runtimeUrl, '/api/copilotkit', 'the provider points at the handler base path');
+  assert.equal(
+    seen.transport,
+    'rest',
+    'useSingleEndpoint={false} selects the multi-route REST transport, not the single-route envelope',
+  );
+  assert.equal(
+    seen.agentUrl,
+    '/api/copilotkit/agent/allibot/run',
+    'the chat agent calls the multi-route run endpoint for the fixed allibot agentId',
+  );
 });
 
 test('the proxied agent talks to the multi-route handler under /api/copilotkit for agent allibot', async () => {
