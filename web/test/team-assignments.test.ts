@@ -36,6 +36,7 @@ function channel(): ChannelView {
     mode: 'team',
     team: { leader_member_id: LEADER_ID, status: 'valid', reason: null },
     workspace: { root: null, backend: 'local', allow_local_shell: 0 },
+    permission_mode: 'ask-writes',
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,

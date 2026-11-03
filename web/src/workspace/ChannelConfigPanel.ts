@@ -6,6 +6,8 @@ import {
   type ChannelMode,
   type ChannelView,
   type Locale,
+  type PermissionRuleInput,
+  type PermissionRuleView,
   type TargetMemberView,
   type WorkspaceBackend,
   type WorkspaceStatusView,
@@ -19,6 +21,11 @@ import {
   rootChangePatch,
   workspaceStatusCopy,
 } from './channel-config.ts';
+import { PermissionRulesEditor } from './PermissionRulesEditor.ts';
+import {
+  channelPermissionModePatch,
+  permissionModeOptions,
+} from './permissions.ts';
 
 export interface ChannelConfigPanelProps {
   channel: ChannelView;
@@ -32,6 +39,10 @@ export interface ChannelConfigPanelProps {
    * both the mode and the leader; the panel never fetches or writes itself.
    */
   onTeamConfigChange?: (patch: ChannelConfigPatch) => void | Promise<void>;
+  /** The channel's permission rule set (#44); undefined while it is loading. */
+  permissionRules?: readonly PermissionRuleView[];
+  /** The full-replacement rule write; absent = read-only display. */
+  onPermissionRulesChange?: (rules: PermissionRuleInput[]) => void | Promise<void>;
 }
 
 function modeLabel(locale: Locale, mode: ChannelMode): string {
@@ -64,6 +75,8 @@ export function ChannelConfigPanel({
   workspaceStatus,
   locale,
   onTeamConfigChange,
+  permissionRules,
+  onPermissionRulesChange,
 }: ChannelConfigPanelProps) {
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
@@ -315,7 +328,38 @@ export function ChannelConfigPanel({
       ),
     ),
     leaderControl,
+    createElement(
+      'div',
+      { className: 'channel-config__field' },
+      createElement(
+        'label',
+        { className: 'channel-config__label', htmlFor: 'channel-config-permission-mode' },
+        t(locale, 'workspace.permission.mode.label'),
+      ),
+      createElement(
+        'select',
+        {
+          id: 'channel-config-permission-mode',
+          className: 'channel-config__select',
+          'data-action': 'channel-permission-mode',
+          'data-permission-mode': channel.permission_mode,
+          value: channel.permission_mode,
+          disabled: saving,
+          onChange: (event: { target: { value: string } }) =>
+            submit(channelPermissionModePatch(channel, event.target.value)),
+        },
+        ...permissionModeOptions(locale).map((option) =>
+          createElement('option', { key: option.value, value: option.value }, option.label),
+        ),
+      ),
+    ),
     workspaceControls,
+    createElement(PermissionRulesEditor, {
+      key: `channel-rules:${channel.id}`,
+      rules: permissionRules,
+      locale,
+      onSave: onPermissionRulesChange,
+    }),
     members === undefined
       ? createElement(
           'p',

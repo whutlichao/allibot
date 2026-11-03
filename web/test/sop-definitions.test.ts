@@ -43,9 +43,9 @@ const DEFINITION_ID = 'sop-def-1';
 const RUN_ID = 'sop-run-1';
 
 const MEMBERS: readonly TargetMemberView[] = [
-  { id: OWNER_ID, kind: 'owner', display_name: '我', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
-  { id: AGENT_A, kind: 'agent', display_name: '执行者甲', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
-  { id: AGENT_B, kind: 'agent', display_name: '校验者乙', avatar_slot: 2, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
+  { id: OWNER_ID, kind: 'owner', display_name: '我', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
+  { id: AGENT_A, kind: 'agent', display_name: '执行者甲', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
+  { id: AGENT_B, kind: 'agent', display_name: '校验者乙', avatar_slot: 2, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
 ];
 
 function channel(overrides: Partial<ChannelView> = {}): ChannelView {
@@ -56,6 +56,7 @@ function channel(overrides: Partial<ChannelView> = {}): ChannelView {
     mode: 'autonomous',
     team: { leader_member_id: null, status: 'valid', reason: null },
     workspace: { root: null, backend: 'local', allow_local_shell: 0 },
+    permission_mode: 'ask-writes',
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,
@@ -85,7 +86,9 @@ function agent(id: string, displayName: string): AgentView {
     max_iterations: 8,
     auto_claim: 0,
     workspace_backend: null,
-  };
+
+    permission_mode: null,
+    effective_permission_mode: 'ask-writes',  };
 }
 
 const DEFINITION: SopDefinitionView = {
@@ -153,6 +156,7 @@ function workspace(): WorkspaceView {
     ],
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
     status_points: {},
+    pending_approvals: 0,
     unread_total: 0,
     unread_by_target: { [CHANNEL_ID]: 0, [DM_ID]: 0 },
   };

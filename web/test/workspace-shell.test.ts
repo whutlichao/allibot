@@ -111,7 +111,9 @@ function agent(id: string, displayName: string): AgentView {
     max_iterations: 8,
     auto_claim: 1,
     workspace_backend: null,
-    status: 'online',
+
+    permission_mode: null,
+    effective_permission_mode: 'ask-writes',    status: 'online',
     offline_reason: null,
   };
 }
@@ -122,6 +124,7 @@ function channel(overrides: Partial<ChannelView> & Pick<ChannelView, 'id' | 'nam
     mode: 'autonomous',
     team: { leader_member_id: null, status: 'valid', reason: null },
     workspace: { root: null, backend: 'local', allow_local_shell: 0 },
+    permission_mode: 'ask-writes',
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,
@@ -197,6 +200,7 @@ function workspace(): WorkspaceView {
     ],
     dms: [dm(DM_ID, '阿绿'), dm(ARCHIVED_DM_ID, '阿灰', '2026-11-02T00:00:00.000Z')],
     tasks: [task()],
+    pending_approvals: 0,
     unread_total: 4,
     unread_by_target: { [CHANNEL_ID]: 2, [DM_ID]: 1, [ARCHIVED_DM_ID]: 1 },
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
@@ -267,6 +271,7 @@ test('an empty workspace yields no initial target', () => {
     channels: [],
     dms: [],
     tasks: [],
+    pending_approvals: 0,
     unread_total: 0,
     unread_by_target: {},
     status_points: {},

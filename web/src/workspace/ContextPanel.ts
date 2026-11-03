@@ -9,6 +9,8 @@ import {
   type TargetMemberView,
   type TeamRunView,
   type WorkspaceView,
+  type PermissionRuleInput,
+  type PermissionRuleView,
 } from '@allibot/shared';
 import { createElement, type ReactNode } from 'react';
 import { workspaceStatusCopy } from './channel-config.ts';
@@ -39,6 +41,9 @@ export interface ContextPanelProps {
   sopDefinitions?: readonly SopDefinitionView[];
   /** The SOP run snapshots, keyed by definition id. */
   sopRuns?: Readonly<Record<string, readonly SopRunView[]>>;
+  /** The channel's permission rule set (#44) and its full-replacement write. */
+  permissionRules?: readonly PermissionRuleView[];
+  onPermissionRulesChange?: (rules: PermissionRuleInput[]) => void | Promise<void>;
   /** The owner's SOP writes; both go through the host, never this panel. */
   onCreateSop?: (input: SopDefinitionCreate) => void | Promise<void>;
   onStartSop?: (definitionId: string) => void | Promise<void>;
@@ -77,6 +82,8 @@ export function ContextPanel({
   onCreateSop,
   onStartSop,
   onOpenPanel,
+  permissionRules,
+  onPermissionRulesChange,
 }: ContextPanelProps) {
   const context = readTargetContext(workspace, targetId);
   const channel = readChannel(workspace, targetId);
@@ -174,6 +181,8 @@ export function ContextPanel({
                 workspaceStatus: ownerWorkspaceStatus,
                 locale,
                 onTeamConfigChange: onChannelConfigChange,
+                permissionRules,
+                onPermissionRulesChange,
               }),
           context.taskStatus === null
             ? null

@@ -43,6 +43,7 @@ function channel(overrides: Partial<ChannelView> & Pick<ChannelView, 'id' | 'nam
     mode: 'autonomous',
     team: { leader_member_id: null, status: 'valid', reason: null },
     workspace: { root: null, backend: 'local', allow_local_shell: 0 },
+    permission_mode: 'ask-writes',
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,
@@ -69,9 +70,9 @@ const AUTONOMOUS_CHANNEL: ChannelView = channel({
 });
 
 const MEMBERS: readonly TargetMemberView[] = [
-  { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
-  { id: LEADER_ID, kind: 'agent', display_name: '队长甲', avatar_slot: 1, workspace_status: { backend: 'local', available: true, reason: null } },
-  { id: MEMBER_ID, kind: 'agent', display_name: '成员乙', avatar_slot: 2, workspace_status: { backend: 'local', available: true, reason: null } },
+  { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
+  { id: LEADER_ID, kind: 'agent', display_name: '队长甲', avatar_slot: 1, workspace_status: { backend: 'local', available: true, reason: null }, permission_mode: 'ask-writes' },
+  { id: MEMBER_ID, kind: 'agent', display_name: '成员乙', avatar_slot: 2, workspace_status: { backend: 'local', available: true, reason: null }, permission_mode: 'ask-writes' },
 ];
 
 const TASK: TaskView = {
@@ -102,6 +103,7 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
       },
     ],
     tasks: [TASK],
+    pending_approvals: 0,
     unread_total: 0,
     unread_by_target: { [TEAM_CHANNEL_ID]: 0, [DM_ID]: 0 },
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },

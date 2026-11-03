@@ -1,7 +1,11 @@
 import {
   t,
+  type ApprovalDecisionInput,
+  type ApprovalView,
   type ChannelConfigPatch,
   type Locale,
+  type PermissionRuleInput,
+  type PermissionRuleView,
   type PlanRunView,
   type SopDefinitionCreate,
   type SopDefinitionView,
@@ -23,6 +27,8 @@ import { SettingsPanel } from '../components/SettingsPanel.ts';
 import { TaskBoard } from '../task-board/TaskBoard.ts';
 import type { AsyncAction1, AsyncAction2 } from '../async-action.ts';
 import { AgentDetailPanel } from './AgentDetailPanel.ts';
+import { ApprovalPanel } from './ApprovalPanel.ts';
+import { permissionScopeKey } from './permissions.ts';
 import { ContextPanel } from './ContextPanel.ts';
 import { MemberPanel } from './MemberPanel.ts';
 import { MemberRoster } from './MemberRoster.ts';
@@ -62,6 +68,10 @@ export interface WorkspaceShellProps {
   teamRuns?: Record<string, readonly TeamRunView[]>;
   /** Plan snapshots, keyed by target id; the run panel reads them. */
   plans?: Record<string, readonly PlanRunView[]>;
+  /** The approval list reading (#44); undefined while it is loading. */
+  approvals?: readonly ApprovalView[];
+  /** Permission rule sets, keyed by `permissionScopeKey`. */
+  permissionRules?: Readonly<Record<string, readonly PermissionRuleView[]>>;
   /** SOP definitions, keyed by channel id; the channel context panel reads them. */
   sopDefinitions?: Record<string, readonly SopDefinitionView[]>;
   /** SOP run snapshots, keyed by definition id. */
@@ -82,6 +92,15 @@ export interface WorkspaceShellProps {
   onStartSop?: (definitionId: string) => void | Promise<void>;
   /** Soft delete the Agent; resolves after the host re-read the workspace. */
   onDeleteAgent?: AsyncAction1<string>;
+  /** One approval decision (approve / deny); the host re-reads the list. */
+  onApprovalDecision?: (replyId: string, input: ApprovalDecisionInput) => void | Promise<void>;
+  /** The full-replacement permission rule write for a channel / Agent scope. */
+  onPermissionRulesChange?: (
+    scope: { kind: 'channel' | 'agent'; id: string },
+    rules: PermissionRuleInput[],
+  ) => void | Promise<void>;
+  /** The raw Agent permission-mode override write (null = follow). */
+  onAgentPermissionModeChange?: (agentId: string, mode: string | null) => void | Promise<void>;
   saveFailed?: boolean;
   onLiveEvent?: LiveEventSink;
 }
@@ -100,6 +119,8 @@ function drawerTitle(locale: Locale, drawer: WorkspaceDrawer): string {
       return t(locale, 'workspace.panel.roster');
     case 'agent-detail':
       return t(locale, 'workspace.panel.agentDetail');
+    case 'approvals':
+      return t(locale, 'workspace.approval.title');
   }
 }
 
@@ -135,15 +156,21 @@ export function WorkspaceShell({
   onChannelConfigChange,
   teamRuns,
   plans,
+  approvals,
+  permissionRules,
   sopDefinitions,
   sopRuns,
   onCreateSop,
   onStartSop,
+  onApprovalDecision,
+  onPermissionRulesChange,
+  onAgentPermissionModeChange,
   saveFailed = false,
   onLiveEvent,
 }: WorkspaceShellProps) {
   const locale = settings.locale;
   const [drawer, setDrawer] = useState<WorkspaceDrawer | null>(initialDrawer);
+  const [approvalReplyId, setApprovalReplyId] = useState<string | null>(null);
   const [detailAgentId, setDetailAgentId] = useState<string | null>(initialAgentId);
   const layout = resolveWorkspaceLayout(viewportWidth);
   const selectedTargetId =
@@ -247,6 +274,20 @@ export function WorkspaceShell({
       },
       t(locale, 'workspace.context.title'),
     ),
+    createElement(
+      'button',
+      {
+        type: 'button',
+        className: 'workspace-header__action workspace-header__action--approvals',
+        'data-action': 'open-approvals',
+        'data-pending-approvals': workspace.pending_approvals,
+        'aria-label': t(locale, 'workspace.approval.open'),
+        onClick: () => openPanel('approvals'),
+      },
+      workspace.pending_approvals > 0
+        ? `${t(locale, 'workspace.approval.title')} (${workspace.pending_approvals})`
+        : t(locale, 'workspace.approval.title'),
+    ),
   );
 
   const memberNotice =
@@ -317,6 +358,22 @@ export function WorkspaceShell({
       sopDefinitions:
         selectedTargetId === null ? undefined : sopDefinitions?.[selectedTargetId],
       sopRuns,
+      permissionRules:
+        selectedTargetId === null || selectedKind !== 'channel'
+          ? undefined
+          : permissionRules?.[
+              permissionScopeKey({ kind: 'channel', id: selectedTargetId })
+            ],
+      onPermissionRulesChange:
+        selectedTargetId === null ||
+        selectedKind !== 'channel' ||
+        onPermissionRulesChange === undefined
+          ? undefined
+          : (rules) =>
+              onPermissionRulesChange(
+                { kind: 'channel', id: selectedTargetId },
+                rules,
+              ),
       onCreateSop,
       onStartSop,
       onOpenPanel: openPanel,
@@ -364,7 +421,31 @@ export function WorkspaceShell({
                 : (patch: { system_prompt: string }) => onSaveAgent(selectedAgent.id, patch),
             onDelete:
               onDeleteAgent === undefined ? undefined : () => onDeleteAgent(selectedAgent.id),
+            permissionRules:
+              permissionRules?.[
+                permissionScopeKey({ kind: 'agent', id: selectedAgent.id })
+              ],
+            onPermissionRulesChange:
+              onPermissionRulesChange === undefined
+                ? undefined
+                : (rules) =>
+                    onPermissionRulesChange({ kind: 'agent', id: selectedAgent.id }, rules),
+            onPermissionModeChange:
+              onAgentPermissionModeChange === undefined
+                ? undefined
+                : (mode) => onAgentPermissionModeChange(selectedAgent.id, mode),
           });
+  } else if (drawer === 'approvals') {
+    drawerBody = createElement(ApprovalPanel, {
+      approvals,
+      selectedReplyId: approvalReplyId,
+      locale,
+      onSelect: setApprovalReplyId,
+      onDecision:
+        onApprovalDecision === undefined
+          ? undefined
+          : (replyId, input) => onApprovalDecision(replyId, input),
+    });
   } else if (drawer !== null) {
     drawerBody = createElement(
       'div',
