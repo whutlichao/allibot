@@ -106,6 +106,7 @@ function createOrchestration(options: CliOptions): OrchestrationRuntime {
       behavior: options.scriptedProvider,
       delayMs: options.scriptedDelayMs,
       replies: options.scriptedReplies.length > 0 ? options.scriptedReplies : undefined,
+      echoPrompt: options.scriptedEchoPrompt,
     }),
     inFlight: createInFlightRounds(),
   };
