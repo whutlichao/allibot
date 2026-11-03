@@ -71,3 +71,45 @@ export interface TargetMemberView {
   display_name: string;
   avatar_slot: number;
 }
+
+/**
+ * The message kinds. `system` records a fact no conversation participant said
+ * (join-through, task create/change, reminder due, auto-continue, task
+ * pointer) and is written by backend paths only.
+ */
+export const MESSAGE_KINDS = ['human', 'agent', 'system'] as const;
+export type MessageKind = (typeof MESSAGE_KINDS)[number];
+
+/**
+ * One mention range as the write path recorded it. `start` / `end` are UTF-16
+ * code-unit offsets into the message body, and `member_id` is the member the
+ * parser resolved at write time — neither is recomputed after a rename.
+ */
+export interface MessageMentionView {
+  member_id: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * A message as the human face returns it. `author_display_name` and
+ * `author_avatar_slot` are write-time snapshots, so a renamed or soft-deleted
+ * author still renders. `attachments` is always empty until the attachments
+ * ticket binds drafts; the storage path of an attachment never reaches here.
+ */
+export interface MessageView {
+  id: string;
+  target_id: string;
+  seq: number;
+  kind: MessageKind;
+  author_member_id: string;
+  author_display_name: string;
+  author_avatar_slot: number;
+  body: string;
+  created_at: string;
+  task_ref: string | null;
+  task_pointer: string | null;
+  client_message_id: string | null;
+  mentions: MessageMentionView[];
+  attachments: unknown[];
+}
