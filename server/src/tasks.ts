@@ -5,8 +5,12 @@ import { ApiFailure } from './api-error.js';
 import { openEpoch } from './budget.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { tFromDb } from './copy.js';
+import { publishMessageCreated } from './events.js';
+import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
 import { appendMessage } from './messages.js';
+import { checkProviderAvailability } from './providers.js';
+import type { Wake } from './rounds.js';
 
 /**
  * The backend-fixed legal move set. `closed` is terminal. The table travels
@@ -145,6 +149,159 @@ export function createTask(db: Database.Database, body: unknown): TaskView {
   return getTask(db, create());
 }
 
+/** One system record a claim landed, shaped like the subscription's publish input. */
+export interface ClaimMessage {
+  id: string;
+  seq: number;
+}
+
+/** What a successful claim leaves for its caller to deliver. */
+export interface Claim {
+  wake: Wake;
+  messages: ClaimMessage[];
+}
+
+/**
+ * 认领 (Claim): the orchestrator, not the model, lets an available Agent take
+ * a task nobody is assigned to yet.
+ *
+ * The whole claim is one transaction: the assignment, the two readable system
+ * records (「已认领」 and 「认领后自动开工」), the claimer's `target_member` row,
+ * the move to `in_progress`, and the human epoch opened at the 「已认领」 seq.
+ * The wake is returned rather than delivered here because rounds are async and
+ * write their own transactions; the caller dispatches it after this commit —
+ * the same two-phase shape the message write path uses. It is not a jump and
+ * is delivered even when the previous epoch was exhausted.
+ *
+ * `claimed_at` is the at-most-once lock: the guard and the conditional UPDATE
+ * both read it, so a second attempt writes nothing.
+ *
+ * The candidate surface is the channel's live Agent members in join order,
+ * filtered by `auto_claim = 1` and availability (model + credential + provider
+ * consent, D1.12). One winner is the orchestrator's single-point decision, not
+ * a race between several Agents.
+ */
+export function claimTask(
+  db: Database.Database,
+  taskId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Claim | null {
+  const claim = db.transaction((): Claim | null => {
+    const task = readTaskRow(db, taskId);
+    if (task.claimed_at !== null || task.assignee_member_id !== null) {
+      return null;
+    }
+    const status = parseStoredStatus(task.status);
+    if (status !== 'todo' || !TASK_STATUS_TRANSITIONS[status].includes('in_progress')) {
+      return null;
+    }
+    const channel = db
+      .prepare('SELECT mode FROM channel WHERE id = ?')
+      .get(task.channel_id) as { mode: string } | undefined;
+    if (channel?.mode !== 'autonomous') {
+      return null;
+    }
+    const claimer = selectClaimer(db, task.channel_id, env);
+    if (claimer === null) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    const updated = db
+      .prepare(
+        `UPDATE task
+            SET assignee_member_id = ?, status = 'in_progress', claimed_at = ?, updated_at = ?
+          WHERE id = ? AND claimed_at IS NULL AND assignee_member_id IS NULL`,
+      )
+      .run(claimer.id, now, now, taskId);
+    if (updated.changes !== 1) {
+      return null;
+    }
+    db.prepare('INSERT OR IGNORE INTO target_member (target_id, member_id) VALUES (?, ?)').run(
+      task.target_id,
+      claimer.id,
+    );
+
+    const claimed = insertMessageRow(db, {
+      targetId: task.target_id,
+      kind: 'system',
+      body: tFromDb(db, 'task.event.claimed', {
+        title: task.title,
+        assignee: claimer.display_name,
+      }),
+    });
+    // 首次认领 is a human-epoch opener, and the identity is the 「已认领」
+    // record's seq — never the 「认领后自动开工」 record that follows it.
+    openEpoch(db, task.target_id, claimed.seq);
+    const started = insertMessageRow(db, {
+      targetId: task.target_id,
+      kind: 'system',
+      body: tFromDb(db, 'task.event.claim.started', {
+        title: task.title,
+        assignee: claimer.display_name,
+      }),
+    });
+
+    return {
+      wake: {
+        memberId: claimer.id,
+        targetId: task.target_id,
+        // The round reads through the latest claim record; the epoch identity
+        // is the earlier one.
+        fromSeq: started.seq,
+        reason: 'claim',
+      },
+      messages: [claimed, started],
+    };
+  });
+  const result = claim();
+  if (result !== null) {
+    // Both records are stored facts the subscription relays; the round that
+    // follows announces its own reply.
+    for (const message of result.messages) {
+      publishMessageCreated({
+        targetId: result.wake.targetId,
+        id: message.id,
+        seq: message.seq,
+      });
+    }
+  }
+  return result;
+}
+
+interface ClaimCandidate {
+  id: string;
+  display_name: string;
+  model: string | null;
+}
+
+/** The first available Agent member of the channel that opted into auto-claim. */
+function selectClaimer(
+  db: Database.Database,
+  channelId: string,
+  env: NodeJS.ProcessEnv,
+): ClaimCandidate | null {
+  const candidates = db
+    .prepare(
+      `SELECT m.id, m.display_name, c.model
+         FROM target_member tm
+         JOIN member m ON m.id = tm.member_id
+         JOIN agent_config c ON c.member_id = m.id
+        WHERE tm.target_id = ? AND m.kind = 'agent' AND c.auto_claim = 1
+          AND ${liveMemberClause('m')}
+        ORDER BY tm.rowid`,
+    )
+    .all(channelId) as ClaimCandidate[];
+  for (const candidate of candidates) {
+    // The same availability fact the status point reads as `offline` (#23):
+    // no model, no provider consent, or no credential means no claim.
+    if (checkProviderAvailability(db, candidate.model, env).ok) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 /**
  * Change the title, the status or the assignee. The row is mutable; every
  * actual change appends exactly one system event to the task thread, which is
@@ -153,9 +310,6 @@ export function createTask(db: Database.Database, body: unknown): TaskView {
  * The HTTP face calls this with the owner actor; the member face calls
  * `updateTaskStatusAsMember`, so the review rule applies to whoever the
  * orchestrator acts for.
- *
- * #24 adds the wake that follows a reassignment ("a reassignment is a human
- * epoch opener and wakes the assignee"); this ticket only writes the fact.
  */
 export function updateTask(
   db: Database.Database,

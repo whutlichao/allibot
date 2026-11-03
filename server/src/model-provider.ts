@@ -125,6 +125,8 @@ export function createModelProvider(
     deferred: false,
     name: 'model',
     async runRound(input: RoundInput): Promise<RoundResult> {
+      // The same availability rule the claim gate reads: no model, no consent
+      // or no credential closes the round without a socket being opened.
       const availability = resolveAvailability(db, input, env);
       if (!availability.ok) {
         // Refusals are stated, not judged: both are readable and neither calls.

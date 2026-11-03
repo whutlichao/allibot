@@ -33,6 +33,9 @@ export type RoundTargetKind = 'channel' | 'dm' | 'task';
  */
 export const ROUND_CONTEXT_WINDOW = 40;
 
+/** How much history one round reads: the recent window, or the whole thread. */
+export type ContextScope = 'window' | 'full';
+
 /** What the round is allowed to know about the member it runs for. */
 export interface RoundMember {
   id: string;
@@ -81,6 +84,12 @@ export interface RoundInput {
   baseSeq: number;
   reason: WakeReason;
   discipline: RoundDiscipline;
+  /**
+   * How much history this round reads. A normal round reads the window; an
+   * auto-continue round reads the whole task thread. The scope is stated here
+   * so the adapter never has to infer it from the wake reason's text.
+   */
+  contextScope: ContextScope;
   /**
    * The target's context window (上下文窗口) for this round, oldest first: the
    * most recent messages — human, other members and this member's own history
@@ -137,6 +146,16 @@ export interface RoundMemory {
 export type RoundVerdict = 'replied' | 'ignored' | 'silent' | 'failed';
 
 /**
+ * 自动续跑 (Auto-continue) as a structured task action: "this task is not done,
+ * wake me again". Prose that says "I will continue" has no execution face;
+ * only this action does. It is part of the one round result — the output shape
+ * is still zero or more pending replies plus one round result — and the round
+ * write path decides what to land (a continue record and one more wake) and
+ * when the per-epoch round cap pauses it.
+ */
+export type RoundTaskAction = 'continue_task';
+
+/**
  * How a round ended, when the adapter knows it was not an ordinary completion.
  * The iteration cap (迭代上限) is an adapter-side fact: the adapter stopped
  * because its iteration budget ran out, not because it had nothing more to say,
@@ -168,6 +187,12 @@ export interface RoundResult {
   replies: readonly string[];
   detail?: string;
   finishedReason?: RoundFinishReason;
+  /**
+   * The structured task action this round requests, if any. Only
+   * `continue_task` exists in M1; a body that merely says "I will continue"
+   * never counts as one.
+   */
+  taskAction?: RoundTaskAction;
 }
 
 export interface RoundProvider {
