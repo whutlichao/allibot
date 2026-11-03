@@ -25,6 +25,14 @@ import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
 
 /**
+ * 自动续跑 (Auto-continue) is bounded independently of the response budget:
+ * one human epoch allows the assignee four work rounds on a task — the first
+ * round plus three auto-continues. The count resets when the next human epoch
+ * opens, not when a jump is delivered.
+ */
+export const TASK_WORK_ROUNDS_PER_EPOCH = 4;
+
+/**
  * The readable round copy. Backend-generated text renders through the shared
  * string catalog (#8) by the stored locale preference, so every readable round
  * text goes through `tFromDb` — the one formatting entry point — and stored
@@ -468,6 +476,11 @@ export async function runRound(
     });
     await dispatchWakes(db, provider, replyWakes, inFlight, 'agent');
   }
+  // 自动续跑 carries no jump: the caller passes no message kind, so the wake
+  // is delivered even in an exhausted epoch and never advances target_budget.
+  if (committed.pendingWakes.length > 0) {
+    await dispatchWakes(db, provider, committed.pendingWakes, inFlight);
+  }
   return committed.outcome;
 }
 
@@ -509,11 +522,8 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
   // 上下文窗口: a normal round reads the most recent 40 target messages; an
   // auto-continue round keeps working on its whole task thread. The window is
   // history only — it never decides the signal, the discipline or the cursor.
-  const messages: RoundMessage[] = readContextWindow(
-    db,
-    wake.targetId,
-    contextScopeFor(wake, targetKind),
-  );
+  const contextScope = contextScopeFor(wake, targetKind);
+  const messages: RoundMessage[] = readContextWindow(db, wake.targetId, contextScope);
 
   const triggeredByHuman = wokeByHuman(db, wake);
   const discipline = readDiscipline(db, wake, triggeredByHuman);
@@ -528,6 +538,7 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     baseSeq: wake.fromSeq,
     reason: wake.reason,
     discipline,
+    contextScope,
     messages,
     consumedSeq,
     memories,
@@ -662,7 +673,11 @@ function commitRound(
   const signal = roundInput?.discipline ?? { definite: false, signal: null };
   const messages: WrittenMessage[] = [];
   const outcomes: RoundOutcomeRow[] = [];
-  const write = db.transaction((): { outcome: RoundOutcomeRow; replySeq: number | null } => {
+  const write = db.transaction((): {
+    outcome: RoundOutcomeRow;
+    replySeq: number | null;
+    pendingWakes: Wake[];
+  } => {
     const joinedSeq = commitJoin(db, wake, result, messages);
     const reply = commitReply(db, wake, result, messages);
     const finishedAt = new Date().toISOString();
@@ -699,11 +714,24 @@ function commitRound(
     }
 
     const judged = judgeRound(signal, result, reply?.seq ?? null);
+    // 自动续跑: the structured action lands its own system record in this same
+    // transaction, either with one more wake for the same assignee or with the
+    // paused record once the epoch's four work rounds are used up.
+    const action = commitTaskAction(db, wake, roundInput, result, messages);
     const outcome = insertOutcome(db, {
       wake,
       baseSeq: wake.fromSeq,
       status: judged.status,
-      reason: roundReason(db, wake, signal, result, judged, joinedSeq, reply?.seq ?? null),
+      reason: roundReason(
+        db,
+        wake,
+        signal,
+        result,
+        judged,
+        joinedSeq,
+        reply?.seq ?? null,
+        action?.clause ?? null,
+      ),
       merged: 0,
       startedAt,
       finishedAt,
@@ -720,10 +748,113 @@ function commitRound(
     if (advancesCursor(judged.status)) {
       advanceConsumedSeq(db, wake.memberId, wake.targetId, wake.fromSeq);
     }
-    return { outcome, replySeq: reply?.seq ?? null };
+    return {
+      outcome,
+      replySeq: reply?.seq ?? null,
+      pendingWakes: action === null || action.wake === null ? [] : [action.wake],
+    };
   });
-  const { outcome, replySeq } = write();
-  return { outcome, replySeq, messages, outcomes };
+  const { outcome, replySeq, pendingWakes } = write();
+  return { outcome, replySeq, messages, outcomes, pendingWakes };
+}
+
+/**
+ * Handle one round's structured `continue_task` action (自动续跑).
+ *
+ * The action is honoured only on a task thread and only for the task's current
+ * assignee: the member must be the one the task was claimed by / assigned to.
+ * Team task threads do not offer it; M1's channel mode check admits only
+ * `autonomous`, so there is no team branch to add here.
+ *
+ * The cap is per human epoch: it counts the real work rounds this member has
+ * already concluded on this task since the epoch's opener (`merged` rows and
+ * suppressed wakes are not rounds). Four rounds means the first plus three
+ * auto-continues; the fourth request lands `continue_paused` and wakes nobody.
+ * The action is not a jump: the returned wake is delivered by the caller with
+ * no jump charged.
+ */
+function commitTaskAction(
+  db: Database.Database,
+  wake: Wake,
+  roundInput: RoundInput | undefined,
+  result: RoundResult,
+  written: WrittenMessage[],
+): { clause: string; wake: Wake | null } | null {
+  if (result.taskAction !== 'continue_task' || roundInput === undefined) {
+    return null;
+  }
+  if (roundInput.targetKind !== 'task') {
+    return null;
+  }
+  const task = db
+    .prepare('SELECT title, assignee_member_id FROM task WHERE target_id = ?')
+    .get(wake.targetId) as { title: string; assignee_member_id: string | null } | undefined;
+  if (task === undefined || task.assignee_member_id !== wake.memberId) {
+    return null;
+  }
+
+  const currentRound = countEpochWorkRounds(db, wake) + 1;
+  if (currentRound >= TASK_WORK_ROUNDS_PER_EPOCH) {
+    const paused = insertMessage(
+      db,
+      wake.targetId,
+      'system',
+      ownerId(db),
+      tFromDb(db, 'task.event.continue.paused', {
+        rounds: TASK_WORK_ROUNDS_PER_EPOCH,
+        assignee: roundInput.member.display_name,
+        title: task.title,
+      }),
+    );
+    written.push(paused);
+    return {
+      clause: tFromDb(db, 'round.continue.paused', { rounds: TASK_WORK_ROUNDS_PER_EPOCH }),
+      wake: null,
+    };
+  }
+
+  const record = insertMessage(
+    db,
+    wake.targetId,
+    'system',
+    ownerId(db),
+    tFromDb(db, 'task.event.continue', {
+      assignee: roundInput.member.display_name,
+      title: task.title,
+    }),
+  );
+  written.push(record);
+  return {
+    clause: tFromDb(db, 'round.continue.granted', { round: currentRound }),
+    wake: {
+      memberId: wake.memberId,
+      targetId: wake.targetId,
+      fromSeq: record.seq,
+      reason: 'continue',
+    },
+  };
+}
+
+/**
+ * The work rounds this member already concluded on the task inside the current
+ * human epoch. The epoch is the budget row's opener seq; rows older than it
+ * belong to an earlier epoch. Folded wakes are not rounds, and a suppressed
+ * wake never ran at all, so neither counts against the auto-continue cap.
+ */
+function countEpochWorkRounds(db: Database.Database, wake: Wake): number {
+  const budget = db
+    .prepare('SELECT epoch_seq FROM target_budget WHERE target_id = ?')
+    .get(wake.targetId) as { epoch_seq: number } | undefined;
+  const epochSeq = budget?.epoch_seq ?? 0;
+  const row = db
+    .prepare(
+      `SELECT count(*) AS total
+         FROM round_outcome
+        WHERE member_id = ? AND target_id = ? AND merged = 0
+          AND status <> 'budget-exhausted' AND base_seq >= ?`,
+    )
+    .get(wake.memberId, wake.targetId, epochSeq) as { total: number };
+  return row.total;
 }
 
 /**
@@ -754,6 +885,12 @@ interface CommittedRound {
   messages: WrittenMessage[];
   /** Every outcome row written by this round, in write order. */
   outcomes: RoundOutcomeRow[];
+  /**
+   * Wakes the round committed but did not deliver itself: auto-continue's
+   * explicit re-wake of the assignee. They are delivered after this round
+   * closes, with no jump charged (自动续跑 is not a jump).
+   */
+  pendingWakes: Wake[];
 }
 
 /**
@@ -965,6 +1102,7 @@ function roundReason(
   judged: { status: RoundOutcomeStatus; finishedReason: FinishedReason },
   joinedSeq: number | null,
   replySeq: number | null,
+  taskActionClause: string | null,
 ): string {
   const parts: string[] = [wakeText(db, wake.reason)];
   if (result.verdict === 'replied' && replySeq === null) {
@@ -991,6 +1129,9 @@ function roundReason(
   }
   if (joinedSeq !== null) {
     parts.push(tFromDb(db, 'round.penetrationSuffix', { seq: joinedSeq }));
+  }
+  if (taskActionClause !== null) {
+    parts.push(taskActionClause);
   }
   return parts.join('；');
 }

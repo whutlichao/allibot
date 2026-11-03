@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3';
-import { ROUND_CONTEXT_WINDOW } from './agent-seam.js';
+import { ROUND_CONTEXT_WINDOW, type ContextScope } from './agent-seam.js';
+
+export type { ContextScope } from './agent-seam.js';
 
 /**
  * 上下文窗口 (Context Window) and 消费游标 (Agent Read Cursor).
@@ -11,12 +13,6 @@ import { ROUND_CONTEXT_WINDOW } from './agent-seam.js';
  * different fact, so nothing here ever writes or reads the owner's row on an
  * Agent's behalf.
  */
-
-/**
- * How much history the round reads: the recent window, or the whole thread
- * (自动续跑 keeps the full task thread it is still working on).
- */
-export type ContextScope = 'window' | 'full';
 
 /**
  * The member's consumption cursor: the last seq it consumed in a round that
