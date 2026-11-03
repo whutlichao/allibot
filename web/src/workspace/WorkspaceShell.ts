@@ -1,4 +1,10 @@
-import { t, type Locale, type WorkspaceSettingsView, type WorkspaceView } from '@allibot/shared';
+import {
+  t,
+  type Locale,
+  type TargetMemberView,
+  type WorkspaceSettingsView,
+  type WorkspaceView,
+} from '@allibot/shared';
 import { CopilotKitProvider } from '@copilotkit/react-core/v2';
 import { createElement, useState, type ReactNode } from 'react';
 import {
@@ -6,9 +12,14 @@ import {
   AGUI_USE_SINGLE_ENDPOINT,
 } from '../copilotkit-contract.ts';
 import { SettingsPanel } from '../components/SettingsPanel.ts';
+import type { AsyncAction1, AsyncAction2 } from '../async-action.ts';
+import { AgentDetailPanel } from './AgentDetailPanel.ts';
 import { ContextPanel } from './ContextPanel.ts';
+import { MemberPanel } from './MemberPanel.ts';
+import { MemberRoster } from './MemberRoster.ts';
+import { readMemberNotice } from './member-reading.ts';
+import { initialTargetId, readTargetContext, targetKind } from './model.ts';
 import { WorkspaceChatArea, LiveEventContext, type LiveEventSink } from './WorkspaceChat.ts';
-import { initialTargetId, readTargetContext } from './model.ts';
 import {
   closeDrawer,
   openNavigation,
@@ -29,9 +40,24 @@ export interface WorkspaceShellProps {
   activeTargetId?: string | null;
   /** The drawer a render starts on (tests and deep links); default closed. */
   initialDrawer?: WorkspaceDrawer | null;
+  /** The Agent the detail drawer starts on; omitted means the first local Agent. */
+  initialAgentId?: string | null;
+  /**
+   * The channel member tables the shell may render, keyed by channel id. The
+   * member panel and roster are channel-scoped readings; when a channel's table
+   * is absent the panel states that it is still loading rather than guessing
+   * membership.
+   */
+  channelMembers?: Record<string, readonly TargetMemberView[]>;
   viewportWidth?: number;
   onSelectTarget?: (targetId: string) => void;
   onSettingsChange?: (patch: Partial<WorkspaceSettingsView>) => void;
+  /** Join an Agent into the channel; resolves after the host updated its reading. */
+  onJoinMember?: AsyncAction2<string, string>;
+  /** Save the Agent's system prompt; resolves after the host re-read the Agent. */
+  onSaveAgent?: AsyncAction2<string, { system_prompt: string }>;
+  /** Soft delete the Agent; resolves after the host re-read the workspace. */
+  onDeleteAgent?: AsyncAction1<string>;
   saveFailed?: boolean;
   onLiveEvent?: LiveEventSink;
 }
@@ -62,6 +88,9 @@ function drawerTitle(locale: Locale, drawer: WorkspaceDrawer): string {
  * - 宽屏只 dock 左侧导航，窄屏把导航移入抽屉，导航始终可达；
  * - 抽屉与导航都是呈现层：不改变 target、不写消息、不唤醒、不消耗预算。
  *
+ * 成员面板 / 名册只属于频道（R1 词条 76 / 77）；Agent 详情页签是同一详情面的
+ * 三个分组（词条 75），打开与切换都不改 URL、不重新拉取整页。
+ *
  * 这里用 createElement 而不是 JSX：Node 的类型剥离不处理 JSX，
  * 组件级 SSR 契约测试需要直接 import 本文件。
  */
@@ -70,27 +99,52 @@ export function WorkspaceShell({
   settings,
   activeTargetId,
   initialDrawer = null,
+  initialAgentId = null,
+  channelMembers,
   viewportWidth = DEFAULT_VIEWPORT_WIDTH,
   onSelectTarget,
   onSettingsChange,
+  onJoinMember,
+  onSaveAgent,
+  onDeleteAgent,
   saveFailed = false,
   onLiveEvent,
 }: WorkspaceShellProps) {
   const locale = settings.locale;
   const [drawer, setDrawer] = useState<WorkspaceDrawer | null>(initialDrawer);
+  const [detailAgentId, setDetailAgentId] = useState<string | null>(initialAgentId);
   const layout = resolveWorkspaceLayout(viewportWidth);
   const selectedTargetId =
     activeTargetId !== undefined ? activeTargetId : initialTargetId(workspace);
   const context = readTargetContext(workspace, selectedTargetId);
+  const selectedKind =
+    selectedTargetId === null ? null : targetKind(workspace, selectedTargetId);
+  const channelSelected = selectedKind === 'channel';
+  const selectedMembers =
+    channelSelected && selectedTargetId !== null
+      ? channelMembers?.[selectedTargetId]
+      : undefined;
+  const selectedAgent =
+    detailAgentId === null
+      ? (workspace.agents[0] ?? null)
+      : (workspace.agents.find((agent) => agent.id === detailAgentId) ?? null);
 
   function selectTarget(targetId: string): void {
     setDrawer(null);
     onSelectTarget?.(targetId);
   }
 
-  function openPanel(panel: WorkspacePanel): void {
+  function openPanel(panel: WorkspacePanel, agentId?: string): void {
+    if (panel === 'agent-detail' && agentId !== undefined) {
+      setDetailAgentId(agentId);
+    }
     setDrawer(openWorkspacePanel({ activeTargetId: selectedTargetId, drawer }, panel).drawer);
   }
+
+  const notice =
+    channelSelected && selectedMembers !== undefined
+      ? readMemberNotice(workspace, selectedMembers)
+      : null;
 
   const navigation = createElement(
     'div',
@@ -101,6 +155,7 @@ export function WorkspaceShell({
       locale,
       onSelectTarget: selectTarget,
       onOpenPanel: openPanel,
+      onOpenAgentDetail: (agentId: string) => openPanel('agent-detail', agentId),
     }),
     createElement(SettingsPanel, { settings, onChange: onSettingsChange, saveFailed }),
   );
@@ -155,10 +210,35 @@ export function WorkspaceShell({
     ),
   );
 
+  const memberNotice =
+    notice === null
+      ? null
+      : createElement(
+          'div',
+          { className: 'workspace-notice', 'data-notice': 'members' },
+          createElement(
+            'span',
+            { className: 'workspace-notice__text' },
+            t(locale, 'workspace.member.notice', { count: notice.offline + notice.error }),
+          ),
+          createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'workspace-notice__action',
+              'data-action': 'open-panel',
+              'data-panel': 'members',
+              onClick: () => openPanel('members'),
+            },
+            t(locale, 'workspace.member.notice.open'),
+          ),
+        );
+
   const main = createElement(
     'div',
     { className: 'workspace-main' },
     header,
+    memberNotice,
     createElement(
       'div',
       { className: 'workspace-chat' },
@@ -176,6 +256,50 @@ export function WorkspaceShell({
       locale,
       onOpenPanel: openPanel,
     });
+  } else if (drawer === 'members') {
+    drawerBody = channelSelected
+      ? createElement(MemberPanel, {
+          key: selectedTargetId ?? 'members',
+          workspace,
+          members: selectedMembers,
+          locale,
+          onJoin:
+            selectedTargetId === null || onJoinMember === undefined
+              ? undefined
+              : (memberId: string) => onJoinMember(selectedTargetId, memberId),
+        })
+      : createElement(
+          'p',
+          { className: 'workspace-panel__pending' },
+          t(locale, 'workspace.member.channelOnly'),
+        );
+  } else if (drawer === 'roster') {
+    drawerBody = channelSelected
+      ? createElement(MemberRoster, { workspace, members: selectedMembers, locale })
+      : createElement(
+          'p',
+          { className: 'workspace-panel__pending' },
+          t(locale, 'workspace.roster.channelOnly'),
+        );
+  } else if (drawer === 'agent-detail') {
+    drawerBody =
+      selectedAgent === null
+        ? createElement(
+            'p',
+            { className: 'workspace-panel__pending' },
+            t(locale, 'workspace.agentDetail.missing'),
+          )
+        : createElement(AgentDetailPanel, {
+            key: selectedAgent.id,
+            agent: selectedAgent,
+            locale,
+            onSave:
+              onSaveAgent === undefined
+                ? undefined
+                : (patch: { system_prompt: string }) => onSaveAgent(selectedAgent.id, patch),
+            onDelete:
+              onDeleteAgent === undefined ? undefined : () => onDeleteAgent(selectedAgent.id),
+          });
   } else if (drawer !== null) {
     drawerBody = createElement(
       'div',
