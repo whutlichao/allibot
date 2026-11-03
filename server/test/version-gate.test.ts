@@ -32,7 +32,7 @@ test('a database newer than the code is refused by serve and --migrate without t
   const dataDir = await makeTempDir('allibot-gate-newer-');
   try {
     migrateToBaseline(dataDir);
-    setSchemaVersion(dataDir, 4);
+    setSchemaVersion(dataDir, 5);
     const before = databaseSha256(dataDir);
 
     const migrate = runCli(['--migrate', '--data-dir', dataDir]);
