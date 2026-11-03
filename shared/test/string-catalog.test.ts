@@ -17,8 +17,14 @@ const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const WORKSPACES = ['web/src', 'server/src'] as const;
 const SOURCE_EXTENSIONS = ['.ts', '.tsx'] as const;
 
-/** `t('key', ...)` / `tForLocale(locale, 'key', ...)` call sites. */
-const CALL_PATTERN = /\b(?:t|tForLocale)\s*\(\s*(?:'[^']*'\s*,\s*)?'([^']+)'/g;
+/**
+ * 词条表本身（shared/src/strings）是数据，不是用法：扫它会把自己的定义算成
+ * 一次“渲染”，孤儿键检查就永远通过。所以用法扫描只覆盖两个 workspace。
+ */
+
+/** `t(locale, 'key', ...)` / `tFromDb(db, 'key', ...)` call sites. */
+const CALL_PATTERN =
+  /\b(?:t|tFromDb)\s*\([\s\S]{0,120}?'([a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9-]+)+)'/g;
 /** A direct catalog read: `ZH_CN['key']` or `ZH_CN.key`. */
 const CATALOG_INDEX_PATTERN = /\bZH_CN\s*(?:\[\s*'([^']+)'\s*\]|\.([A-Za-z0-9_.]+))/g;
 
@@ -72,7 +78,7 @@ test('the zh-CN catalog declares exactly the placeholders its text uses', () => 
 test('every key string is a stable namespace-qualified key with no Avoid-word name', () => {
   const AVOID = /\b(i18n|translation|lingo)\b/i;
   for (const key of Object.keys(catalog)) {
-    assert.match(key, /^[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9-]+)+$/, `string key ${key} is not stable`);
+    assert.match(key, /^[a-z][a-zA-Z0-9]*(\.[a-zA-Z0-9]+)+$/, `string key ${key} is not stable`);
     assert.doesNotMatch(key, AVOID, `string key ${key} uses an Avoid-column word`);
   }
 });

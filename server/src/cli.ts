@@ -29,7 +29,7 @@ async function run(argv: readonly string[]): Promise<number> {
   if (resolution.origin === 'legacy') {
     // 数据目录解析发生在库打开之前，所以这条兼容读取提示用源文案的默认
     // 语言偏好渲染；库内 locale 只在库可用之后才读得到。
-    console.error(t('zh-CN', 'cli.data_dir.legacy_warning', { data_dir: resolution.dataDir }));
+    console.error(t('zh-CN', 'cli.dataDir.legacyWarning', { data_dir: resolution.dataDir }));
   }
 
   if (command === 'migrate') {
@@ -39,16 +39,21 @@ async function run(argv: readonly string[]): Promise<number> {
       // 迁移已提交，库可直接打开；回执按库内语言偏好渲染。
       const db = openDatabase(resolution.dataDir);
       try {
-        const version = outcome.status === 'already-current' ? outcome.version : outcome.to;
-        console.log(
-          tFromDb(
-            db,
-            outcome.status === 'already-current'
-              ? 'cli.migrate.already_current'
-              : 'cli.migrate.migrated',
-            { data_dir: resolution.dataDir, schema_version: version },
-          ),
-        );
+        if (outcome.status === 'already-current') {
+          console.log(
+            tFromDb(db, 'cli.migrate.alreadyCurrent', {
+              data_dir: resolution.dataDir,
+              schema_version: outcome.version,
+            }),
+          );
+        } else {
+          console.log(
+            tFromDb(db, 'cli.migrate.migrated', {
+              data_dir: resolution.dataDir,
+              schema_version: outcome.to,
+            }),
+          );
+        }
       } finally {
         db.close();
       }

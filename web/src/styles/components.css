@@ -22,3 +22,98 @@
   flex: none;
   user-select: none;
 }
+
+/* 工作区设置面板：三档设置的呈现，density / theme 由壳上的 data 属性驱动。 */
+.settings-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface);
+  border-block-end: 1px solid var(--border);
+}
+
+.settings-panel__title {
+  inline-size: 100%;
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg);
+}
+
+.settings-panel__field {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.settings-panel__label {
+  color: var(--muted);
+}
+
+.settings-panel__value {
+  color: var(--fg);
+}
+
+.settings-panel__error {
+  inline-size: 100%;
+  margin: 0;
+  font-size: 13px;
+  color: var(--warn-deep);
+}
+
+/* 消息密度：舒适档留白更大，紧凑档收行距，只在壳上有 data-density 时生效。 */
+.sample-message {
+  display: flex;
+  gap: 8px;
+  padding: 16px 12px;
+  color: var(--fg);
+}
+
+.app-shell[data-density='compact'] .sample-message {
+  padding: 6px 12px;
+}
+
+.sample-message__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-shell[data-density='compact'] .sample-message__body {
+  gap: 1px;
+}
+
+.sample-message__author {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sample-message__text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.app-shell[data-density='compact'] .sample-message__text {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+/*
+ * 主题：壳上的 data-theme 是唯一开关。它只声明浏览器外观偏好（color-scheme：
+ * 原生控件、滚动条与画布），不改视觉契约 token 的取值——token 名与取值是设计
+ * 系统的固定层，深色配色是设计系统的增量，不是在这里分叉出第二套可改值。
+ */
+.app-shell[data-theme='light'] {
+  color-scheme: light;
+}
+
+.app-shell[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+.app-shell[data-theme='system'] {
+  color-scheme: light dark;
+}

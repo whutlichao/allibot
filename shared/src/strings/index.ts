@@ -34,7 +34,7 @@ const CATALOGS: Readonly<Record<Locale, Catalog>> = {
   'zh-CN': ZH_CN,
 };
 
-/** 预留但未交付的语言目录位；不是可选值，只用于说明缺口。 */
+/** 预留但未交付的语言目录位；不是可选值，只说明缺口在哪里。 */
 export const RESERVED_LOCALES = ['en-US'] as const;
 
 /**

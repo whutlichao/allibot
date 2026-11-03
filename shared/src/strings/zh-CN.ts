@@ -17,11 +17,11 @@ export const ZH_CN = {
     text: '已把数据目录 {data_dir} 迁移到 Schema 版本 {schema_version}。',
     params: ['data_dir', 'schema_version'],
   },
-  'cli.migrate.already_current': {
+  'cli.migrate.alreadyCurrent': {
     text: '数据目录 {data_dir} 已是 Schema 版本 {schema_version}。',
     params: ['data_dir', 'schema_version'],
   },
-  'cli.data_dir.legacy_warning': {
+  'cli.dataDir.legacyWarning': {
     text:
       '警告：正在使用旧数据目录 {data_dir} 做兼容读取；既有数据不会被移动。' +
       '用 --data-dir 或 allibot_DATA_DIR 指定其他目录。',
@@ -35,7 +35,7 @@ export const ZH_CN = {
   // 工作区设置面板：语言偏好 / 消息密度 / 主题三档。
   'settings.title': { text: '工作区设置', params: [] },
   'settings.locale.label': { text: '语言偏好', params: [] },
-  'settings.locale.zh-CN': { text: '简体中文', params: [] },
+  'settings.locale.zhCN': { text: '简体中文', params: [] },
   'settings.density.label': { text: '消息密度', params: [] },
   'settings.density.comfortable': { text: '舒适', params: [] },
   'settings.density.compact': { text: '紧凑', params: [] },
