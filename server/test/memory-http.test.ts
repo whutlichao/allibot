@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { SCHEMA_VERSION } from '../dist/db.js';
 import {
   makeTempDir,
   removeTempDir,
@@ -466,7 +467,7 @@ test('memory survives a restart and rides along with a whole data directory rest
     }
     const migration = runCli(['--migrate', '--data-dir', restoredDir]);
     assert.equal(migration.exitCode, 0, `the restored copy is current: ${migration.output}`);
-    assert.match(migration.stdout, /已是 Schema 版本 12/);
+    assert.match(migration.stdout, new RegExp(`已是 Schema 版本 ${SCHEMA_VERSION}`));
 
     restored = await startServer(restoredDir, { args: [...PROVIDER_ARGS] });
     const restoredBase = `http://127.0.0.1:${restored.port}`;

@@ -4,6 +4,7 @@ import { mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { SCHEMA_VERSION } from '../dist/db.js';
 import { MIGRATION_FIXTURE, makeTempDir, readLedger, removeTempDir, runCli } from './support.ts';
 
 function readSchemaVersion(dataDir: string): unknown {
@@ -58,19 +59,19 @@ test('migrating an empty data dir adds read_position and is idempotent', async (
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 12);
+    assert.equal(readSchemaVersion(dataDir), SCHEMA_VERSION);
     assert.deepEqual(columnNames(dataDir, 'read_position'), READ_POSITION_COLUMNS);
     assert.equal(countRows(dataDir, 'read_position'), 0, 'the migration seeds no read positions');
 
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 12);
+    assert.equal(entries[0]?.['to'], SCHEMA_VERSION);
     assert.equal(entries[0]?.['result'], 'ok');
 
     const again = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(again.exitCode, 0, `a second migrate should exit 0; output: ${again.output}`);
-    assert.match(again.stdout, /已是 Schema 版本 12/);
+    assert.match(again.stdout, new RegExp(`已是 Schema 版本 ${SCHEMA_VERSION}`));
     assert.equal(readLedger(dataDir).length, 1, 'an already-current migration appends no ledger line');
   } finally {
     await removeTempDir(dataDir);
@@ -121,7 +122,7 @@ test('read_position is one row per member and target with a non-negative positio
   }
 });
 
-test('a version 11 data dir upgrades to version 12 with a backup that keeps its rows', async () => {
+test('a version 11 data dir upgrades to the current version with a backup that keeps its rows', async () => {
   const parent = await makeTempDir('allibot-read-position-upgrade-');
   const dataDir = path.join(parent, 'data');
 
@@ -165,7 +166,7 @@ test('a version 11 data dir upgrades to version 12 with a backup that keeps its 
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 12);
+    assert.equal(readSchemaVersion(dataDir), SCHEMA_VERSION);
     assert.deepEqual(columnNames(dataDir, 'read_position'), READ_POSITION_COLUMNS);
     assert.equal(countRows(dataDir, "message WHERE id = 'kept-message'"), 1);
     assert.equal(countRows(dataDir, 'read_position'), 0, 'the upgrade seeds no read positions');
@@ -195,7 +196,7 @@ test('a version 11 data dir upgrades to version 12 with a backup that keeps its 
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 11);
-    assert.equal(last?.['to'], 12);
+    assert.equal(last?.['to'], SCHEMA_VERSION);
     assert.equal(last?.['result'], 'ok');
     assert.ok(tableNames(dataDir).includes('read_position'));
   } finally {

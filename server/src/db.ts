@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 export interface MigrationStep {
   readonly to: number;
@@ -490,6 +490,36 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
         -- positions are read when a round closes, so the target gets its own
         -- lookup.
         CREATE INDEX read_position_target ON read_position (target_id);
+      `);
+    },
+  },
+  {
+    // The reminder ticket lands here as the next strict +1 of the chain.
+    to: 13,
+    apply(db) {
+      db.exec(`
+        -- 提醒 (Reminder): the owner's one-shot local date + clock with a text
+        -- note, optionally owned by a channel. due_at_local is the fixed-format
+        -- local wall time the owner typed; created_at stays the UTC audit stamp
+        -- and the two are never converted against each other.
+        --
+        -- delivered_at is the due marker (NULL = not due yet). It carries both
+        -- "deliver at most once" and "catch up at most once": a reminder found
+        -- more than 24 hours late is only marked, never delivered. missed keeps
+        -- that lateness fact on the row, so a read does not have to reinterpret
+        -- a local time against a UTC stamp.
+        CREATE TABLE reminder (
+          id TEXT PRIMARY KEY,
+          channel_id TEXT REFERENCES channel (id),
+          due_at_local TEXT NOT NULL CHECK (
+            due_at_local GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]'
+          ),
+          text TEXT NOT NULL CHECK (length(text) > 0),
+          delivered_at TEXT,
+          missed INTEGER NOT NULL DEFAULT 0 CHECK (missed IN (0, 1)),
+          created_at TEXT NOT NULL,
+          CHECK (missed = 0 OR delivered_at IS NOT NULL)
+        );
       `);
     },
   },

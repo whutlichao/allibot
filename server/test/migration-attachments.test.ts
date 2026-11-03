@@ -4,6 +4,7 @@ import { mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { SCHEMA_VERSION } from '../dist/db.js';
 import { MIGRATION_FIXTURE, makeTempDir, readLedger, removeTempDir, runCli } from './support.ts';
 
 function readSchemaVersion(dataDir: string): unknown {
@@ -56,7 +57,7 @@ test('migrating an empty data dir adds attachment and reaches the current schema
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 12);
+    assert.equal(readSchemaVersion(dataDir), SCHEMA_VERSION);
     assert.deepEqual(attachmentColumns(dataDir), [
       'id',
       'message_id',
@@ -81,7 +82,7 @@ test('migrating an empty data dir adds attachment and reaches the current schema
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 12);
+    assert.equal(entries[0]?.['to'], SCHEMA_VERSION);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -132,7 +133,7 @@ test('a version 4 data dir upgrades through the chain with a backup that keeps m
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 12);
+    assert.equal(readSchemaVersion(dataDir), SCHEMA_VERSION);
     assert.deepEqual(attachmentColumns(dataDir), [
       'id',
       'message_id',
@@ -169,7 +170,7 @@ test('a version 4 data dir upgrades through the chain with a backup that keeps m
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 4);
-    assert.equal(last?.['to'], 12);
+    assert.equal(last?.['to'], SCHEMA_VERSION);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);

@@ -98,6 +98,21 @@ export function publishUnreadChanged(change: {
   });
 }
 
+/**
+ * The frame a due reminder produces. `target_id` is the owning channel, or
+ * null for a reminder that belongs to no channel; no `message.created` frame
+ * accompanies the null case, because no message is written.
+ */
+export function publishReminderDue(due: {
+  reminderId: string;
+  targetId: string | null;
+}): void {
+  eventHub.publish({
+    event: 'reminder.due',
+    data: { reminder_id: due.reminderId, target_id: due.targetId },
+  });
+}
+
 /** The frame one round outcome row produces. */
 export function publishRoundOutcome(outcome: {
   target_id: string;
