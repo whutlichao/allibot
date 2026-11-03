@@ -7,11 +7,13 @@ import {
   type WorkspaceBackend,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
+import { ensureAgentHome } from './agent-home.js';
 import { ApiFailure } from './api-error.js';
 import { publishMemberStatus, publishWorkspaceChanged } from './events.js';
 import { credentialStatus, parseModelIdentifier } from './providers.js';
 import type { InFlightRounds } from './rounds.js';
 import { readStatusPoint } from './status.js';
+import { agentHomeRoot } from './workspace-root.js';
 
 /**
  * Built-in agent_config defaults. The context window matches the spec's
@@ -155,6 +157,11 @@ export function createAgent(
       input.maxIterations,
       input.autoClaim,
     );
+    // 家目录 (#43 / D5.2): created with the Agent, derived from the generated
+    // id, and nothing under it. Creating it inside the transaction means a
+    // failed home creation rolls the member row back instead of leaving an
+    // Agent that has no home.
+    ensureAgentHome(id, env);
     return id;
   });
   const id = create();
@@ -529,6 +536,8 @@ function toAgentView(
       (WORKSPACE_BACKENDS as readonly string[]).includes(row.workspace_backend)
         ? (row.workspace_backend as WorkspaceBackend)
         : null,
+    // 家目录路径由 member_id 派生，不落库 (#43 / D5.2).
+    home_path: agentHomeRoot(row.id, env),
   };
 }
 

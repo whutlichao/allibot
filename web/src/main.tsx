@@ -1,5 +1,6 @@
 import {
   t,
+  type AgentRulesView,
   type ChannelConfigPatch,
   type PlanRunView,
   type SopDefinitionCreate,
@@ -45,6 +46,7 @@ import {
   startSopRun,
 } from './workspace-actions.ts';
 import { applyJoinResult } from './workspace/member-reading.ts';
+import { readAgentRules } from './workspace/agent-rules.ts';
 
 const DEFAULT_SETTINGS: WorkspaceSettingsView = {
   locale: 'zh-CN',
@@ -78,6 +80,8 @@ let currentPlans: Record<string, readonly PlanRunView[]> = {};
 let currentSopDefinitions: Record<string, readonly SopDefinitionView[]> = {};
 /** SOP run 读数，按 definition id 归档；pending run 由启动响应带回。 */
 let currentSopRuns: Record<string, readonly SopRunView[]> = {};
+/** Agent 家目录 / 规则读数 (#43)：打开详情时按需读，不猜三段内容。 */
+let currentAgentRules: Record<string, AgentRulesView> = {};
 
 async function loadTargetMembers(targetId: string): Promise<void> {
   currentChannelMembers = {
@@ -91,6 +95,11 @@ async function loadTeamRuns(targetId: string): Promise<void> {
     ...currentTeamRuns,
     [targetId]: await readTeamRuns(fetch, targetId),
   };
+}
+
+async function loadAgentRules(agentId: string, channelId: string | null): Promise<void> {
+  const rules = await readAgentRules(fetch, agentId, channelId);
+  currentAgentRules = { ...currentAgentRules, [agentId]: rules };
 }
 
 async function loadPlans(targetId: string): Promise<void> {
@@ -222,6 +231,14 @@ function render(saveFailed = false): void {
         plans={currentPlans}
         sopDefinitions={currentSopDefinitions}
         sopRuns={currentSopRuns}
+        agentRules={currentAgentRules}
+        onAgentRulesNeeded={(agentId, channelId) => {
+          void loadAgentRules(agentId, channelId)
+            .then(() => render())
+            .catch((error: unknown) => {
+              console.error('Agent rules read failed', error);
+            });
+        }}
         saveFailed={saveFailed}
         onSelectTarget={(targetId) => {
           currentTargetId = targetId;

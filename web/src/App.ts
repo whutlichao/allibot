@@ -1,5 +1,6 @@
 import {
   t,
+  type AgentRulesView,
   type ChannelConfigPatch,
   type PlanRunView,
   type SopDefinitionCreate,
@@ -37,6 +38,9 @@ export interface AppProps {
   sopDefinitions?: Record<string, readonly SopDefinitionView[]>;
   /** SOP run snapshots, keyed by definition id. */
   sopRuns?: Record<string, readonly SopRunView[]>;
+  /** Effective rules per Agent id, keyed by Agent. */
+  agentRules?: Record<string, AgentRulesView>;
+  onAgentRulesNeeded?: (agentId: string, channelId: string | null) => void;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
   onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
@@ -69,6 +73,8 @@ export function App({
   plans,
   sopDefinitions,
   sopRuns,
+  agentRules,
+  onAgentRulesNeeded,
   onSelectTarget,
   onTaskTransition,
   onJoinMember,
@@ -90,6 +96,8 @@ export function App({
       plans,
       sopDefinitions,
       sopRuns,
+      agentRules,
+      onAgentRulesNeeded,
       onSelectTarget,
       onTaskTransition,
       onSettingsChange,

@@ -31,6 +31,7 @@ import {
   publishTeamAssignment,
   publishUnreadChanged,
 } from './events.js';
+import { readRoundRuleSections } from './agent-home.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
 import { createPlanFace } from './plans.js';
 import { insertMessageRow } from './message-store.js';
@@ -40,6 +41,7 @@ import { createRoundFileTools } from './workspace-files.js';
 import {
   readRoundWorkspaceBinding,
   readRoundWorkspaceFailure,
+  readTargetWorkspaceBinding,
 } from './workspace-root.js';
 import {
   readTeamMemberAvailability,
@@ -1109,6 +1111,7 @@ function readAssignmentRoundInput(
   const prompt = composeSystemPrompt(db, member, targetKind, false, params.reason, memories, {
     isLeader: false,
     assignmentInstruction: params.instruction,
+    projectRoot: readTargetProjectRoot(db, params.team.targetId),
   });
   return {
     member,
@@ -1279,7 +1282,7 @@ function readRoundInput(
     triggeredByHuman,
     wake.reason,
     memories,
-    { isLeader, assignmentInstruction: null },
+    { isLeader, assignmentInstruction: null, projectRoot: readTargetProjectRoot(db, wake.targetId) },
   );
   return {
     member,
@@ -1411,6 +1414,11 @@ function wokeByHuman(db: Database.Database, wake: Wake): boolean {
   return row?.kind === 'human';
 }
 
+/** The channel project root behind a target; null for a DM / no-root target. */
+function readTargetProjectRoot(db: Database.Database, targetId: string): string | null {
+  return readTargetWorkspaceBinding(db, targetId)?.root ?? null;
+}
+
 /**
  * The system prompt a round is handed. It states its own composition (D3.7 /
  * D5.2) as `RoundPromptSections`: the global rules base → the stored
@@ -1419,9 +1427,11 @@ function wokeByHuman(db: Database.Database, wake: Wake): boolean {
  * sentences, the leader duties on a leader round, the assignment paragraph on
  * a TeamAssign sub-round, and finally the recalled-memory section.
  *
- * The global base and the project supplement are absent until the Agent-home /
- * workspace layer exists (#43); they are absent pieces, never empty ones. A DM
- * is stated one-to-one with an explicit mandatory answer (the glossary's
+ * The global base (the member home's `AGENTS.md`) and the project supplement
+ * (`<workspace_root>/.allibot/agents/<member_id>/AGENTS.md`) are read by the
+ * host and injected as prompt text (#43). A missing / unreadable / empty piece
+ * is absent, never an empty section, and only that piece is omitted. A DM is
+ * stated one-to-one with an explicit mandatory answer (the glossary's
  * "一对一口径 + 显式必答句") instead of the channel rubric. The memory section
  * is appended only — it never replaces the stored prompt (D5.2).
  */
@@ -1432,7 +1442,12 @@ function composeSystemPrompt(
   triggeredByHuman: boolean,
   reason: WakeReason,
   memories: readonly RoundMemory[],
-  options: { isLeader: boolean; assignmentInstruction: string | null },
+  options: {
+    isLeader: boolean;
+    assignmentInstruction: string | null;
+    /** The channel's project root; null for a DM / no-root round. */
+    projectRoot: string | null;
+  },
 ): { systemPrompt: string; sections: RoundPromptSections } {
   const targetDiscipline =
     targetKind === 'dm'
@@ -1453,10 +1468,11 @@ function composeSystemPrompt(
       mandatory.push(tFromDb(db, 'prompt.teamChange.mandatory'));
     }
   }
+  const rules = readRoundRuleSections(member.id, options.projectRoot);
   const sections: RoundPromptSections = {
-    rulesBase: null,
+    rulesBase: rules.rulesBase,
     systemPrompt: member.system_prompt.trim(),
-    projectSupplement: null,
+    projectSupplement: rules.projectSupplement,
     identity: tFromDb(db, 'prompt.identity', { name: member.display_name }),
     targetDiscipline,
     mandatory,

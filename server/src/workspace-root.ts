@@ -43,9 +43,18 @@ export interface TargetWorkspaceBinding {
   allowLocalShell: 0 | 1;
 }
 
-/** The process-level home root (`~/.allibot/`); a deployment may override it. */
+/**
+ * The process-level home root (`~/.allibot/`); `--home-dir` /
+ * `allibot_HOME_DIR` override it (D5.2). An empty override is treated as
+ * absent rather than resolving to the process cwd.
+ */
 export function workspaceHomeRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return path.resolve(env.allibot_HOME_DIR ?? path.join(env.HOME ?? homedir(), '.allibot'));
+  const override = env.allibot_HOME_DIR;
+  const homeRoot =
+    override !== undefined && override.length > 0
+      ? override
+      : path.join(env.HOME ?? homedir(), '.allibot');
+  return path.resolve(homeRoot);
 }
 
 /** `~/.allibot/agents/` — the parent of every derived Agent home. */

@@ -19,6 +19,7 @@ import {
   formatSseFrame,
   SSE_ROTATE_EVENT,
 } from './events.js';
+import { readAgentRules } from './agent-home.js';
 import {
   archiveChannel,
   createChannel,
@@ -580,6 +581,25 @@ const ROUTES: readonly Route[] = [
     handle: async (request, response, { db, env, orchestration }) => {
       const agent = createAgent(db, await readJsonBody(request), env, orchestration.inFlight);
       sendJson(response, 201, agent);
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/rules$`),
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      // The Agent must be a live Agent; the channel only supplies the project
+      // context. No channel / no root simply means the project section is
+      // absent — it is not an error (D2.3).
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      const rawChannelId = new URL(request.url ?? '/', `http://${HOST}`).searchParams.get(
+        'channel_id',
+      );
+      const channelId = rawChannelId === null || rawChannelId.length === 0 ? null : rawChannelId;
+      sendJson(response, 200, readAgentRules(db, id, channelId, env));
     },
   },
   {
