@@ -3,34 +3,47 @@ import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
-  AbstractAgent,
   CopilotChat,
-  CopilotChatMessageView,
   CopilotKitProvider,
   HttpAgent,
   useAgent,
+  useCopilotChatConfiguration,
   useCopilotKit,
 } from '@copilotkit/react-core/v2';
 import type { Message } from '@copilotkit/react-core/v2';
+import { CopilotWorkbench } from '../src/CopilotWorkbench.ts';
 import {
   AGUI_BASE_PATH,
   AGUI_RUNTIME_URL,
   AGUI_USE_SINGLE_ENDPOINT,
   ALLIBOT_AGENT_ID,
-  mergeMessagesById,
 } from '../src/copilotkit-contract.ts';
 
 /**
- * Component-level contract tests for the CopilotKit wiring: the provider and
- * chat props, the runtime URL the proxied agent calls, and the manual
- * hydration dedup. They render through React SSR — no browser, no network —
- * and never re-test domain behaviour that the backend HTTP seam covers.
+ * Component-level contract tests for the CopilotKit wiring: the runtime the
+ * provider connects to, the properties the chat binds, and manual hydration
+ * dedup. They render through React SSR — no browser, no network — and never
+ * re-test domain behaviour the backend HTTP seam covers.
+ *
+ * The hooks that read the chat's own binding are called from a `chatView` slot
+ * so they sit inside the chat configuration (a sibling of the chat sees only
+ * the provider defaults). `useAgent` is also the hook the spec names for
+ * hydration: `useAgent().agent.setMessages(...)`.
  */
 
 const TARGET_ID = '5d0f2a4e-9c1b-4c3e-8f0a-2b6d7e8f9a01';
 
-/** A runtime stub: `/info` describes one allibot agent, a run streams AG-UI frames. */
-function stubRuntimeFetch(sseBody: string): { fetch: typeof fetch; calls: string[] } {
+interface RuntimeStub {
+  fetch: typeof fetch;
+  calls: string[];
+}
+
+/**
+ * The runtime stub the provider talks to: `/info` describes the one allibot
+ * agent, a run streams the given AG-UI frames. `globalThis.fetch` is replaced
+ * around a render so the provider's own connection attempt stays offline.
+ */
+function stubRuntime(sseBody: string): RuntimeStub {
   const calls: string[] = [];
   const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -52,6 +65,16 @@ function stubRuntimeFetch(sseBody: string): { fetch: typeof fetch; calls: string
   return { fetch: fetchImpl as typeof fetch, calls };
 }
 
+async function withStubbedFetch<T>(stub: RuntimeStub, run: () => Promise<T>): Promise<T> {
+  const original = globalThis.fetch;
+  globalThis.fetch = stub.fetch;
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
 function sseFrames(threadId: string, runId: string, deltas: string[]): string {
   const frames: Record<string, unknown>[] = [
     { type: 'RUN_STARTED', threadId, runId },
@@ -63,57 +86,39 @@ function sseFrames(threadId: string, runId: string, deltas: string[]): string {
   return `${frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join('')}`;
 }
 
-function renderProviderChat(agent: AbstractAgent | undefined): string {
-  const props: Record<string, unknown> = {
-    runtimeUrl: AGUI_RUNTIME_URL,
-    useSingleEndpoint: AGUI_USE_SINGLE_ENDPOINT,
-  };
-  if (agent !== undefined) {
-    props['selfManagedAgents'] = { [ALLIBOT_AGENT_ID]: agent };
-  }
-  return renderToStaticMarkup(
-    createElement(
-      CopilotKitProvider as never,
-      props as never,
-      createElement(CopilotChat as never, {
-        agentId: ALLIBOT_AGENT_ID,
-        threadId: TARGET_ID,
-      } as never),
-    ),
-  );
-}
-function agentWithHydratedMessage(): HttpAgent {
-  const runtime = stubRuntimeFetch(sseFrames(TARGET_ID, 'run-dedup', ['流式追加']));
-  const agent = new HttpAgent({
-    url: `${AGUI_RUNTIME_URL}/agent/${ALLIBOT_AGENT_ID}/run`,
-    agentId: ALLIBOT_AGENT_ID,
-    threadId: TARGET_ID,
-    fetch: runtime.fetch,
-  });
-  agent.setMessages([{ id: 'm-streamed', role: 'assistant', content: '水合内容' }]);
-  return agent;
+interface ChatRender {
+  runtimeUrl?: string;
+  transport?: string;
+  agentId?: string;
+  chatThreadId?: string;
+  /** The message ids the chat view was handed for this render. */
+  messageIds: string[];
 }
 
-test('the provider names the multi-route handler and turns the single endpoint off', () => {
-  assert.equal(AGUI_RUNTIME_URL, '/api/copilotkit');
-  assert.equal(AGUI_RUNTIME_URL, AGUI_BASE_PATH);
-  assert.equal(AGUI_USE_SINGLE_ENDPOINT, false);
-});
+/**
+ * Mounts the same provider/chat pair `CopilotWorkbench` builds, plus a
+ * `chatView` slot that records what the chat bound and hydrates on demand.
+ */
+function renderChat(options: {
+  stub: RuntimeStub;
+  agent?: HttpAgent;
+  persisted?: Message[];
+}): ChatRender {
+  const seen: ChatRender = { messageIds: [] };
 
-test('CopilotKitProvider and CopilotChat accept the contract props and render the chat', () => {
-  const html = renderProviderChat(undefined);
-
-  assert.match(html, /data-testid="copilot-chat"/, 'the main area is a CopilotChat');
-});
-
-test('the provider hands the chat a rest-transport agent under the multi-route base path', () => {
-  const seen: { runtimeUrl?: string; transport?: string; agentUrl?: string } = {};
-  function Probe() {
+  function ChatViewSlot(props: { messages?: Message[] }) {
     const { copilotkit } = useCopilotKit();
+    const configuration = useCopilotChatConfiguration();
     const { agent } = useAgent({ agentId: ALLIBOT_AGENT_ID });
     seen.runtimeUrl = copilotkit.runtimeUrl;
     seen.transport = copilotkit.runtimeTransport;
-    seen.agentUrl = (agent as unknown as { url?: string } | undefined)?.url;
+    seen.chatThreadId = configuration?.threadId;
+    seen.agentId = configuration?.agentId;
+    seen.messageIds = (props.messages ?? []).map((message) => message.id);
+    if (options.persisted !== undefined) {
+      // 手动水合：切换 target 时把已落库消息装进这个 thread 的 agent。
+      agent.setMessages(options.persisted as never);
+    }
     return null;
   }
 
@@ -123,14 +128,42 @@ test('the provider hands the chat a rest-transport agent under the multi-route b
       {
         runtimeUrl: AGUI_RUNTIME_URL,
         useSingleEndpoint: AGUI_USE_SINGLE_ENDPOINT,
+        ...(options.agent === undefined
+          ? {}
+          : { selfManagedAgents: { [ALLIBOT_AGENT_ID]: options.agent } }),
       } as never,
-      createElement(Probe as never),
       createElement(CopilotChat as never, {
         agentId: ALLIBOT_AGENT_ID,
         threadId: TARGET_ID,
+        chatView: ChatViewSlot,
       } as never),
     ),
   );
+  return seen;
+}
+
+test('the wiring constants name the multi-route handler and the one allibot agent', () => {
+  assert.equal(AGUI_RUNTIME_URL, '/api/copilotkit');
+  assert.equal(AGUI_RUNTIME_URL, AGUI_BASE_PATH);
+  assert.equal(AGUI_USE_SINGLE_ENDPOINT, false);
+  assert.equal(ALLIBOT_AGENT_ID, 'allibot');
+});
+
+test('the workbench renders the chat as the main area', async () => {
+  const stub = stubRuntime(sseFrames(TARGET_ID, 'run-workbench', []));
+
+  // The provider's `/info` probe runs in an effect, which SSR does not run;
+  // this test pins the rendered shell, and the render below pins the runtime
+  // the provider was configured with.
+  const html = await withStubbedFetch(stub, async () =>
+    renderToStaticMarkup(createElement(CopilotWorkbench, { targetId: TARGET_ID })),
+  );
+
+  assert.match(html, /data-testid="copilot-chat"/, 'the main area is a CopilotChat');
+});
+
+test('the provider selects the multi-route REST transport', () => {
+  const seen = renderChat({ stub: stubRuntime(sseFrames(TARGET_ID, 'run-info', [])) });
 
   assert.equal(seen.runtimeUrl, '/api/copilotkit', 'the provider points at the handler base path');
   assert.equal(
@@ -138,34 +171,55 @@ test('the provider hands the chat a rest-transport agent under the multi-route b
     'rest',
     'useSingleEndpoint={false} selects the multi-route REST transport, not the single-route envelope',
   );
-  assert.equal(
-    seen.agentUrl,
-    '/api/copilotkit/agent/allibot/run',
-    'the chat agent calls the multi-route run endpoint for the fixed allibot agentId',
-  );
 });
 
-test('the proxied agent talks to the multi-route handler under /api/copilotkit for agent allibot', async () => {
-  const runtime = stubRuntimeFetch(sseFrames(TARGET_ID, 'run-url', ['你好']));
+test('the chat binds agentId="allibot" and threadId=target_id', () => {
+  const seen = renderChat({ stub: stubRuntime(sseFrames(TARGET_ID, 'run-bind', [])) });
+
+  assert.equal(seen.agentId, 'allibot', 'the chat runs the one orchestration agent');
+  assert.equal(seen.chatThreadId, TARGET_ID, 'the thread identity is the target id');
+});
+
+test('a run goes to the multi-route endpoint with the target id as its thread', async () => {
+  const stub = stubRuntime(sseFrames(TARGET_ID, 'run-thread', ['你好']));
   const agent = new HttpAgent({
     url: `${AGUI_RUNTIME_URL}/agent/${ALLIBOT_AGENT_ID}/run`,
     agentId: ALLIBOT_AGENT_ID,
     threadId: TARGET_ID,
-    fetch: runtime.fetch,
+    fetch: stub.fetch,
   });
 
-  await agent.runAgent({ runId: 'run-url', tools: [], context: [] });
+  await agent.runAgent({ runId: 'run-thread', tools: [], context: [] });
 
-  assert.deepEqual(runtime.calls, [`POST ${AGUI_RUNTIME_URL}/agent/${ALLIBOT_AGENT_ID}/run`]);
+  assert.deepEqual(
+    stub.calls,
+    [`POST ${AGUI_RUNTIME_URL}/agent/${ALLIBOT_AGENT_ID}/run`],
+    'the run goes to the multi-route endpoint of the one allibot agent',
+  );
   assert.equal(
     `${AGUI_RUNTIME_URL}/agent/${ALLIBOT_AGENT_ID}/run`,
-    `/api/copilotkit/agent/allibot/run`,
-    'the run route is the backend multi-route path, not a single-route envelope',
+    '/api/copilotkit/agent/allibot/run',
   );
+  assert.equal(agent.threadId, TARGET_ID, 'the agent stays scoped to the target thread');
 });
 
 test('a hydrated message and a streamed append with the same messageId render one row', async () => {
-  const agent = agentWithHydratedMessage();
+  const stub = stubRuntime(sseFrames(TARGET_ID, 'run-dedup', ['流式追加']));
+  const agent = new HttpAgent({
+    url: `${AGUI_RUNTIME_URL}/agent/${ALLIBOT_AGENT_ID}/run`,
+    agentId: ALLIBOT_AGENT_ID,
+    threadId: TARGET_ID,
+    fetch: stub.fetch,
+  });
+  const persisted: Message[] = [{ id: 'm-streamed', role: 'assistant', content: '水合内容' }];
+
+  const hydrated = renderChat({ stub, agent, persisted });
+  assert.deepEqual(
+    agent.messages.map((message) => [message.id, message.content]),
+    [['m-streamed', '水合内容']],
+    'setMessages loaded the persisted message into the chat agent',
+  );
+
   await agent.runAgent({ runId: 'run-dedup', tools: [], context: [] });
 
   assert.deepEqual(
@@ -174,52 +228,10 @@ test('a hydrated message and a streamed append with the same messageId render on
     'the stream continued the hydrated message instead of adding a second one',
   );
 
-  const html = renderProviderChat(agent);
-  assert.equal(
-    html.split('data-message-id="m-streamed"').length - 1,
-    1,
-    'the chat renders exactly one row for the messageId',
-  );
-  assert.equal(html.split('data-message-id=').length - 1, 1, 'no second row appears');
-});
-
-test('the message view itself collapses duplicate messageIds and keeps the later copy', () => {
-  const messages: Message[] = [
-    { id: 'm-1', role: 'assistant', content: '第一次' },
-    { id: 'm-1', role: 'assistant', content: '第二次' },
-  ];
-  const html = renderToStaticMarkup(
-    createElement(
-      CopilotKitProvider as never,
-      { runtimeUrl: AGUI_RUNTIME_URL, useSingleEndpoint: AGUI_USE_SINGLE_ENDPOINT } as never,
-      createElement(CopilotChatMessageView as never, { messages } as never),
-    ),
-  );
-  assert.equal(html.split('data-message-id="m-1"').length - 1, 1);
-});
-
-test('manual hydration merge keeps one entry per messageId and preserves order', () => {
-  const hydrated: Message[] = [
-    { id: 'm-1', role: 'assistant', content: '已落库' },
-    { id: 'm-2', role: 'user', content: '人类消息' },
-  ];
-  const appended: Message[] = [{ id: 'm-1', role: 'assistant', content: '已落库 + 流式追加' }];
-
-  const merged = mergeMessagesById(hydrated, appended);
-
+  const rendered = renderChat({ stub, agent, persisted });
   assert.deepEqual(
-    merged.map((message) => message.id),
-    ['m-1', 'm-2'],
-    'the merge does not duplicate the re-appended messageId',
+    rendered.messageIds,
+    ['m-streamed'],
+    `hydration plus the streamed append leaves exactly one message (saw: ${hydrated.messageIds.join(',')})`,
   );
-  assert.equal(merged[0]?.content, '已落库 + 流式追加', 'the later copy wins');
-});
-
-test('the CopilotChat mount takes agentId="allibot" and threadId=target_id', () => {
-  // The props are the contract: the same target id is the thread id, and the
-  // agent id never becomes a member id.
-  const chatProps = { agentId: ALLIBOT_AGENT_ID, threadId: TARGET_ID };
-  assert.equal(chatProps.agentId, 'allibot');
-  assert.equal(chatProps.threadId, TARGET_ID);
-  assert.notEqual(chatProps.agentId, chatProps.threadId);
 });

@@ -3,8 +3,6 @@
  * 对话固定走一个编排 agent，thread 身份就是 target id（本仓 ADR 0003）。
  */
 
-import type { Message } from '@copilotkit/react-core/v2';
-
 /** 后端 CopilotKit 多路由 handler 的 base path（`createCopilotRuntimeHandler` 的 basePath）。 */
 export const AGUI_BASE_PATH = '/api/copilotkit';
 
@@ -19,19 +17,3 @@ export const ALLIBOT_AGENT_ID = 'allibot';
 
 /** 多路由 handler 配 `useSingleEndpoint={false}`（单路由信封只在 `mode: "single-route"` 下成立）。 */
 export const AGUI_USE_SINGLE_ENDPOINT = false;
-
-/**
- * 历史水合与流式追加共用同一个去重口径：同一 messageId 只保留一条消息。
- * `useAgent().agent.setMessages(...)` 水合已落库消息，`addMessage` / AG-UI 流追加
- * 同一 messageId 时不新增第二条渲染行。
- */
-export function mergeMessagesById(
-  hydrated: readonly Message[],
-  appended: readonly Message[],
-): Message[] {
-  const merged = new Map<string, Message>();
-  for (const message of [...hydrated, ...appended]) {
-    merged.set(message.id, message);
-  }
-  return [...merged.values()];
-}
