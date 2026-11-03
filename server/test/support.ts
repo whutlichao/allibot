@@ -1,6 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer, type IncomingHttpHeaders } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -49,7 +50,22 @@ export interface RunningServer {
   port: number;
   stop: () => Promise<void>;
   crash: () => Promise<void>;
+  /** Everything the process wrote to stdout / stderr so far. */
+  logs: () => { stdout: string; stderr: string };
 }
+
+/**
+ * The environment variables that could point a round at a real model provider.
+ * They are stripped from every spawned process unless a test sets them
+ * explicitly, so an automation run never spends money or touches the network
+ * because of the developer's own shell.
+ */
+const PROVIDER_ENV_KEYS = [
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'ANTHROPIC_BASE_URL',
+  'OPENAI_BASE_URL',
+] as const;
 
 export async function makeTempDir(prefix: string): Promise<string> {
   return await mkdtemp(path.join(tmpdir(), prefix));
@@ -106,6 +122,17 @@ export async function startServer(
     },
   );
 
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.setEncoding('utf8');
+  child.stderr?.setEncoding('utf8');
+  child.stdout?.on('data', (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr?.on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+
   let boundPort: number;
   try {
     boundPort = await waitForListeningPort(child);
@@ -137,6 +164,7 @@ export async function startServer(
       child.kill('SIGKILL');
       await waitForExit(child);
     },
+    logs: () => ({ stdout, stderr }),
   };
 }
 
@@ -146,6 +174,99 @@ export function readLedger(dataDir: string): Record<string, unknown>[] {
     .split('\n')
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** One request a recording endpoint saw, kept verbatim for assertions. */
+export interface RecordedRequest {
+  method: string;
+  path: string;
+  headers: IncomingHttpHeaders;
+  body: string;
+}
+
+/** What a recording endpoint answers with; the default is a provider-shaped reply. */
+export interface RecordedReply {
+  status: number;
+  body: unknown;
+}
+
+/**
+ * A local provider endpoint on 127.0.0.1 (not the internet): it records every
+ * request it receives and answers in the shape of the path it was called on.
+ * Tests point `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` at it, so a real provider
+ * adapter can be exercised without any network access or model spend.
+ */
+export interface RecordingEndpoint {
+  port: number;
+  baseUrl: string;
+  requests: RecordedRequest[];
+  /** Replace the canned answer for later requests. */
+  respondWith: (responder: (request: RecordedRequest) => RecordedReply) => void;
+  stop: () => Promise<void>;
+}
+
+export async function startRecordingEndpoint(
+  options: { replyText?: string } = {},
+): Promise<RecordingEndpoint> {
+  const requests: RecordedRequest[] = [];
+  const replyText = options.replyText ?? '记录端点的回复';
+  let responder: ((request: RecordedRequest) => RecordedReply) | null = null;
+
+  const server = createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(chunk));
+    request.on('end', () => {
+      const recorded: RecordedRequest = {
+        method: request.method ?? 'GET',
+        path: request.url ?? '/',
+        headers: request.headers,
+        body: Buffer.concat(chunks).toString('utf8'),
+      };
+      requests.push(recorded);
+      const reply = responder?.(recorded) ?? defaultProviderReply(recorded.path, replyText);
+      const payload = typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body);
+      response.writeHead(reply.status, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': Buffer.byteLength(payload),
+      });
+      response.end(payload);
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    server.close();
+    throw new Error('recording endpoint did not bind to a TCP port');
+  }
+
+  return {
+    port: address.port,
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    requests,
+    respondWith: (next) => {
+      responder = next;
+    },
+    stop: async (): Promise<void> => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error === undefined ? resolve() : reject(error)));
+      });
+    },
+  };
+}
+
+/** The provider-shaped answer: OpenAI under /v1/chat/completions, Anthropic under /v1/messages. */
+function defaultProviderReply(path: string, text: string): RecordedReply {
+  if (path.endsWith('/v1/messages')) {
+    return { status: 200, body: { content: [{ type: 'text', text }] } };
+  }
+  return { status: 200, body: { choices: [{ message: { role: 'assistant', content: text } }] } };
 }
 
 function isTimeoutError(error: Error): boolean {
@@ -160,6 +281,13 @@ function buildEnv(overrides: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
   };
   if (overrides?.allibot_DATA_DIR === undefined) {
     delete env.allibot_DATA_DIR;
+  }
+  // Automation never calls a real provider: the developer's own credentials
+  // must not leak into a test process that deliberately leaves them unset.
+  for (const key of PROVIDER_ENV_KEYS) {
+    if (overrides?.[key] === undefined) {
+      delete env[key];
+    }
   }
   return env;
 }

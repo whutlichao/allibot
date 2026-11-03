@@ -11,6 +11,7 @@ import {
 } from './db.js';
 import { HOST, startHttpServer, type OrchestrationRuntime } from './http.js';
 import { acquireDataDirLock } from './lock.js';
+import { createModelProvider } from './model-provider.js';
 import { createInFlightRounds } from './rounds.js';
 import { createScriptedProvider } from './scripted-provider.js';
 
@@ -78,7 +79,7 @@ async function run(argv: readonly string[]): Promise<number> {
   const lock = await acquireDataDirLock(resolution.dataDir);
   const db = openDatabase(resolution.dataDir);
   try {
-    const orchestration = createOrchestration(options);
+    const orchestration = createOrchestration(options, db);
     const { server, port: boundPort } = await startHttpServer(
       port,
       db,
@@ -97,18 +98,24 @@ async function run(argv: readonly string[]): Promise<number> {
 
 /**
  * The member-face adapter is selected at startup, exactly once, and handed to
- * the HTTP layer. A later ticket adds the real provider adapter here; nothing
- * downstream branches on which one is live.
+ * the HTTP layer. The scripted double is the default (D4.3); `--provider model`
+ * selects the real Anthropic / OpenAI adapter, which still refuses to call out
+ * until the provider's remote-data-flow consent is recorded and its credential
+ * is present in the environment.
  */
-function createOrchestration(options: CliOptions): OrchestrationRuntime {
-  return {
-    provider: createScriptedProvider({
-      behavior: options.scriptedProvider,
-      delayMs: options.scriptedDelayMs,
-      replies: options.scriptedReplies.length > 0 ? options.scriptedReplies : undefined,
-    }),
-    inFlight: createInFlightRounds(),
-  };
+function createOrchestration(
+  options: CliOptions,
+  db: ReturnType<typeof openDatabase>,
+): OrchestrationRuntime {
+  const provider =
+    options.providerMode === 'model'
+      ? createModelProvider(db, process.env)
+      : createScriptedProvider({
+          behavior: options.scriptedProvider,
+          delayMs: options.scriptedDelayMs,
+          replies: options.scriptedReplies.length > 0 ? options.scriptedReplies : undefined,
+        });
+  return { provider, inFlight: createInFlightRounds() };
 }
 
 function waitForShutdown(server: Server): Promise<number> {
