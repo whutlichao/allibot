@@ -1,5 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { AGENT_PROVIDERS, type AgentView, type OwnerView } from '@allibot/shared';
+import {
+  AGENT_PROVIDERS,
+  WORKSPACE_BACKENDS,
+  type AgentView,
+  type OwnerView,
+  type WorkspaceBackend,
+} from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { publishMemberStatus, publishWorkspaceChanged } from './events.js';
@@ -68,6 +74,7 @@ interface AgentRow {
   compression_threshold: number;
   max_iterations: number;
   auto_claim: number;
+  workspace_backend: string | null;
 }
 
 const AGENT_SELECT = `
@@ -83,7 +90,8 @@ SELECT m.id,
        c.context_window,
        c.compression_threshold,
        c.max_iterations,
-       c.auto_claim
+       c.auto_claim,
+       c.workspace_backend
 FROM member m
 JOIN agent_config c ON c.member_id = m.id
 WHERE m.kind = 'agent'`;
@@ -180,7 +188,8 @@ export function updateAgent(
     db.prepare(
       `UPDATE agent_config
           SET role = ?, model = ?, system_prompt = ?, enabled = ?, context_window = ?,
-              compression_threshold = ?, max_iterations = ?, auto_claim = ?
+              compression_threshold = ?, max_iterations = ?, auto_claim = ?,
+              workspace_backend = ?
         WHERE member_id = ?`,
     ).run(
       patch.role ?? current.role,
@@ -191,6 +200,9 @@ export function updateAgent(
       patch.compressionThreshold ?? current.compression_threshold,
       patch.maxIterations ?? current.max_iterations,
       patch.autoClaim ?? current.auto_claim,
+      patch.workspaceBackend !== undefined
+        ? patch.workspaceBackend
+        : current.workspace_backend,
       id,
     );
     if (patch.displayName !== undefined) {
@@ -264,6 +276,7 @@ interface PatchInput {
   compressionThreshold?: number;
   maxIterations?: number;
   autoClaim?: number;
+  workspaceBackend?: WorkspaceBackend | null;
 }
 
 const FIELD_KEYS = {
@@ -276,6 +289,7 @@ const FIELD_KEYS = {
   compression_threshold: 'compressionThreshold',
   max_iterations: 'maxIterations',
   auto_claim: 'autoClaim',
+  workspace_backend: 'workspaceBackend',
 } as const;
 
 type FieldKey = keyof typeof FIELD_KEYS;
@@ -338,6 +352,9 @@ function parsePatchInput(body: unknown): PatchInput {
   const autoClaim = optionalBinary(record, 'auto_claim');
   if (autoClaim !== undefined) {
     patch.autoClaim = autoClaim;
+  }
+  if (record['workspace_backend'] !== undefined) {
+    patch.workspaceBackend = optionalWorkspaceBackend(record['workspace_backend']);
   }
   return patch;
 }
@@ -430,6 +447,23 @@ function optionalInteger(
   return value;
 }
 
+/**
+ * `null` clears the override (follow the channel); a backend string sets it.
+ * An omitted field is `undefined` and leaves the stored value alone.
+ */
+function optionalWorkspaceBackend(value: unknown): WorkspaceBackend | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'string' || !(WORKSPACE_BACKENDS as readonly string[]).includes(value)) {
+    throw ApiFailure.validation(
+      `workspace_backend must be one of: ${WORKSPACE_BACKENDS.join(', ')} or null`,
+      { field: 'workspace_backend', value },
+    );
+  }
+  return value as WorkspaceBackend;
+}
+
 function optionalThreshold(record: Record<string, unknown>): number | undefined {
   const value = record['compression_threshold'];
   if (value === undefined) {
@@ -490,6 +524,11 @@ function toAgentView(
     compression_threshold: row.compression_threshold,
     max_iterations: row.max_iterations,
     auto_claim: row.auto_claim,
+    workspace_backend:
+      typeof row.workspace_backend === 'string' &&
+      (WORKSPACE_BACKENDS as readonly string[]).includes(row.workspace_backend)
+        ? (row.workspace_backend as WorkspaceBackend)
+        : null,
   };
 }
 

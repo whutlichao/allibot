@@ -95,6 +95,11 @@ export interface AgentView extends StatusPointView {
   compression_threshold: number;
   max_iterations: number;
   auto_claim: number;
+  /**
+   * The raw Agent-level workspace backend override (D5.3). `null` means follow
+   * the channel's backend; it is never resolved into the channel value here.
+   */
+  workspace_backend: WorkspaceBackend | null;
 }
 
 /**
@@ -136,6 +141,44 @@ export const CHANNEL_MODES = ['autonomous', 'team'] as const;
 export type ChannelMode = (typeof CHANNEL_MODES)[number];
 
 /**
+ * The two workspace backends (D5.3). `local` opens the restricted file tools;
+ * `docker` is the per-target container backend. The channel carries the
+ * default and an Agent may override it (NULL = follow the channel).
+ */
+export const WORKSPACE_BACKENDS = ['local', 'docker'] as const;
+export type WorkspaceBackend = (typeof WORKSPACE_BACKENDS)[number];
+
+/**
+ * Why a target context's workspace is unavailable. The reason is a stable code
+ * the human face can render; the readable copy is the catalog's job.
+ */
+export const WORKSPACE_STATUS_REASONS = ['workspace-root-missing', 'docker-unavailable'] as const;
+export type WorkspaceStatusReason = (typeof WORKSPACE_STATUS_REASONS)[number];
+
+/**
+ * The channel's workspace configuration (D5.1 / D5.3): the one shared project
+ * root, the default backend and the explicit local-shell switch (always 0
+ * until #46). The root is the canonical realpath the write path stored.
+ */
+export interface ChannelWorkspaceView {
+  root: string | null;
+  backend: WorkspaceBackend;
+  allow_local_shell: 0 | 1;
+}
+
+/**
+ * The workspace availability of one target context (D5.7). It is a target
+ * fact, not a global status point: the same Agent can be available in one
+ * channel and unavailable in another. `reason` is `null` exactly when the
+ * workspace is available.
+ */
+export interface WorkspaceStatusView {
+  backend: WorkspaceBackend;
+  available: boolean;
+  reason: WorkspaceStatusReason | null;
+}
+
+/**
  * The team reading of a channel: the configured leader and whether that
  * configuration is currently usable. `reason` is the same readable reason the
  * round side would use; `status='invalid'` never falls back to autonomous.
@@ -154,6 +197,9 @@ export interface ChannelTeamView {
 export interface ChannelConfigPatch {
   mode?: ChannelMode;
   team_leader_member_id?: string | null;
+  /** `null` clears the project root; a string is validated and canonicalized. */
+  workspace_root?: string | null;
+  workspace_backend?: WorkspaceBackend;
 }
 
 /**
@@ -167,6 +213,8 @@ export interface ChannelView {
   mode: ChannelMode;
   /** The team reading; present on autonomous channels too (with no leader). */
   team: ChannelTeamView;
+  /** The one shared project root and the channel's workspace defaults. */
+  workspace: ChannelWorkspaceView;
   response_budget_limit: number;
   archived_at: string | null;
   deleted_at: string | null;
@@ -180,6 +228,12 @@ export interface TargetMemberView {
   kind: 'owner' | 'agent';
   display_name: string;
   avatar_slot: number;
+  /**
+   * The target context's workspace availability. It is a target-level fact
+   * repeated on each member reading (D5.7); an Agent's own backend override
+   * still decides that row's `backend`.
+   */
+  workspace_status: WorkspaceStatusView;
 }
 
 /**

@@ -264,11 +264,11 @@ const ROUTES: readonly Route[] = [
   {
     method: 'PATCH',
     pattern: new RegExp(`^/api/channels/${CHANNEL_ID}$`),
-    handle: async (request, response, { db, env }, ...params) => {
+    handle: async (request, response, { db, dataDir, env }, ...params) => {
       sendJson(
         response,
         200,
-        updateChannel(db, decodeId(params[0]), await readJsonBody(request), env),
+        updateChannel(db, decodeId(params[0]), await readJsonBody(request), dataDir, env),
       );
     },
   },

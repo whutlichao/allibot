@@ -4,6 +4,10 @@ import { ApiFailure } from './api-error.js';
 import { assertChannelReadable, assertChannelWritable, type ChannelRow } from './channels.js';
 import { liveMemberClause } from './members.js';
 import { readTargetKind } from './sql.js';
+import {
+  readTargetWorkspaceBinding,
+  readWorkspaceStatus,
+} from './workspace-root.js';
 
 interface MemberRow {
   id: string;
@@ -80,11 +84,16 @@ function readTargetMembers(db: Database.Database, targetId: string): TargetMembe
   const rows = db
     .prepare(`${MEMBER_SELECT} ORDER BY tm.rowid`)
     .all(targetId) as MemberRow[];
+  const binding = readTargetWorkspaceBinding(db, targetId);
+  if (binding === null) {
+    throw ApiFailure.notFound(`target not found: ${targetId}`);
+  }
   return rows.map((row) => ({
     id: row.id,
     kind: row.kind,
     display_name: row.display_name,
     avatar_slot: row.avatar_slot,
+    workspace_status: readWorkspaceStatus(binding, row, db),
   }));
 }
 

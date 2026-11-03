@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
   CHANNEL_MODES,
+  WORKSPACE_BACKENDS,
   type ChannelMode,
   type ChannelView,
+  type WorkspaceBackend,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
@@ -13,6 +15,7 @@ import {
   assertAssignableTeamLeader,
   readTeamView,
 } from './team.js';
+import { validateWorkspaceRoot } from './workspace-root.js';
 
 /** The allowed response budget upper bounds; the default is 3. */
 export const RESPONSE_BUDGET_LIMITS = [3, 5, 10] as const;
@@ -24,6 +27,9 @@ export interface ChannelRow {
   description: string;
   mode: string;
   team_leader_member_id: string | null;
+  workspace_root: string | null;
+  workspace_backend: string;
+  allow_local_shell: number;
   response_budget_limit: number;
   archived_at: string | null;
   deleted_at: string | null;
@@ -39,10 +45,15 @@ interface ChannelWriteInput {
   /** `team_leader_member_id` was present in the body (possibly as null). */
   leaderProvided?: boolean;
   teamLeaderMemberId?: string | null;
+  /** `workspace_root` was present in the body; explicit null clears it. */
+  workspaceRootProvided?: boolean;
+  workspaceRoot?: string | null;
+  workspaceBackend?: WorkspaceBackend;
 }
 
 const CHANNEL_SELECT = `
-SELECT id, name, description, mode, team_leader_member_id, response_budget_limit,
+SELECT id, name, description, mode, team_leader_member_id, workspace_root,
+       workspace_backend, allow_local_shell, response_budget_limit,
        archived_at, deleted_at, created_at, updated_at
 FROM channel`;
 
@@ -51,6 +62,8 @@ const FIELD_KEYS = {
   description: 'description',
   mode: 'mode',
   team_leader_member_id: 'teamLeaderMemberId',
+  workspace_root: 'workspaceRoot',
+  workspace_backend: 'workspaceBackend',
   response_budget_limit: 'responseBudgetLimit',
 } as const;
 
@@ -90,9 +103,10 @@ export function createChannel(
     const now = new Date().toISOString();
     db.prepare(
       `INSERT INTO channel
-         (id, name, description, mode, team_leader_member_id, response_budget_limit,
+         (id, name, description, mode, team_leader_member_id, workspace_root,
+          workspace_backend, allow_local_shell, response_budget_limit,
           archived_at, deleted_at, created_at, updated_at)
-       VALUES (?, ?, ?, 'autonomous', NULL, ?, NULL, NULL, ?, ?)`,
+       VALUES (?, ?, ?, 'autonomous', NULL, NULL, 'local', 0, ?, NULL, NULL, ?, ?)`,
     ).run(
       id,
       input.name,
@@ -125,6 +139,7 @@ export function updateChannel(
   db: Database.Database,
   id: string,
   body: unknown,
+  dataDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): ChannelView {
   const patch = parsePatchInput(body);
@@ -170,6 +185,12 @@ export function updateChannel(
       const nextName = patch.name ?? current.name;
       const nextDescription = patch.description ?? current.description;
       const nextBudget = patch.responseBudgetLimit ?? current.response_budget_limit;
+      const nextBackend = patch.workspaceBackend ?? (current.workspace_backend as WorkspaceBackend);
+      const nextRoot = patch.workspaceRootProvided === true
+        ? (patch.workspaceRoot === null
+            ? null
+            : validateWorkspaceRoot(patch.workspaceRoot, dataDir, env))
+        : current.workspace_root;
       const modeChanged = mode !== current.mode;
       const leaderChanged = leader !== current.team_leader_member_id;
       const changed =
@@ -177,7 +198,9 @@ export function updateChannel(
         leaderChanged ||
         nextName !== current.name ||
         nextDescription !== current.description ||
-        nextBudget !== current.response_budget_limit;
+        nextBudget !== current.response_budget_limit ||
+        nextRoot !== current.workspace_root ||
+        nextBackend !== current.workspace_backend;
       if (!changed) {
         return { found: true, changed: false, teamChanged: false };
       }
@@ -185,13 +208,16 @@ export function updateChannel(
       db.prepare(
         `UPDATE channel
             SET name = ?, description = ?, mode = ?, team_leader_member_id = ?,
-                response_budget_limit = ?, updated_at = ?
+                workspace_root = ?, workspace_backend = ?, response_budget_limit = ?,
+                updated_at = ?
           WHERE id = ?`,
       ).run(
         nextName,
         nextDescription,
         mode,
         leader,
+        nextRoot,
+        nextBackend,
         nextBudget,
         new Date().toISOString(),
         id,
@@ -370,6 +396,13 @@ function parsePatchInput(body: unknown): ChannelWriteInput {
   if (record['name'] !== undefined) {
     patch.name = requireName(record['name']);
   }
+  if (record['workspace_root'] !== undefined) {
+    patch.workspaceRootProvided = true;
+    patch.workspaceRoot = optionalWorkspaceRoot(record['workspace_root']);
+  }
+  if (record['workspace_backend'] !== undefined) {
+    patch.workspaceBackend = requireWorkspaceBackend(record['workspace_backend']);
+  }
   const description = optionalString(record, 'description');
   if (description !== undefined) {
     patch.description = description;
@@ -447,6 +480,32 @@ function optionalMemberId(value: unknown): string | null {
   return value.trim();
 }
 
+function optionalWorkspaceRoot(value: unknown): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'string' || value.length === 0) {
+    throw ApiFailure.validation('workspace_root must be an absolute directory path or null', {
+      field: 'workspace_root',
+      value,
+    });
+  }
+  return value;
+}
+
+function requireWorkspaceBackend(value: unknown): WorkspaceBackend {
+  if (
+    typeof value !== 'string' ||
+    !(WORKSPACE_BACKENDS as readonly string[]).includes(value)
+  ) {
+    throw ApiFailure.validation(
+      `workspace_backend must be one of: ${WORKSPACE_BACKENDS.join(', ')}`,
+      { field: 'workspace_backend', value },
+    );
+  }
+  return value as WorkspaceBackend;
+}
+
 function optionalBudget(record: Record<string, unknown>): number | undefined {
   const value = record['response_budget_limit'];
   if (value === undefined) {
@@ -477,6 +536,11 @@ function toChannelView(
       { mode: row.mode, team_leader_member_id: row.team_leader_member_id },
       env,
     ),
+    workspace: {
+      root: row.workspace_root,
+      backend: row.workspace_backend as WorkspaceBackend,
+      allow_local_shell: row.allow_local_shell === 1 ? 1 : 0,
+    },
     response_budget_limit: row.response_budget_limit,
     archived_at: row.archived_at,
     deleted_at: row.deleted_at,
