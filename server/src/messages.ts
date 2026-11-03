@@ -13,6 +13,7 @@ import { assertDmWritable } from './dms.js';
 import { insertMessageRow, readAuthorIdentity } from './message-store.js';
 import { readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
+import { recordInvalidLeaderMessageTrigger } from './team-runs.js';
 import {
   collectWakes,
   dispatchWakes,
@@ -177,9 +178,16 @@ export async function appendMessageAndDispatch(
 ): Promise<{ id: string; seq: number; created: boolean }> {
   const appended = appendMessage(db, input);
   if (appended.created) {
+    const authorId = readAuthorIdentity(db, input.authorMemberId ?? null).id;
+    // 运行记录 (D3.8): a trigger that should have delivered to an unusable
+    // leader leaves one invalid-leader row. The message itself still lands; the
+    // wake surface then delivers zero leader wakes (penetration is unchanged).
+    if (input.kind === 'human' || input.kind === 'agent') {
+      recordInvalidLeaderMessageTrigger(db, input.targetId, authorId);
+    }
     const wakes = collectWakes(db, {
       targetId: input.targetId,
-      authorMemberId: readAuthorIdentity(db, input.authorMemberId ?? null).id,
+      authorMemberId: authorId,
       kind: input.kind,
       seq: appended.seq,
     });

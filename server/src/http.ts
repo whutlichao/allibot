@@ -58,7 +58,7 @@ import {
   listChannelMembers,
   listTargetMembers,
 } from './target-members.js';
-import { listTeamRuns, parseTeamRunQuery } from './team-runs.js';
+import { listTeamRuns, parseTeamRunQuery, prepareTeamChangeWake } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
 import { readWorkspace } from './workspace.js';
 
@@ -379,12 +379,19 @@ const ROUTES: readonly Route[] = [
     method: 'POST',
     pattern: /^\/api\/tasks$/,
     handle: async (request, response, { db, orchestration, env }) => {
-      const task = createTask(db, await readJsonBody(request));
-      const claim = claimTask(db, task.id, env);
+      const created = createTask(db, await readJsonBody(request));
+      const claim = claimTask(db, created.task.id, env);
       if (claim !== null) {
         await dispatchWakes(db, orchestration.provider, [claim.wake], orchestration.inFlight);
+      } else {
+        // team 模式建任务 (D3.5): no claim, but the leader gets one mandatory
+        // team-change round whose from_seq is the 「任务已创建」 system record.
+        const wake = prepareTeamChangeWake(db, created.task.target_id, created.createdEventSeq, env);
+        if (wake !== null) {
+          await dispatchWakes(db, orchestration.provider, [wake], orchestration.inFlight);
+        }
       }
-      sendJson(response, 201, getTask(db, task.id));
+      sendJson(response, 201, getTask(db, created.task.id));
     },
   },
   {
@@ -397,12 +404,22 @@ const ROUTES: readonly Route[] = [
   {
     method: 'PATCH',
     pattern: new RegExp(`^/api/tasks/${TASK_ID}$`),
-    handle: async (request, response, { db }, ...params) => {
-      sendJson(
-        response,
-        200,
-        updateTask(db, decodeId(params[0]), await readJsonBody(request)),
-      );
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const updated = updateTask(db, decodeId(params[0]), await readJsonBody(request));
+      if (updated.assigneeEventSeq !== null) {
+        // owner 改派 on a team channel wakes the leader with the change record
+        // as its from_seq; a non-team channel prepares nothing.
+        const wake = prepareTeamChangeWake(
+          db,
+          updated.task.target_id,
+          updated.assigneeEventSeq,
+          env,
+        );
+        if (wake !== null) {
+          await dispatchWakes(db, orchestration.provider, [wake], orchestration.inFlight);
+        }
+      }
+      sendJson(response, 200, updated.task);
     },
   },
   {

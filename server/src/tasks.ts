@@ -108,14 +108,25 @@ export function getTask(db: Database.Database, id: string): TaskView {
   return toTaskView(row, countUnread(db, readOwnerId(db), row.target_id));
 }
 
+/** The created task plus the seq of the 「任务已创建」 record (the team-change from_seq). */
+export interface CreatedTask {
+  task: TaskView;
+  createdEventSeq: number;
+}
+
 /**
  * The owner creates a task. One transaction writes the task row, its task-type
  * target and the one `task_pointer` system message in the channel; any failure
  * leaves nothing behind. The task thread also gets its opening system event.
+ *
+ * A team channel's task target also gets the configured leader as a member in
+ * the same transaction (D3.5): without that row the task-change wake would have
+ * nobody to deliver to. The returned creation seq is the system record's seq,
+ * which is the `from_seq` of the leader's mandatory first round.
  */
-export function createTask(db: Database.Database, body: unknown): TaskView {
+export function createTask(db: Database.Database, body: unknown): CreatedTask {
   const input = parseCreateInput(body);
-  const create = db.transaction((): string => {
+  const create = db.transaction((): { id: string; createdEventSeq: number } => {
     const channel = assertChannelReadable(db, input.channelId);
     assertChannelWritable(channel);
 
@@ -133,11 +144,19 @@ export function createTask(db: Database.Database, body: unknown): TaskView {
     db.prepare(
       `INSERT INTO target_member (target_id, member_id) VALUES (?, ${OWNER_ID_SUBQUERY})`,
     ).run(targetId);
+    // The team leader joins the task thread at creation, so the task-change
+    // wake has a member surface to deliver to (D3.5).
+    db.prepare(
+      `INSERT OR IGNORE INTO target_member (target_id, member_id)
+       SELECT ?, team_leader_member_id
+         FROM channel
+        WHERE id = ? AND mode = 'team' AND team_leader_member_id IS NOT NULL`,
+    ).run(targetId, input.channelId);
 
     // The task thread opens with the creation event; the channel gets the
     // pointer. Both are system messages, so neither wakes anyone nor counts
-    // as unread.
-    appendMessage(db, {
+    // as unread. The creation record's seq is the team-change from_seq.
+    const createdEvent = appendMessage(db, {
       targetId,
       kind: 'system',
       body: tFromDb(db, 'task.event.created', { title: input.title }),
@@ -148,12 +167,12 @@ export function createTask(db: Database.Database, body: unknown): TaskView {
       body: tFromDb(db, 'task.pointer.body', { title: input.title }),
       taskPointer: id,
     });
-    return id;
+    return { id, createdEventSeq: createdEvent.seq };
   });
-  const id = create();
-  const task = getTask(db, id);
+  const created = create();
+  const task = getTask(db, created.id);
   publishTaskChanged({ taskId: task.id, targetId: task.target_id, status: task.status });
-  return task;
+  return { task, createdEventSeq: created.createdEventSeq };
 }
 
 /** One system record a claim landed, shaped like the subscription's publish input. */
@@ -323,15 +342,25 @@ function selectClaimer(
  * `updateTaskStatusAsMember`, so the review rule applies to whoever the
  * orchestrator acts for.
  */
+export interface TaskUpdate {
+  task: TaskView;
+  /**
+   * The seq of the system record an assignee change appended, or null when the
+   * assignment did not move. It is the `from_seq` of the leader's team-change
+   * round on a team channel.
+   */
+  assigneeEventSeq: number | null;
+}
+
 export function updateTask(
   db: Database.Database,
   id: string,
   body: unknown,
   actor: TaskActor = OWNER_ACTOR,
-): TaskView {
+): TaskUpdate {
   const patch = parsePatchInput(body);
 
-  const update = db.transaction((): boolean => {
+  const update = db.transaction((): { changed: boolean; assigneeEventSeq: number | null } => {
     const current = readTaskRow(db, id);
     const nextTitle = patch.title ?? current.title;
     const nextStatus: TaskStatus = patch.status ?? parseStoredStatus(current.status);
@@ -379,18 +408,22 @@ export function updateTask(
         }),
       });
     }
+    let assigneeEventSeq: number | null = null;
     if (assigneeChanged) {
-      appendAssigneeEvent(db, current, nextAssignee);
+      assigneeEventSeq = appendAssigneeEvent(db, current, nextAssignee);
     }
-    return titleChanged || statusChanged || assigneeChanged;
+    return {
+      changed: titleChanged || statusChanged || assigneeChanged,
+      assigneeEventSeq,
+    };
   });
-  const changed = update();
+  const updated = update();
   const task = getTask(db, id);
-  if (changed) {
+  if (updated.changed) {
     // A no-op patch wrote nothing, so it announces nothing.
     publishTaskChanged({ taskId: task.id, targetId: task.target_id, status: task.status });
   }
-  return task;
+  return { task, assigneeEventSeq: updated.assigneeEventSeq };
 }
 
 /**
@@ -415,7 +448,7 @@ export function updateTaskStatusAsMember(
   if (member === undefined) {
     throw ApiFailure.notFound(`member not found: ${memberId}`);
   }
-  return updateTask(db, id, { status }, { kind: 'member', memberId });
+  return updateTask(db, id, { status }, { kind: 'member', memberId }).task;
 }
 
 function assertLegalTransition(current: TaskRow, next: TaskStatus, actor: TaskActor): void {
@@ -469,7 +502,7 @@ function appendAssigneeEvent(
   db: Database.Database,
   current: TaskRow,
   nextAssignee: string | null,
-): void {
+): number {
   // The assignee joins the task thread's wake surface: assignment is the
   // owner's version of the same membership write claim performs.
   addAssigneeToThread(db, current.target_id, nextAssignee);
@@ -500,6 +533,7 @@ function appendAssigneeEvent(
   // seq is the epoch identity. Unassigning is the same human act and lands the
   // same kind of record, so it opens an epoch the same way.
   openEpoch(db, current.target_id, seq);
+  return seq;
 }
 
 function addAssigneeToThread(

@@ -197,6 +197,17 @@ export function collectWakes(
     }
   }
 
+  // team 任务线程收窄（D3.2 / D3.5）: a task target of a team channel wakes only
+  // the leader, and a task target has no penetration exception at all. The
+  // invalid-leader trigger is recorded by the message write path, not here: the
+  // wake surface stays a pure reading.
+  if (targetKind === 'task') {
+    const team = readTeamTargetState(db, message.targetId, env);
+    if (team !== null) {
+      return collectTeamTaskWakes(message, mentioned, team);
+    }
+  }
+
   const wakes: Wake[] = [];
   const woken = new Set<string>();
 
@@ -283,6 +294,32 @@ function collectTeamChannelWakes(
     delivered.add(member.id);
   }
   return wakes;
+}
+
+/**
+ * The team task target's wake set: the leader is the whole surface, a
+ * leader-authored message wakes nobody, and a mention of anyone else never
+ * penetrates (task targets have no penetration exception, D3.6).
+ */
+function collectTeamTaskWakes(
+  message: { targetId: string; authorMemberId: string; kind: string; seq: number },
+  mentioned: ReadonlySet<string>,
+  team: { leaderMemberId: string; available: boolean },
+): Wake[] {
+  if (team.leaderMemberId.length === 0 || team.leaderMemberId === message.authorMemberId) {
+    return [];
+  }
+  if (!team.available) {
+    return [];
+  }
+  return [
+    {
+      memberId: team.leaderMemberId,
+      targetId: message.targetId,
+      fromSeq: message.seq,
+      reason: mentioned.has(team.leaderMemberId) ? 'mention' : 'channel-message',
+    },
+  ];
 }
 
 /** Whether the member holds a target_member row on this target (any kind). */
@@ -1044,6 +1081,15 @@ function commitTaskAction(
   }
   if (roundInput.targetKind !== 'task') {
     return null;
+  }
+  // 自动续跑在 team 任务线程不提供（D3.5）: the leader-only wake rule is not
+  // reopened by a structured action, and the refusal is readable in the round
+  // reason. It starts no round, writes no continue record and charges no jump.
+  if (readTeamTargetState(db, wake.targetId, process.env) !== null) {
+    return {
+      clause: tFromDb(db, 'round.continue.teamDisabled'),
+      wake: null,
+    };
   }
   const task = db
     .prepare('SELECT title, assignee_member_id FROM task WHERE target_id = ?')

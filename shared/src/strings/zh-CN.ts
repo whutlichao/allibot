@@ -136,6 +136,10 @@ export const ZH_CN = {
     text: '已按结构化动作 continue_task 申请续跑（本世代第 {round} 轮）',
     params: ['round'],
   },
+  'round.continue.teamDisabled': {
+    text: 'team 任务线程不提供自动续跑（结构化动作 continue_task 被拒绝），本轮不产生续跑轮次',
+    params: [],
+  },
   'round.continue.paused': {
     text: '结构化动作 continue_task 到达本世代上限（{rounds} 轮），不再续跑',
     params: ['rounds'],
