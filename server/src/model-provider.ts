@@ -1,14 +1,7 @@
-import type { AgentProvider } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import type { RoundInput, RoundProvider, RoundResult } from './agent-seam.js';
 import { tFromDb } from './copy.js';
-import {
-  PROVIDER_CREDENTIAL_ENV,
-  parseModelIdentifier,
-  providerBaseUrl,
-  readCredential,
-  readProviderConsent,
-} from './providers.js';
+import { resolveAgentAvailability, type ProviderAvailability } from './providers.js';
 
 /**
  * The real provider adapters (D4.1): a minimal chat completion for Anthropic
@@ -23,52 +16,6 @@ import {
  * round result. The credential value travels only in the request header; it
  * never enters a reason, a message body or a log line.
  */
-
-/** The adapter's resolved inputs for one call. */
-export interface ProviderAvailability {
-  provider: AgentProvider;
-  model: string;
-  /** The credential the request carries; never logged, never rendered. */
-  credential: string;
-  baseUrl: string;
-}
-
-export type AvailabilityResult =
-  | { ok: true; available: ProviderAvailability }
-  | { ok: false; reason: string };
-
-/**
- * Resolve whether this round may call the provider at all. The refusals are
- * deliberately different words — no model, unconfirmed remote provider, missing
- * credential — each with its own readable copy, and none opens a socket.
- */
-export function resolveAvailability(
-  db: Database.Database,
-  input: RoundInput,
-  env: NodeJS.ProcessEnv,
-): AvailabilityResult {
-  const parsed = parseModelIdentifier(input.member.model);
-  if (parsed === null) {
-    return { ok: false, reason: tFromDb(db, 'round.model.missing') };
-  }
-  const { provider, model } = parsed;
-  if (readProviderConsent(db, provider) === null) {
-    return { ok: false, reason: tFromDb(db, 'round.consent.missing', { provider }) };
-  }
-  const credential = readCredential(provider, env);
-  if (credential === null) {
-    return {
-      ok: false,
-      reason: tFromDb(db, 'round.credential.missing', {
-        env: PROVIDER_CREDENTIAL_ENV[provider],
-      }),
-    };
-  }
-  return {
-    ok: true,
-    available: { provider, model, credential, baseUrl: providerBaseUrl(provider, env) },
-  };
-}
 
 /**
  * Mask a credential inside arbitrary text: only the head and tail survive, so
@@ -107,7 +54,9 @@ export function createModelProvider(
     deferred: false,
     name: 'model',
     async runRound(input: RoundInput): Promise<RoundResult> {
-      const availability = resolveAvailability(db, input, env);
+      // The same availability rule the claim gate reads: no model, no consent
+      // or no credential closes the round without a socket being opened.
+      const availability = resolveAgentAvailability(db, input.member.model, env);
       if (!availability.ok) {
         // Refusals are stated, not judged: both are readable and neither calls.
         return { verdict: 'failed', replies: [], detail: availability.reason };
