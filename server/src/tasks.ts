@@ -5,12 +5,13 @@ import { ApiFailure } from './api-error.js';
 import { openEpoch } from './budget.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { tFromDb } from './copy.js';
-import { publishMessageCreated } from './events.js';
+import { publishMessageCreated, publishTaskChanged } from './events.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { appendMessage } from './messages.js';
 import { checkProviderAvailability } from './providers.js';
 import type { Wake } from './rounds.js';
+import { OWNER_ID_SUBQUERY } from './sql.js';
 import { countUnread } from './unread.js';
 
 /**
@@ -124,8 +125,7 @@ export function createTask(db: Database.Database, body: unknown): TaskView {
        VALUES (?, ?, ?, ?, 'todo', NULL, NULL, ?, ?)`,
     ).run(id, input.channelId, targetId, input.title, now, now);
     db.prepare(
-      `INSERT INTO target_member (target_id, member_id)
-       SELECT ?, id FROM member WHERE kind = 'owner'`,
+      `INSERT INTO target_member (target_id, member_id) VALUES (?, ${OWNER_ID_SUBQUERY})`,
     ).run(targetId);
 
     // The task thread opens with the creation event; the channel gets the
@@ -144,7 +144,10 @@ export function createTask(db: Database.Database, body: unknown): TaskView {
     });
     return id;
   });
-  return getTask(db, create());
+  const id = create();
+  const task = getTask(db, id);
+  publishTaskChanged({ taskId: task.id, targetId: task.target_id, status: task.status });
+  return task;
 }
 
 /** One system record a claim landed, shaped like the subscription's publish input. */
@@ -263,6 +266,11 @@ export function claimTask(
         seq: message.seq,
       });
     }
+    publishTaskChanged({
+      taskId,
+      targetId: result.wake.targetId,
+      status: 'in_progress',
+    });
   }
   return result;
 }
@@ -286,7 +294,7 @@ function selectClaimer(
          JOIN member m ON m.id = tm.member_id
          JOIN agent_config c ON c.member_id = m.id
         WHERE tm.target_id = ? AND m.kind = 'agent' AND c.auto_claim = 1
-          AND ${liveMemberClause('m')}
+          AND c.enabled = 1 AND ${liveMemberClause('m')}
         ORDER BY tm.rowid`,
     )
     .all(channelId) as ClaimCandidate[];
@@ -317,7 +325,7 @@ export function updateTask(
 ): TaskView {
   const patch = parsePatchInput(body);
 
-  const update = db.transaction((): void => {
+  const update = db.transaction((): boolean => {
     const current = readTaskRow(db, id);
     const nextTitle = patch.title ?? current.title;
     const nextStatus: TaskStatus = patch.status ?? parseStoredStatus(current.status);
@@ -368,9 +376,15 @@ export function updateTask(
     if (assigneeChanged) {
       appendAssigneeEvent(db, current, nextAssignee);
     }
+    return titleChanged || statusChanged || assigneeChanged;
   });
-  update();
-  return getTask(db, id);
+  const changed = update();
+  const task = getTask(db, id);
+  if (changed) {
+    // A no-op patch wrote nothing, so it announces nothing.
+    publishTaskChanged({ taskId: task.id, targetId: task.target_id, status: task.status });
+  }
+  return task;
 }
 
 /**

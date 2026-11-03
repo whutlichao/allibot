@@ -25,7 +25,6 @@ import {
 
 const AGENT_MESSAGE_FIXTURE = path.join(REPO_ROOT, 'server', 'test', 'fixtures', 'agent-message.mjs');
 const WAKE_ROUND_FIXTURE = path.join(REPO_ROOT, 'server', 'test', 'fixtures', 'wake-round.mjs');
-const DM_TARGET_FIXTURE = path.join(REPO_ROOT, 'server', 'test', 'fixtures', 'dm-target.mjs');
 const PROMPT_FIXTURE = path.join(REPO_ROOT, 'server', 'test', 'fixtures', 'round-prompts.json');
 
 /** The fixed fixture the channel silence rubric is compared against, verbatim. */
@@ -119,6 +118,18 @@ async function joinChannel(fixture: Fixture, channelId: string, memberId: string
     member_id: memberId,
   });
   assert.equal(joined.status, 200, await joined.clone().text());
+}
+
+/** Create the DM through its only write path (`POST /api/dms`). */
+async function createDm(fixture: Fixture, agentId: string): Promise<{ id: string }> {
+  const response = await fetch(`${fixture.base}/api/dms`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ agent_id: agentId }),
+  });
+  assert.equal(response.status, 201, await response.clone().text());
+  const body = await readJson(response);
+  return { id: body['id'] as string };
 }
 
 async function postMessage(
@@ -281,7 +292,7 @@ test('a non-definite round that declares silence stores the structured silent st
   const dmFixture = await startFixture('allibot-judge-silent-dm-', 'ignore');
   try {
     const peer = await createAgent(dmFixture, '私信对象');
-    const dm = runFixture(DM_TARGET_FIXTURE, { dataDir: dmFixture.dataDir, agentId: peer });
+    const dm = await createDm(dmFixture, peer);
     const dmId = dm['id'] as string;
     runFixture(AGENT_MESSAGE_FIXTURE, {
       dataDir: dmFixture.dataDir,
@@ -363,7 +374,7 @@ test('a human message is a definite signal on both faces, and the prompt is one-
   ]);
   try {
     const peer = await createAgent(dmFixture, '私信对象');
-    const dm = runFixture(DM_TARGET_FIXTURE, { dataDir: dmFixture.dataDir, agentId: peer });
+    const dm = await createDm(dmFixture, peer);
     const dmId = dm['id'] as string;
 
     await postMessage(dmFixture, dmId, { body: '私信里的一句' });
@@ -398,16 +409,20 @@ test('a DM round not woken by a human keeps the one-to-one stance and its own ma
   const fixture = await startFixture('allibot-judge-dm-prompt-', 'reply', ['--scripted-echo-prompt']);
   try {
     const peer = await createAgent(fixture, '私信对象');
-    const dm = runFixture(DM_TARGET_FIXTURE, {
-      dataDir: fixture.dataDir,
-      agentId: peer,
-      systemBody: '一条 DM 里的记录',
-    });
+    const dm = await createDm(fixture, peer);
     const dmId = dm['id'] as string;
 
-    // An Agent-authored message wakes nobody in its own target; the wake is
-    // delivered explicitly, pointing at the system record (seq 1). That round
-    // has no human message and no mention, so its prompt is the plain DM one.
+    // Seed an Agent-authored message (the fixture is the R2 exception: the
+    // human face cannot write one). The explicit wake then points at that
+    // agent message, so no human message fired and no mention exists; its
+    // prompt is the plain DM one.
+    runFixture(AGENT_MESSAGE_FIXTURE, {
+      dataDir: fixture.dataDir,
+      targetId: dmId,
+      authorMemberId: peer,
+      body: '私信里由 Agent 写的一句',
+      behavior: 'ignore',
+    });
     runFixture(WAKE_ROUND_FIXTURE, {
       dataDir: fixture.dataDir,
       targetId: dmId,
@@ -419,12 +434,14 @@ test('a DM round not woken by a human keeps the one-to-one stance and its own ma
     });
 
     const messages = await listMessages(fixture, dmId);
-    const reply = messages.find((message) => message['kind'] === 'agent');
+    const reply = messages.filter((message) => message['kind'] === 'agent').at(-1);
     assert.ok(reply !== undefined);
     const prompt = capturedPrompt(reply['body'] as string);
     assert.ok(prompt.includes(PROMPTS.dmOneToOne), prompt);
     assert.ok(!prompt.includes(PROMPTS.channelRubric));
-    assert.ok(prompt.endsWith(`\n\n${PROMPTS.dmMandatory}`), prompt);
+    // The memory section may follow the discipline (D5.2 appends it), so the
+    // mandatory sentence is asserted as present rather than last.
+    assert.ok(prompt.includes(PROMPTS.dmMandatory), prompt);
     assert.ok(
       !prompt.includes(PROMPTS.humanMessageMandatory),
       'no human message fired, so the human-message mandatory copy is not used',
@@ -439,7 +456,7 @@ test('a human-message round that stays silent on the DM face also closes as fail
   const fixture = await startFixture('allibot-judge-human-dm-silent-', 'silent');
   try {
     const peer = await createAgent(fixture, '私信对象');
-    const dm = runFixture(DM_TARGET_FIXTURE, { dataDir: fixture.dataDir, agentId: peer });
+    const dm = await createDm(fixture, peer);
     const dmId = dm['id'] as string;
 
     await postMessage(fixture, dmId, { body: '私信里的一句' });

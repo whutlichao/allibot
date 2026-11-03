@@ -126,6 +126,13 @@ export function WorkspaceShell({
   const selectedKind =
     selectedTargetId === null ? null : targetKind(workspace, selectedTargetId);
   const channelSelected = selectedKind === 'channel';
+  // 已归档私信：对方的 Agent 被软删除后，历史仍可读，但 composer 与发送入口
+  // 一并禁用（票 #22），不把 400 留给用户输入之后。
+  const selectedDm =
+    selectedKind === 'dm' && selectedTargetId !== null
+      ? workspace.dms.find((dm) => dm.id === selectedTargetId)
+      : undefined;
+  const archivedDm = selectedDm !== undefined && selectedDm.peer.deleted_at !== null;
   const selectedMembers =
     channelSelected && selectedTargetId !== null
       ? channelMembers?.[selectedTargetId]
@@ -248,7 +255,13 @@ export function WorkspaceShell({
     createElement(
       'div',
       { className: 'workspace-chat' },
-      createElement(WorkspaceChatArea, { targetId: selectedTargetId }),
+      createElement(WorkspaceChatArea, {
+        targetId: selectedTargetId,
+        tasks: workspace.tasks,
+        locale,
+        archivedDm,
+        onSelectTarget: selectTarget,
+      }),
     ),
   );
 

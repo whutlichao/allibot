@@ -26,6 +26,7 @@ export function readConsumedSeq(
   memberId: string,
   targetId: string,
 ): number {
+  assertAgentCursor(db, memberId);
   return readLastReadSeq(db, memberId, targetId);
 }
 
@@ -46,7 +47,26 @@ export function advanceConsumedSeq(
   targetId: string,
   seq: number,
 ): void {
+  assertAgentCursor(db, memberId);
   advanceReadPosition(db, memberId, targetId, seq);
+}
+
+/**
+ * The consumption cursor and the owner's unread baseline share one table but
+ * are different facts; a round never reads or writes the owner's row on a
+ * member's behalf. The guard is what keeps the two forwards above from being
+ * a bare middle man.
+ */
+function assertAgentCursor(db: Database.Database, memberId: string): void {
+  const row = db.prepare('SELECT kind FROM member WHERE id = ?').get(memberId) as
+    | { kind: string }
+    | undefined;
+  if (row === undefined) {
+    throw new Error(`round member not found: ${memberId}`);
+  }
+  if (row.kind !== 'agent') {
+    throw new Error(`consumption cursor belongs to an Agent, not ${row.kind}: ${memberId}`);
+  }
 }
 
 /**

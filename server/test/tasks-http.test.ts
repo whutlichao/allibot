@@ -29,11 +29,14 @@ const CHANNEL_BODY = {
   response_budget_limit: 3,
 };
 
-async function startTaskFixture(prefix: string): Promise<TaskFixture> {
+async function startTaskFixture(
+  prefix: string,
+  args: readonly string[] = [],
+): Promise<TaskFixture> {
   const dataDir = await makeTempDir(prefix);
   const migration = runCli(['--migrate', '--data-dir', dataDir]);
   assert.equal(migration.exitCode, 0, `migrate should exit 0; output: ${migration.output}`);
-  let running = await startServer(dataDir);
+  let running = await startServer(dataDir, { args });
   return {
     dataDir,
     get running() {
@@ -44,7 +47,7 @@ async function startTaskFixture(prefix: string): Promise<TaskFixture> {
     },
     restart: async () => {
       await running.stop();
-      running = await startServer(dataDir);
+      running = await startServer(dataDir, { args });
     },
     stop: async () => {
       await running.stop();
@@ -500,7 +503,7 @@ test('the assignee cannot approve its own in_review work; the owner and a non-as
 });
 
 test('task thread speech stays in the task target and the channel feed keeps only its pointer', async () => {
-  const fixture = await startTaskFixture('allibot-tasks-thread-');
+  const fixture = await startTaskFixture('allibot-tasks-thread-', ['--scripted-provider', 'reply']);
   try {
     const channelId = await createChannel(fixture);
     const task = await createTask(fixture, channelId, '任务线程');
@@ -523,22 +526,25 @@ test('task thread speech stays in the task target and the channel feed keeps onl
     assert.equal(detail['message_count'], 2);
     assert.equal(detail['unread_count'], 0, 'the owner’s own message is not unread for the owner');
 
-    // A system message written by another member would count; the owner's own
-    // human message does not.
+    // A message written by another member counts; the owner's own human
+    // message does not. Assigning the Agent puts it on the thread's wake
+    // surface, so the next human message makes it reply through the ordinary
+    // round path (the scripted double is injected at startup).
     const agent = await createAgent(fixture, '线程 Agent');
-    const db = new Database(path.join(fixture.dataDir, 'allibot.db'));
-    try {
-      db.prepare(
-        `INSERT INTO message
-           (id, target_id, seq, kind, author_member_id, author_display_name, author_avatar_slot,
-            body, created_at, task_ref, task_pointer, client_message_id)
-         VALUES ('agent-message', ?,
-                 (SELECT coalesce(MAX(seq), 0) + 1 FROM message WHERE target_id = ?),
-                 'agent', ?, '线程 Agent', 1, 'Agent 的回复', ?, NULL, NULL, NULL)`,
-      ).run(targetId, targetId, agent, new Date().toISOString());
-    } finally {
-      db.close();
-    }
+    const assigned = await patchJson(fixture, `/api/tasks/${task['id'] as string}`, {
+      assignee_member_id: agent,
+    });
+    assert.equal(assigned.status, 200, await assigned.clone().text());
+    const requested = await postJson(fixture, `/api/targets/${targetId}/messages`, {
+      body: '请 Agent 回复一句',
+    });
+    assert.equal(requested.status, 201, await requested.clone().text());
+    assert.ok(
+      (await listMessages(fixture, targetId)).some(
+        (message) => message['kind'] === 'agent' && message['author_member_id'] === agent,
+      ),
+      'the assignee replied through the production round path',
+    );
     assert.equal(
       (await getTask(fixture, task['id'] as string))['unread_count'],
       1,
@@ -622,6 +628,47 @@ test('a deleted channel answers 404 for new tasks and the board, while the task 
     assert.deepEqual(tasks, [], 'a deleted channel leaves the task board');
     const filtered = await fetch(`${fixture.base}/api/tasks?channel_id=${channelId}`);
     assert.deepEqual((await readJson(filtered))['tasks'], []);
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('task_ref is writable only inside its own task thread and is read back', async () => {
+  const fixture = await startTaskFixture('allibot-tasks-task-ref-');
+  try {
+    const channelId = await createChannel(fixture);
+    const task = await createTask(fixture, channelId, '被引用的任务');
+    const targetId = task['target_id'] as string;
+
+    const accepted = await postJson(fixture, `/api/targets/${targetId}/messages`, {
+      body: '引用当前任务',
+      task_ref: task['id'],
+    });
+    assert.equal(accepted.status, 201, await accepted.clone().text());
+    const messages = await listMessages(fixture, targetId);
+    const referenced = messages.find((message) => message['body'] === '引用当前任务');
+    assert.equal(referenced?.['task_ref'], task['id']);
+
+    const onChannel = await postJson(fixture, `/api/targets/${channelId}/messages`, {
+      body: '频道里不能引用任务',
+      task_ref: task['id'],
+    });
+    assert.equal(onChannel.status, 400);
+    assert.equal(
+      ((await readJson(onChannel))['error'] as Record<string, unknown>)['code'],
+      'validation_failed',
+    );
+
+    const other = await createTask(fixture, channelId, '另一个任务');
+    const crossReference = await postJson(fixture, `/api/targets/${targetId}/messages`, {
+      body: '跨线程引用',
+      task_ref: other['id'],
+    });
+    assert.equal(crossReference.status, 400, 'the reference must be the task owning this thread');
+    assert.equal(
+      ((await readJson(crossReference))['error'] as Record<string, unknown>)['code'],
+      'validation_failed',
+    );
   } finally {
     await fixture.stop();
   }

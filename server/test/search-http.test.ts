@@ -156,20 +156,15 @@ function runAgentMessageFixture(
 }
 
 /**
- * A DM target. The fixture writes the rows the DM write path owns
- * (`POST /api/dms` would write the same ones); search still has to answer for a
- * DM target, because a DM has no channel row to be filtered by.
+ * A DM target, created through its only write path. Search still has to answer
+ * for a DM target, because a DM has no channel row to be filtered by.
  */
-const DM_TARGET_FIXTURE = path.join(REPO_ROOT, 'server', 'test', 'fixtures', 'dm-target.mjs');
-
-function runDmTargetFixture(fixture: SearchFixture, agentId: string): { id: string } {
-  const result = runNodeScript(DM_TARGET_FIXTURE, [
-    JSON.stringify({ dataDir: fixture.dataDir, agentId }),
-  ]);
-  assert.equal(result.exitCode, 0, `dm-target fixture failed: ${result.output}`);
-  const parsed = JSON.parse(result.stdout.trim()) as { ok: boolean; id?: string; message?: string };
-  assert.equal(parsed.ok, true, `dm-target fixture reported: ${JSON.stringify(parsed)}`);
-  return { id: parsed.id as string };
+async function createDm(fixture: SearchFixture, agentId: string): Promise<{ id: string }> {
+  const response = await postJson(fixture, '/api/dms', { agent_id: agentId });
+  assert.equal(response.status, 201, await response.clone().text());
+  const body = (await response.json()) as { id?: string };
+  assert.equal(typeof body.id, 'string');
+  return { id: body.id as string };
 }
 
 interface SideEffectState {
@@ -539,7 +534,7 @@ test('a DM message is a message hit: a direct message has no channel to be filte
   const fixture = await startSearchFixture('allibot-search-dm-');
   try {
     const agentId = await createAgent(fixture, 'Gull');
-    const dm = runDmTargetFixture(fixture, agentId);
+    const dm = await createDm(fixture, agentId);
     const hitBefore = await search(fixture, 'gull');
     assert.equal(hitBefore.filter((hit) => hit['type'] === 'message').length, 0);
 

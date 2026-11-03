@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import type { MessageKind } from '@allibot/shared';
 import type Database from 'better-sqlite3';
+import { ApiFailure } from './api-error.js';
 import { bindAttachments } from './attachments.js';
-import { liveMemberClause } from './members.js';
+import { liveMemberClause, readOwner } from './members.js';
 import { parseMentions, type MentionCandidate } from './mentions.js';
+import { maxSeqForTarget, readTargetKind } from './sql.js';
 
 /**
  * The one row insert behind every message write: the human face, backend
@@ -33,9 +35,15 @@ export interface MessageRowInput {
    * channel that owns the task, and the human-face parser has no such field.
    */
   taskPointer?: string | null;
+  /**
+   * The task this message is talking about. The reference must be the task
+   * whose thread carries the message (GLOSSARY 指针消息: "引用必须与消息同
+   * target"), so it is only writable from inside a task thread.
+   */
+  taskRef?: string | null;
 }
 
-interface AuthorRow {
+export interface AuthorIdentity {
   id: string;
   display_name: string;
   avatar_slot: number;
@@ -45,14 +53,15 @@ export function insertMessageRow(
   db: Database.Database,
   input: MessageRowInput,
 ): { id: string; seq: number } {
-  const author = readAuthor(db, input.authorMemberId ?? null);
+  const author = readAuthorIdentity(db, input.authorMemberId ?? null);
   const id = randomUUID();
-  const seq = nextSeq(db, input.targetId);
+  const seq = maxSeqForTarget(db, input.targetId) + 1;
+  const taskRef = resolveTaskRef(db, input.targetId, input.taskRef ?? null);
   db.prepare(
     `INSERT INTO message
        (id, target_id, seq, kind, author_member_id, author_display_name,
         author_avatar_slot, body, created_at, task_ref, task_pointer, client_message_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.targetId,
@@ -63,6 +72,7 @@ export function insertMessageRow(
     author.avatar_slot,
     input.body,
     new Date().toISOString(),
+    taskRef,
     input.taskPointer ?? null,
     input.clientMessageId ?? null,
   );
@@ -90,37 +100,61 @@ export function insertMessageRow(
  * message row, so renaming or soft-deleting the member later cannot rewrite
  * history. Human writes are always authored by the owner; a backend system
  * event may name the member it is about.
+ *
+ * This is the one author lookup behind every message write and the unread
+ * frame's author check: the owner branch reads the owner row through
+ * `members.readOwner`, the Agent branch through the live-member predicate.
  */
-function readAuthor(db: Database.Database, memberId: string | null): AuthorRow {
-  const row =
-    memberId === null
-      ? (db
-          .prepare(
-            `SELECT id, display_name, avatar_slot FROM member
-              WHERE kind = 'owner' AND ${liveMemberClause()}`,
-          )
-          .get() as AuthorRow | undefined)
-      : (db
-          .prepare(
-            `SELECT id, display_name, avatar_slot FROM member
-              WHERE id = ? AND ${liveMemberClause()}`,
-          )
-          .get(memberId) as AuthorRow | undefined);
+export function readAuthorIdentity(
+  db: Database.Database,
+  memberId: string | null,
+): AuthorIdentity {
+  if (memberId === null) {
+    const owner = readOwner(db);
+    return { id: owner.id, display_name: owner.display_name, avatar_slot: owner.avatar_slot };
+  }
+  const row = db
+    .prepare(
+      `SELECT id, display_name, avatar_slot FROM member
+        WHERE id = ? AND ${liveMemberClause()}`,
+    )
+    .get(memberId) as AuthorIdentity | undefined;
   if (row === undefined) {
-    throw new Error(`message author not found: ${memberId ?? 'owner'}`);
+    throw new Error(`message author not found: ${memberId}`);
   }
   return row;
 }
 
 /**
- * `MAX(seq) + 1` inside the write transaction. `UNIQUE(target_id, seq)` is the
- * backstop: a second writer would abort rather than reuse a number.
+ * A task reference is legal only when the message is written inside a task
+ * thread and names that same task. There is no cross-target reference: the
+ * task id and the target id name one work item together.
  */
-function nextSeq(db: Database.Database, targetId: string): number {
-  const row = db
-    .prepare('SELECT coalesce(MAX(seq), 0) AS last FROM message WHERE target_id = ?')
-    .get(targetId) as { last: number };
-  return row.last + 1;
+function resolveTaskRef(
+  db: Database.Database,
+  targetId: string,
+  taskRef: string | null,
+): string | null {
+  if (taskRef === null) {
+    return null;
+  }
+  if (readTargetKind(db, targetId) !== 'task') {
+    throw ApiFailure.validation('task_ref is only writable inside a task thread', {
+      field: 'task_ref',
+      target_id: targetId,
+    });
+  }
+  const task = db.prepare('SELECT id FROM task WHERE target_id = ?').get(targetId) as
+    | { id: string }
+    | undefined;
+  if (task === undefined || task.id !== taskRef) {
+    throw ApiFailure.validation('task_ref must name the task that owns this thread', {
+      field: 'task_ref',
+      value: taskRef,
+      target_id: targetId,
+    });
+  }
+  return taskRef;
 }
 
 /**

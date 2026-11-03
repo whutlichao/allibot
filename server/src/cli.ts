@@ -22,7 +22,14 @@ export async function main(argv: readonly string[]): Promise<number> {
   try {
     return await run(argv);
   } catch (error) {
-    console.error(`allibot: ${error instanceof Error ? error.message : String(error)}`);
+    // The database may not be open yet (a refused migration, a missing data
+    // dir), so the error line renders through the default catalog rather than
+    // the in-database locale.
+    console.error(
+      t('zh-CN', 'cli.error', {
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
     return 1;
   }
 }
@@ -70,8 +77,10 @@ async function run(argv: readonly string[]): Promise<number> {
 
   if (!databaseExists(resolution.dataDir)) {
     throw new Error(
-      `database not found at ${databasePath(resolution.dataDir)}; ` +
-        `run \`allibot --migrate --data-dir ${resolution.dataDir}\` before starting the server`,
+      t('zh-CN', 'cli.serve.databaseMissing', {
+        path: databasePath(resolution.dataDir),
+        data_dir: resolution.dataDir,
+      }),
     );
   }
 
@@ -84,6 +93,11 @@ async function run(argv: readonly string[]): Promise<number> {
   const stopReminders = startReminderScheduler(db, options.reminderTickMs);
   try {
     const orchestration = createOrchestration(options, db);
+    // The adapter line precedes the listening line: a caller that waits for
+    // "listening" has already seen which face is live.
+    console.log(
+      tFromDb(db, 'cli.serve.adapter', { adapter: orchestration.provider.name }),
+    );
     const { server, port: boundPort } = await startHttpServer(
       port,
       db,
@@ -92,7 +106,6 @@ async function run(argv: readonly string[]): Promise<number> {
       { sseLifetimeMs: options.sseLifetimeMs },
     );
     console.log(tFromDb(db, 'cli.serve.listening', { url: `http://${HOST}:${boundPort}` }));
-    console.log(`allibot member-face adapter: ${orchestration.provider.name}`);
 
     return await waitForShutdown(server);
   } finally {
@@ -104,10 +117,10 @@ async function run(argv: readonly string[]): Promise<number> {
 
 /**
  * The member-face adapter is selected at startup, exactly once, and handed to
- * the HTTP layer. The scripted double is the default (D4.3); `--provider model`
- * selects the real Anthropic / OpenAI adapter, which still refuses to call out
- * until the provider's remote-data-flow consent is recorded and its credential
- * is present in the environment.
+ * the HTTP layer. The real Anthropic / OpenAI adapter is the default; it
+ * refuses to call out until the provider's remote-data-flow consent is
+ * recorded and its credential is present in the environment. The scripted
+ * double (D4.3) is selected only by an explicit test-injection argument.
  */
 function createOrchestration(
   options: CliOptions,

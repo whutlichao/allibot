@@ -28,6 +28,22 @@ export async function readChannelMembers(
   return body.members ?? [];
 }
 
+/**
+ * `GET /api/targets/{id}/members` serves every target kind; the mention
+ * completion reads the selected target's Agent members through it.
+ */
+export async function readTargetMembers(
+  fetchImpl: typeof fetch,
+  targetId: string,
+): Promise<TargetMemberView[]> {
+  const response = await fetchImpl(`/api/targets/${encodeURIComponent(targetId)}/members`);
+  const body = await readJson<{ members?: TargetMemberView[] }>(
+    response,
+    `GET target ${targetId} members`,
+  );
+  return body.members ?? [];
+}
+
 /** 加入频道：后端返回 `{joined}`；重复加入返回 `joined: false`，不抛错。 */
 export async function joinChannelMember(
   fetchImpl: typeof fetch,

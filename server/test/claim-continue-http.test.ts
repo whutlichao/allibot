@@ -56,14 +56,24 @@ interface BudgetRow {
 async function startFixture(
   prefix: string,
   provider: ProviderBehavior,
-  options: { env?: NodeJS.ProcessEnv; args?: readonly string[] } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    args?: readonly string[];
+    /** The context report appends text to the reply; a body-less test turns it off. */
+    reportContext?: boolean;
+  } = {},
 ): Promise<Fixture> {
   const dataDir = await makeTempDir(prefix);
   const migration = runCli(['--migrate', '--data-dir', dataDir]);
   assert.equal(migration.exitCode, 0, `migrate should exit 0; output: ${migration.output}`);
   const running = await startServer(dataDir, {
     env: options.env,
-    args: ['--scripted-provider', provider, '--scripted-report-context', ...(options.args ?? [])],
+    args: [
+      '--scripted-provider',
+      provider,
+      ...(options.reportContext === false ? [] : ['--scripted-report-context']),
+      ...(options.args ?? []),
+    ],
   });
   return {
     dataDir,
@@ -584,6 +594,48 @@ test('a normal task-thread round still reads the most recent 40 messages', async
     assert.equal(report.ctxlast, triggerSeq);
     assert.equal(report.ctxfirst, triggerSeq - 39);
     assert.ok(report.ctxfirst > 1, 'the earliest messages are outside the window');
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('a body-less round that submits continue_task is replied, not failed', async () => {
+  const fixture = await startFixture('allibot-continue-no-body-', 'continue-task', {
+    env: { OPENAI_API_KEY: 'sk-continue-test' },
+    reportContext: false,
+    args: ['--scripted-reply', '   '],
+  });
+  try {
+    const agent = await createAgent(fixture, '续跑者');
+    await confirmConsent(fixture, 'openai');
+    const channelId = await createChannel(fixture);
+    await joinChannel(fixture, channelId, agent);
+
+    // Creating the task is the claim trigger; the synchronous double then
+    // concludes the claim round and its auto-continue rounds before the
+    // response returns.
+    const task = await createTask(fixture, channelId, '无正文续跑');
+    const targetId = String(task['target_id']);
+
+    const messages = await listMessages(fixture, targetId);
+    const bodies = systemMessageBodies(messages);
+    assert.ok(
+      bodies.some((body) => body.includes(ZH_CN['task.event.continue'].text.slice(0, 4))),
+      `the continue record landed: ${bodies.join(' | ')}`,
+    );
+    assert.equal(
+      messages.filter((message) => message['kind'] === 'agent').length,
+      0,
+      'the whitespace reply is not a committable body',
+    );
+
+    const outcomes = roundOutcomes(fixture).filter((outcome) => outcome.target_id === targetId);
+    assert.ok(outcomes.length > 0, 'the claim round and its continues produced outcomes');
+    assert.deepEqual(
+      outcomes.map((outcome) => outcome.status),
+      outcomes.map(() => 'replied'),
+      'a body-less round with a structured task action is not a failure',
+    );
   } finally {
     await fixture.stop();
   }

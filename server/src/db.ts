@@ -385,7 +385,7 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
       db.exec(`
         -- Long-term memory is a member-level collection of memory cards
         -- (ADR 0005): one logical set per member, not split by target, project
-        -- or session, so cross-target recall is a construction fact. A card is
+        -- or round, so cross-target recall is a construction fact. A card is
         -- a deterministic digest of one round — the triggering message excerpt,
         -- this member's reply excerpt and the task context when there is one —
         -- so its content and keywords are written by the orchestrator, never by
@@ -560,10 +560,24 @@ export function runMigrations(
     return { status: 'already-current', version: currentVersion };
   }
   if (currentVersion !== null && currentVersion > targetVersion) {
-    throw new Error(
+    // The gate refuses before touching the database file, but the attempt is
+    // still a migration attempt: the audit ledger records it as failed with the
+    // reason, exactly like a step that threw (D1.7 "失败也记").
+    const startedAt = new Date().toISOString();
+    const refusal = new Error(
       `version_mismatch: database schema version ${currentVersion} is newer than this build's ` +
         `schema version ${targetVersion}; refusing to migrate, there is no downgrade path`,
     );
+    appendMigrationRecord(dataDir, {
+      from: currentVersion,
+      to: targetVersion,
+      result: 'failed',
+      reason: refusal.message,
+      backup_path: null,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+    });
+    throw refusal;
   }
 
   const startedAt = new Date().toISOString();

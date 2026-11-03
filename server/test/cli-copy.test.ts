@@ -98,6 +98,12 @@ test('the serve listening message renders from the zh-CN catalog', async () => {
     });
 
     assert.doesNotMatch(output, /allibot server listening on/);
+    assert.match(
+      output,
+      /allibot 成员面适配器：model/,
+      'the adapter line renders from the catalog and names the production default',
+    );
+    assert.doesNotMatch(output, /member-face adapter/);
     const response = await fetch(`${matched[1]}/api/settings`);
     assert.equal(response.status, 200, await response.clone().text());
   } finally {

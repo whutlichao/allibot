@@ -124,15 +124,6 @@ async function postMessage(
   return await readJson(response);
 }
 
-async function listMessages(
-  fixture: Fixture,
-  targetId: string,
-): Promise<Record<string, unknown>[]> {
-  const response = await fetch(`${fixture.base}/api/targets/${targetId}/messages?limit=200`);
-  assert.equal(response.status, 200, await response.clone().text());
-  return (await readJson(response))['messages'] as Record<string, unknown>[];
-}
-
 function runFixture(script: string, input: Record<string, unknown>): Record<string, unknown> {
   const result = spawnSync(process.execPath, [script, JSON.stringify(input)], {
     cwd: REPO_ROOT,
@@ -171,7 +162,12 @@ function roundOutcomes(fixture: Fixture): RoundOutcomeRow[] {
 function distinctStatuses(fixture: Fixture): string[] {
   const result = spawnSync(
     'sqlite3',
-    [path.join(fixture.dataDir, 'allibot.db'), 'select distinct status from round_outcome'],
+    [
+      '-cmd',
+      '.timeout 5000',
+      path.join(fixture.dataDir, 'allibot.db'),
+      'select distinct status from round_outcome',
+    ],
     { encoding: 'utf8' },
   );
   assert.equal(result.status, 0, `sqlite3 should read the outcomes: ${result.stderr}`);

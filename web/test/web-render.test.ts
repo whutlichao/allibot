@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { TargetMemberView } from '@allibot/shared';
+import type { MessageView, TargetMemberView, TaskView } from '@allibot/shared';
+import {
+  CopilotKitProvider,
+  type AssistantMessage,
+  type UserMessage,
+} from '@copilotkit/react-core/v2';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
@@ -14,6 +19,25 @@ import {
   insertMention,
   mentionToken,
 } from '../src/mention-completion.ts';
+import {
+  INITIAL_STREAM_STATE,
+  readMessageMetadata,
+  readTargetMembersSnapshot,
+  reduceStreamState,
+  toChatMessage,
+} from '../src/workspace/message-sync.ts';
+import {
+  WorkspaceAssistantMessage,
+  WorkspaceChatContext,
+  WorkspaceComposerView,
+  WorkspaceMessageView,
+  WorkspaceSnapshotContext,
+  WorkspaceUserMessage,
+  resolveMessageAuthor,
+  taskChipTarget,
+  transformWorkspaceMessages,
+  type WorkspaceChatContextValue,
+} from '../src/workspace/WorkspaceMessages.ts';
 
 /**
  * 正文渲染与补全的组件级契约测试（规格 R2：前端只做呈现层契约）。
@@ -359,4 +383,278 @@ test('the completion filters as the user types and closes when no query is activ
     }),
   );
   assert.equal(empty, '', 'no matching candidate renders no list');
+});
+
+// ---------------------------------------------------------------------------
+// Workbench message rendering, author metadata, chips and the composer
+// ---------------------------------------------------------------------------
+
+const WORKSPACE_OWNER: TargetMemberView = {
+  id: 'owner-1',
+  kind: 'owner',
+  display_name: 'Owner',
+  avatar_slot: 1,
+};
+
+function chatView(overrides: Partial<MessageView> = {}): MessageView {
+  return {
+    id: 'm-1',
+    target_id: 't-1',
+    seq: 1,
+    kind: 'agent',
+    author_member_id: 'agent-alice',
+    author_display_name: '旧显示名',
+    author_avatar_slot: 4,
+    body: '**正文**',
+    created_at: '2026-11-03T00:00:00.000Z',
+    task_ref: null,
+    task_pointer: null,
+    client_message_id: null,
+    mentions: [],
+    attachments: [],
+    ...overrides,
+  };
+}
+
+const RUN_SNAPSHOT = {
+  target_id: 't-1',
+  members: [
+    { member_id: 'agent-alice', display_name: 'Alice', avatar_slot: 0 },
+    { member_id: 'agent-bob', display_name: 'Bob', avatar_slot: 2 },
+  ],
+};
+
+function taskRow(overrides: Partial<TaskView> = {}): TaskView {
+  return {
+    id: 'task-1',
+    channel_id: 'c-1',
+    target_id: 'task-target-1',
+    title: '任务甲',
+    status: 'in_progress',
+    assignee_member_id: 'agent-alice',
+    claimed_at: null,
+    created_at: '2026-11-03T00:00:00.000Z',
+    updated_at: '2026-11-03T00:00:00.000Z',
+    allowed_transitions: ['in_review'],
+    message_count: 3,
+    unread_count: 2,
+    ...overrides,
+  };
+}
+
+function chatContext(
+  overrides: Partial<WorkspaceChatContextValue> = {},
+): WorkspaceChatContextValue {
+  return {
+    tasks: [taskRow()],
+    locale: 'zh-CN',
+    archivedDm: false,
+    ...overrides,
+  };
+}
+
+test('a stored row carries author, mention and task metadata onto its messageId', () => {
+  const mentions = [{ member_id: 'agent-bob', start: 0, end: 4 }];
+  const message = toChatMessage(
+    chatView({ id: 'm-meta', body: '@Bob 你好', mentions, task_ref: 'task-1' }),
+  );
+
+  assert.equal(message.id, 'm-meta');
+  assert.equal(message.role, 'assistant');
+  assert.deepEqual(readMessageMetadata(message), {
+    allibot_kind: 'agent',
+    author_member_id: 'agent-alice',
+    author_display_name: '旧显示名',
+    author_avatar_slot: 4,
+    task_ref: 'task-1',
+    task_pointer: null,
+    mentions,
+  });
+  assert.equal(message.name, '旧显示名');
+});
+
+test('the run snapshot maps member ids to the author name and avatar', () => {
+  const snapshot = readTargetMembersSnapshot({
+    target_id: 't-1',
+    members: [{ member_id: 'agent-alice', display_name: 'Alice', avatar_slot: 0 }],
+  });
+  assert.deepEqual(snapshot, {
+    target_id: 't-1',
+    members: [{ member_id: 'agent-alice', display_name: 'Alice', avatar_slot: 0 }],
+  });
+  assert.equal(readTargetMembersSnapshot({ members: [] }), null);
+
+  const message = toChatMessage(chatView());
+  assert.deepEqual(resolveMessageAuthor(message, snapshot), {
+    memberId: 'agent-alice',
+    displayName: 'Alice',
+    avatarSlot: 0,
+  });
+  assert.equal(resolveMessageAuthor(message, null)?.displayName, '旧显示名');
+});
+
+test('each assistant message shows the author its messageId points at', () => {
+  const alice = toChatMessage(chatView({ id: 'm-alice' }));
+  const bob = toChatMessage(
+    chatView({
+      id: 'm-bob',
+      author_member_id: 'agent-bob',
+      author_display_name: '旧 Bob',
+      author_avatar_slot: 3,
+      body: 'Bob 的正文',
+    }),
+  );
+
+  const html = renderToStaticMarkup(
+    createElement(
+      WorkspaceSnapshotContext.Provider,
+      { value: RUN_SNAPSHOT },
+      createElement(
+        'div',
+        null,
+        createElement(WorkspaceAssistantMessage, { message: alice as AssistantMessage }),
+        createElement(WorkspaceAssistantMessage, { message: bob as AssistantMessage }),
+      ),
+    ),
+  );
+
+  assert.match(html, /data-message-id="m-alice"[^>]*data-author-member-id="agent-alice"/);
+  assert.match(html, /data-message-id="m-bob"[^>]*data-author-member-id="agent-bob"/);
+  assert.ok(html.includes('Alice'));
+  assert.ok(html.includes('Bob'));
+  assert.ok(!html.includes('旧显示名'), 'the run snapshot supplies the current name');
+  assert.match(html, /<strong>正文<\/strong>/, 'the body renders as Markdown');
+});
+
+test('a system row renders as an event line, never as a Markdown bubble', () => {
+  const message = toChatMessage(
+    chatView({ id: 'm-system', kind: 'system', body: '任务已创建 **不是加粗**' }),
+  );
+  const html = renderToStaticMarkup(
+    createElement(WorkspaceAssistantMessage, { message: message as AssistantMessage }),
+  );
+
+  assert.match(html, /class="message-event"/);
+  assert.doesNotMatch(html, /message-body/);
+  assert.doesNotMatch(html, /<strong>/);
+});
+
+test('the channel pointer row is a task chip with its unread count and target', () => {
+  const message = toChatMessage(
+    chatView({
+      id: 'm-pointer',
+      kind: 'system',
+      body: '已创建任务「任务甲」',
+      task_pointer: 'task-1',
+    }),
+  );
+  const element = createElement(
+    WorkspaceChatContext.Provider,
+    { value: chatContext() },
+    createElement(WorkspaceAssistantMessage, { message: message as AssistantMessage }),
+  );
+  const html = renderToStaticMarkup(element);
+  assert.ok(html.includes('进入任务线程'));
+  assert.ok(html.includes('2 条未读'), 'the chip shows the task unread_count');
+  assert.match(html, /data-task-pointer="task-1"/);
+  assert.equal(
+    taskChipTarget([taskRow()], 'task-1'),
+    'task-target-1',
+    'the chip enters the task target, not the channel',
+  );
+  assert.equal(taskChipTarget([taskRow()], 'unknown-task'), null);
+
+  const noUnread = renderToStaticMarkup(
+    createElement(
+      WorkspaceChatContext.Provider,
+      { value: chatContext({ tasks: [taskRow({ unread_count: 0 })] }) },
+      createElement(WorkspaceAssistantMessage, { message: message as AssistantMessage }),
+    ),
+  );
+  assert.doesNotMatch(noUnread, /条未读/, 'a zero count is hidden');
+});
+
+test('a task_ref row renders a task chip and the click selects the task thread', () => {
+  const message = toChatMessage(
+    chatView({ id: 'm-ref', kind: 'human', task_ref: 'task-1' }),
+  );
+  const element = createElement(
+    WorkspaceChatContext.Provider,
+    { value: chatContext() },
+    createElement(WorkspaceUserMessage, { message: message as UserMessage }),
+  );
+  const html = renderToStaticMarkup(element);
+  assert.ok(html.includes('任务：任务甲'));
+  assert.match(html, /data-task-ref="task-1"/);
+});
+
+test('the production message view uses the workbench assistant and user slots', () => {
+  const element = WorkspaceMessageView({ messages: [] });
+  assert.equal(element.props.assistantMessage, WorkspaceAssistantMessage);
+  assert.equal(element.props.userMessage, WorkspaceUserMessage);
+  assert.equal(element.props.transformMessages, transformWorkspaceMessages);
+
+  const system = toChatMessage(chatView({ id: 'm-sys', kind: 'system', body: '记录' }));
+  const assistant = toChatMessage(chatView({ id: 'm-as' }));
+  const transformed = transformWorkspaceMessages([system, assistant]);
+  assert.equal(transformed[0]?.role, 'assistant', 'a system row is routed to the assistant slot');
+  assert.equal(transformed[1]?.role, 'assistant');
+});
+
+test('the composer opens mention completion for the current target agents', () => {
+  const html = renderToStaticMarkup(
+    createElement(
+      CopilotKitProvider as never,
+      { runtimeUrl: '/api/copilotkit', useSingleEndpoint: false } as never,
+      createElement(WorkspaceComposerView, {
+        inputProps: {},
+        members: [WORKSPACE_OWNER, ALICE],
+        text: '你好 @',
+        caret: 4,
+        archivedDm: false,
+        locale: 'zh-CN',
+      }),
+    ),
+  );
+
+  assert.match(html, /role="listbox"/);
+  assert.ok(html.includes('Alice'), 'the current target Agent is a candidate');
+  assert.ok(!html.includes('Owner'), 'the owner is never a completion candidate');
+});
+
+test('an archived DM renders a read-only notice and no send entry', () => {
+  const html = renderToStaticMarkup(
+    createElement(WorkspaceComposerView, {
+      inputProps: {},
+      members: [],
+      text: '',
+      caret: 0,
+      archivedDm: true,
+      locale: 'zh-CN',
+    }),
+  );
+
+  assert.match(html, /data-readonly="true"/);
+  assert.ok(html.includes('已归档'));
+  assert.doesNotMatch(html, /<textarea|role="listbox"/, 'no composer and no completion');
+});
+
+test('the stream state tells a routine rotation from an unreachable backend', () => {
+  const first = reduceStreamState(INITIAL_STREAM_STATE, 'open');
+  assert.equal(first.catchUp, false, 'the first open needs no catch-up');
+  assert.equal(first.state.phase, 'open');
+
+  const rotating = reduceStreamState(first.state, 'rotate');
+  assert.equal(rotating.state.phase, 'rotating');
+  assert.equal(rotating.catchUp, false, 'the rotate frame itself starts no read');
+
+  const reopened = reduceStreamState(rotating.state, 'open');
+  assert.equal(reopened.catchUp, true, 'a reconnect after rotation re-reads the workspace and thread');
+
+  const unreachable = reduceStreamState(reopened.state, 'error');
+  assert.equal(unreachable.state.phase, 'unreachable');
+  assert.equal(reduceStreamState(unreachable.state, 'open').catchUp, true);
+
+  const errorAfterRotate = reduceStreamState(rotating.state, 'error');
+  assert.equal(errorAfterRotate.state.phase, 'rotating', 'a close after rotate is not an outage');
 });

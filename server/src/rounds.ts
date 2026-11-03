@@ -20,6 +20,7 @@ import {
 } from './context-window.js';
 import { tFromDb } from './copy.js';
 import {
+  publishMemberStatus,
   publishMessageCreated,
   publishRoundOutcome,
   publishUnreadChanged,
@@ -27,6 +28,7 @@ import {
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
+import { readTargetKind } from './sql.js';
 import { countUnread } from './unread.js';
 
 /**
@@ -140,6 +142,7 @@ export interface Wake {
 interface AgentMemberRow {
   id: string;
   display_name: string;
+  avatar_slot: number;
   role: string;
   model: string | null;
   system_prompt: string;
@@ -229,11 +232,12 @@ function isTargetMember(db: Database.Database, targetId: string, memberId: strin
 function listTargetAgentMembers(db: Database.Database, targetId: string): AgentMemberRow[] {
   return db
     .prepare(
-      `SELECT m.id, m.display_name, c.role, c.model, c.system_prompt
+      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
          FROM target_member tm
          JOIN member m ON m.id = tm.member_id
          JOIN agent_config c ON c.member_id = m.id
-        WHERE tm.target_id = ? AND m.kind = 'agent' AND ${liveMemberClause('m')}
+        WHERE tm.target_id = ? AND m.kind = 'agent' AND c.enabled = 1
+          AND ${liveMemberClause('m')}
         ORDER BY tm.rowid`,
     )
     .all(targetId) as AgentMemberRow[];
@@ -251,7 +255,9 @@ function listMentionedAgents(
          FROM message_mention mm
          JOIN message msg ON msg.id = mm.message_id
          JOIN member m ON m.id = mm.member_id
-        WHERE msg.target_id = ? AND msg.seq = ? AND m.kind = 'agent' AND ${liveMemberClause('m')}
+         JOIN agent_config c ON c.member_id = m.id
+        WHERE msg.target_id = ? AND msg.seq = ? AND m.kind = 'agent' AND c.enabled = 1
+          AND ${liveMemberClause('m')}
         ORDER BY m.rowid`,
     )
     .all(targetId, messageSeq) as { id: string }[];
@@ -311,6 +317,9 @@ export interface CommittedReply {
   id: string;
   seq: number;
   memberId: string;
+  /** The author snapshot the row recorded, for the live renderer. */
+  authorDisplayName: string;
+  authorAvatarSlot: number;
   body: string;
 }
 
@@ -390,13 +399,18 @@ export async function dispatchWakes(
     return;
   }
   const delivering = wakes.filter((wake) => !foldsIntoInFlight(inFlight, wake));
+  const firstDelivering = delivering[0];
   const relayed =
-    messageKind === 'agent' && delivering.length > 0
-      ? tryConsumeJump(db, wakes[0]!.targetId)
+    messageKind === 'agent' && firstDelivering !== undefined
+      ? tryConsumeJump(db, firstDelivering.targetId)
       : null;
   const delivered = relayed !== null && relayed.consumed;
   if (relayed !== null && !delivered) {
-    await suppressWakes(db, wakes, relayed.budget);
+    // Only the wakes that would actually have started a round are suppressed.
+    // A wake folded into a running round is delivered to that round and leaves
+    // its one `merged` row when the round closes; it is not a suppressed
+    // member and must not also get a `budget-exhausted` row.
+    await suppressWakes(db, delivering, relayed.budget);
     return;
   }
   const jump = delivered ? 1 : 0;
@@ -498,6 +512,10 @@ export async function runRound(
   const turn: Turn = { targetId: wake.targetId, repeats: [], deferred: [] };
   inFlight.set(wake.memberId, turn);
   const startedAt = new Date().toISOString();
+  // The status point's `working` state is process state; the frame announces
+  // the transition now, and the reading that carries reasons stays the
+  // workspace snapshot.
+  publishMemberStatus({ memberId: wake.memberId, status: 'working' });
 
   // The response discipline is computed once, from the data the wake points
   // at. A read failure leaves it undefined, which judges as non-definite: an
@@ -532,11 +550,23 @@ export async function runRound(
     publishMessageCreated({ targetId: wake.targetId, id: message.id, seq: message.seq });
   }
   if (committed.reply !== null) {
-    onReply?.({ ...committed.reply, memberId: wake.memberId });
+    const author = input?.member;
+    onReply?.({
+      ...committed.reply,
+      memberId: wake.memberId,
+      authorDisplayName: author?.display_name ?? '',
+      authorAvatarSlot: author?.avatar_slot ?? 0,
+    });
   }
   for (const outcome of committed.outcomes) {
     publishRoundOutcome(outcome);
   }
+  // The round's own conclusion decides the stored `error` / `online` point; a
+  // member whose availability keeps it offline never reaches a round.
+  publishMemberStatus({
+    memberId: wake.memberId,
+    status: committed.outcome.status === 'failed' ? 'error' : 'online',
+  });
   // A landed reply is an Agent conversation message, so the owner's unread
   // reading for this target moved; a round that landed nothing (ignored,
   // failed, merged) leaves it untouched. A merged join system message never
@@ -605,7 +635,7 @@ export interface RoundOutcomeRow {
 function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
   const member = db
     .prepare(
-      `SELECT m.id, m.display_name, c.role, c.model, c.system_prompt
+      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
          FROM member m JOIN agent_config c ON c.member_id = m.id
         WHERE m.id = ? AND m.kind = 'agent' AND ${liveMemberClause('m')}`,
     )
@@ -614,7 +644,7 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     throw new Error(`round member not found: ${wake.memberId}`);
   }
 
-  const targetKind = readTargetKindOf(db, wake.targetId);
+  const targetKind = readRoundTargetKind(db, wake.targetId);
   const consumedSeq = readConsumedSeq(db, member.id, wake.targetId);
   // 上下文窗口: a normal round reads the most recent 40 target messages; an
   // auto-continue round keeps working on its whole task thread. The window is
@@ -1089,7 +1119,11 @@ function judgeRound(
     return { status: 'failed', finishedReason };
   }
   if (result.verdict === 'replied') {
-    return replySeq === null && discipline.definite
+    // A round that only submits a structured task action has answered, even
+    // though it landed no body: "无正文且无任务动作" is the failure condition,
+    // not "no body" alone (D1.13 回应判断).
+    const answeredByAction = result.taskAction !== undefined;
+    return replySeq === null && !answeredByAction && discipline.definite
       ? { status: 'failed', finishedReason }
       : { status: 'replied', finishedReason };
   }
@@ -1164,15 +1198,8 @@ function commitJoin(
   return join.seq;
 }
 
-function readTargetKind(db: Database.Database, targetId: string): string {
-  const row = db.prepare('SELECT kind FROM target WHERE id = ?').get(targetId) as
-    | { kind: string }
-    | undefined;
-  return row?.kind ?? '';
-}
-
-/** The same row, narrowed for the round input; a target row always exists here. */
-function readTargetKindOf(db: Database.Database, targetId: string): RoundTargetKind {
+/** The same target-kind row, narrowed for the round input. */
+function readRoundTargetKind(db: Database.Database, targetId: string): RoundTargetKind {
   const kind = readTargetKind(db, targetId);
   return kind === 'dm' || kind === 'task' ? kind : 'channel';
 }
@@ -1188,7 +1215,10 @@ function commitReply(
   // 一轮 ↔ 至多一条 target 消息: the seam may hand over several pending
   // replies, and this write path lands the first one. Streaming the rest is
   // the AG-UI ticket's shape, not a second message per round here.
-  const body = result.replies[0]!.trim();
+  const body = result.replies[0]?.trim();
+  if (body === undefined || body.length === 0) {
+    return null;
+  }
   const reply = { ...insertMessage(db, wake.targetId, 'agent', wake.memberId, body), body };
   written.push(reply);
   return reply;

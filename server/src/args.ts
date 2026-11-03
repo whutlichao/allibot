@@ -6,9 +6,12 @@ import { SCRIPTED_BEHAVIORS, type ScriptedBehavior } from './scripted-provider.j
 export type CliCommand = 'serve' | 'migrate';
 
 /**
- * The member-face adapter the server runs. `scripted` is the test double
- * injected through `--scripted-provider` (D4.3); `model` is the real provider
- * adapter, selected explicitly so no production path ever falls into a double.
+ * The member-face adapter the server runs. `model` is the production default:
+ * the real Anthropic / OpenAI adapter, which refuses a round with a readable
+ * reason when its credential or consent is missing. `scripted` is the test
+ * double (D4.3) and is selected only by an explicit startup argument
+ * (`--provider scripted` or a `--scripted-*` option), so no production path
+ * ever falls into a double.
  */
 export type ProviderMode = 'scripted' | 'model';
 
@@ -17,9 +20,9 @@ export interface CliOptions {
   dataDir: string | undefined;
   port: number;
   /**
-   * Which member-face adapter is live. The scripted double stays the default so
-   * every behaviour test runs with no network and no model cost; a real
-   * deployment passes `--provider model`.
+   * Which member-face adapter is live. The real model adapter is the default;
+   * a test opts into the scripted double with `--provider scripted` or any
+   * `--scripted-*` option.
    */
   providerMode: ProviderMode;
   /**
@@ -70,13 +73,12 @@ export interface CliOptions {
 
 const DEFAULT_PORT = 3000;
 /**
- * The scripted double is the default member-face adapter. Its default behaviour
- * is `ignore`: a server started without an explicit `--scripted-provider` runs
- * every round exactly once and lands no invented reply. The startup line names
- * the adapter, so the choice is always visible; a real provider is selected
- * with `--provider model`.
+ * The production default is the real model adapter. The scripted double is a
+ * test injection: `--provider scripted` (or any `--scripted-*` option, which
+ * only the double understands) selects it. The startup line names whichever
+ * adapter is live.
  */
-const DEFAULT_PROVIDER_MODE: ProviderMode = 'scripted';
+const DEFAULT_PROVIDER_MODE: ProviderMode = 'model';
 const PROVIDER_MODES: readonly ProviderMode[] = ['scripted', 'model'];
 const DEFAULT_SCRIPTED_PROVIDER: ScriptedBehavior = 'ignore';
 const DEFAULT_SCRIPTED_DELAY_MS = 1500;
@@ -120,7 +122,15 @@ export function parseCliArgs(
     command: resolveCommand(values.migrate === true, positionals[0]),
     dataDir: values['data-dir'] ?? env.allibot_DATA_DIR,
     port: parsePort(values.port ?? String(DEFAULT_PORT)),
-    providerMode: parseProviderMode(values.provider),
+    providerMode: parseProviderMode(
+      values.provider,
+      values['scripted-provider'] !== undefined ||
+        values['scripted-delay-ms'] !== undefined ||
+        values['scripted-reply'] !== undefined ||
+        values['scripted-echo-prompt'] === true ||
+        values['scripted-report-context'] === true ||
+        values['scripted-report-calls'] === true,
+    ),
     scriptedProvider: parseScriptedProvider(values['scripted-provider']),
     scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
     scriptedReplies: parseScriptedReplies(values['scripted-reply']),
@@ -132,9 +142,11 @@ export function parseCliArgs(
   };
 }
 
-function parseProviderMode(raw: string | undefined): ProviderMode {
+function parseProviderMode(raw: string | undefined, scriptedOption: boolean): ProviderMode {
   if (raw === undefined) {
-    return DEFAULT_PROVIDER_MODE;
+    // Any `--scripted-*` option is itself an explicit injection of the double;
+    // without one the production adapter is the default.
+    return scriptedOption ? 'scripted' : DEFAULT_PROVIDER_MODE;
   }
   const mode = PROVIDER_MODES.find((candidate) => candidate === raw);
   if (mode === undefined) {
@@ -189,7 +201,10 @@ function parseScriptedReplies(raw: readonly string[] | undefined): readonly stri
   if (raw === undefined) {
     return [];
   }
-  if (raw.some((body) => body.trim().length === 0)) {
+  // A whitespace-only body is not empty: it is the double's way to state a
+  // reply the write path cannot land (the response-judgment test observes a
+  // body-less round). An actually empty argument stays a client error.
+  if (raw.some((body) => body.length === 0)) {
     throw new Error('invalid --scripted-reply value: a reply body must not be empty');
   }
   return raw;

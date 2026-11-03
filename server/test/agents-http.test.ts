@@ -316,7 +316,7 @@ test('DELETE /api/agents/{id} soft-deletes: 204, then 404, config and history ro
   }
 });
 
-test('include_deleted=true never surfaces soft-deleted Agents either', async () => {
+test('include_deleted=true is rejected instead of being silently read as false', async () => {
   const fixture = await startAgentFixture('allibot-agents-include-deleted-');
   try {
     const created = await createAgent(fixture, { display_name: '已删除', model: 'openai:gpt-5' });
@@ -327,11 +327,10 @@ test('include_deleted=true never surfaces soft-deleted Agents either', async () 
     assert.equal(deleted.status, 204);
 
     const response = await fetch(`${fixture.base}/api/agents?include_deleted=true`);
-    assert.equal(response.status, 200);
-    assert.deepEqual(
-      (await readJson(response))['agents'],
-      [],
-      'deleted members stay out of every read path, include_deleted included',
+    assert.equal(response.status, 400, 'the unsupported flag is a client error, not a no-op');
+    assert.equal(
+      ((await readJson(response))['error'] as Record<string, unknown>)['code'],
+      'validation_failed',
     );
 
     const malformed = await fetch(`${fixture.base}/api/agents?include_deleted=maybe`);

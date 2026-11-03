@@ -97,21 +97,21 @@ test('migrating an empty data dir adds remote_consent_scope and reaches the curr
   }
 });
 
-test('a version 9 data dir upgrades to version 10 with a backup that keeps channel and message rows', async () => {
+test('a version 10 data dir upgrades to version 11 with a backup that keeps channel and message rows', async () => {
   const parent = await makeTempDir('allibot-consent-upgrade-');
   const dataDir = path.join(parent, 'data');
 
   try {
     mkdirSync(dataDir);
-    const baseline = spawnSync(process.execPath, [MIGRATION_FIXTURE, 'v9', dataDir], {
+    const baseline = spawnSync(process.execPath, [MIGRATION_FIXTURE, 'v10', dataDir], {
       encoding: 'utf8',
     });
     assert.equal(
       baseline.status,
       0,
-      `the version-9 fixture should succeed; output: ${baseline.stdout}${baseline.stderr}`,
+      `the version-10 fixture should succeed; output: ${baseline.stdout}${baseline.stderr}`,
     );
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
 
     const seeded = new Database(path.join(dataDir, 'allibot.db'));
     try {
@@ -160,7 +160,7 @@ test('a version 9 data dir upgrades to version 10 with a backup that keeps chann
           schema_version: number;
         }
       ).schema_version;
-      assert.equal(version, 9, 'the backup keeps the pre-migration schema version');
+      assert.equal(version, 10, 'the backup keeps the pre-migration schema version');
       const tables = (
         backupDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
           name: string;
@@ -173,7 +173,7 @@ test('a version 9 data dir upgrades to version 10 with a backup that keeps chann
 
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
-    assert.equal(last?.['from'], 9);
+    assert.equal(last?.['from'], 10);
     assert.equal(last?.['to'], SCHEMA_VERSION);
     assert.equal(last?.['result'], 'ok');
   } finally {

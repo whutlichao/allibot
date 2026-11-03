@@ -31,6 +31,20 @@ export const ZH_CN = {
     text: 'allibot 已监听 {url}。',
     params: ['url'],
   },
+  'cli.serve.adapter': {
+    text: 'allibot 成员面适配器：{adapter}',
+    params: ['adapter'],
+  },
+  'cli.serve.databaseMissing': {
+    text:
+      '在 {path} 找不到数据库；启动服务前先运行 ' +
+      '`allibot --migrate --data-dir {data_dir}`。',
+    params: ['path', 'data_dir'],
+  },
+  'cli.error': {
+    text: 'allibot：{message}',
+    params: ['message'],
+  },
 
   // 工作区设置面板：语言偏好 / 消息密度 / 主题三档。
   'settings.title': { text: '工作区设置', params: [] },
@@ -265,6 +279,7 @@ export const ZH_CN = {
   'taskBoard.transition.label': { text: '流转', params: [] },
   'taskBoard.chip.thread': { text: '进入任务线程', params: [] },
   'taskBoard.chip.unread': { text: '· {count} 条未读', params: ['count'] },
+  'taskBoard.chip.taskRef': { text: '任务：{title}', params: ['title'] },
   // Agent 详情页签（Agent Detail Tab）：三个分组固定顺序；基础信息和配置在
   // M1 可用，skills / mcp 是依赖 T11（M2）的占位。
   'workspace.agentDetail.tab.basic': { text: '基础信息和配置', params: [] },
@@ -308,6 +323,11 @@ export const ZH_CN = {
     params: [],
   },
   'workspace.agentDetail.missing': { text: '该 Agent 不存在或已删除。', params: [] },
+  // 已归档私信（对方 Agent 已软删除）的只读提示：composer 与发送入口一并禁用。
+  'workspace.composer.archivedDm': {
+    text: '对方 Agent 已被软删除，此私信已归档，只能阅读历史，无法继续发送。',
+    params: [],
+  },
   // 成员面板（Member Panel）与成员名册（Member Roster）：面板按频道成员表
   // 分「已加入 / 未加入」两段，名册是含 owner 的只读全名单。
   'workspace.member.joined': { text: '已加入', params: [] },
@@ -318,6 +338,7 @@ export const ZH_CN = {
   'workspace.member.loading': { text: '正在读取频道成员…', params: [] },
   'workspace.member.empty': { text: '暂无成员。', params: [] },
   'workspace.member.channelOnly': { text: '成员面板只属于频道。', params: [] },
+  'workspace.member.reason.disabled': { text: '已停用', params: [] },
   'workspace.member.reason.modelMissing': { text: '未配置模型', params: [] },
   'workspace.member.reason.consentMissing': { text: '未确认远端数据流告知', params: [] },
   'workspace.member.reason.credentialMissing': { text: '缺少凭证', params: [] },

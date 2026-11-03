@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { DmView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
+import { publishWorkspaceChanged } from './events.js';
+import { OWNER_ID_SUBQUERY } from './sql.js';
 
 /**
  * 私信 (DM): owner 与一个 Agent 之间的两方 target (`kind='dm'`).
@@ -85,13 +87,17 @@ export function createDm(db: Database.Database, body: unknown): { id: string; cr
     const id = randomUUID();
     db.prepare("INSERT INTO target (id, kind) VALUES (?, 'dm')").run(id);
     db.prepare(
-      `INSERT INTO target_member (target_id, member_id)
-       SELECT ?, id FROM member WHERE kind = 'owner'`,
+      `INSERT INTO target_member (target_id, member_id) VALUES (?, ${OWNER_ID_SUBQUERY})`,
     ).run(id);
     db.prepare('INSERT INTO target_member (target_id, member_id) VALUES (?, ?)').run(id, agentId);
     return { id, created: true };
   });
-  return create();
+  const result = create();
+  // A reused DM wrote nothing, so it announces nothing.
+  if (result.created) {
+    publishWorkspaceChanged({ source: 'dm' });
+  }
+  return result;
 }
 
 function findDmForAgent(db: Database.Database, agentId: string): string | null {

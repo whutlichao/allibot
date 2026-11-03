@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import { DEFAULT_RESPONSE_BUDGET_LIMIT } from './channels.js';
 import { tFromDb } from './copy.js';
+import { readTargetKind } from './sql.js';
 
 /**
  * The budget ledger (预算表): one row per target, the canonical jump count.
@@ -105,10 +106,7 @@ export function budgetExhaustedReason(db: Database.Database, budget: BudgetRow):
  * #9); DM and task targets fall back to the built-in default 3.
  */
 function effectiveLimit(db: Database.Database, targetId: string): number {
-  const target = db.prepare('SELECT kind FROM target WHERE id = ?').get(targetId) as
-    | { kind: string }
-    | undefined;
-  if (target?.kind === 'channel') {
+  if (readTargetKind(db, targetId) === 'channel') {
     const channel = db
       .prepare('SELECT response_budget_limit FROM channel WHERE id = ?')
       .get(targetId) as { response_budget_limit: number } | undefined;

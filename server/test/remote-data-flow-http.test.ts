@@ -565,7 +565,7 @@ test('a provider error echoing the credential lands only as a masked, readable r
   }
 });
 
-test('the scripted double stays the default member-face adapter', async () => {
+test('an explicit --scripted-provider still injects the test double', async () => {
   const fixture = await startRemoteFlowFixture('allibot-remote-scripted-', {
     env: { OPENAI_API_KEY: SENTINEL_KEY },
     args: ['--scripted-provider', 'reply'],
@@ -583,8 +583,12 @@ test('the scripted double stays the default member-face adapter', async () => {
       (messages[1]?.['body'] as string).startsWith('收到 #'),
       'the default scripted reply is the double, not a model call',
     );
-    assert.equal(fixture.running.logs().stdout.includes('member-face adapter: scripted'), true);
-    assert.equal(fixture.running.logs().stdout.includes('member-face adapter: model'), false);
+    assert.equal(
+      fixture.running.logs().stdout.includes('allibot 成员面适配器：scripted:reply'),
+      true,
+      'the option is an explicit injection of the double',
+    );
+    assert.equal(fixture.running.logs().stdout.includes('成员面适配器：model'), false);
   } finally {
     await fixture.stop();
   }

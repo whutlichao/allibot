@@ -40,6 +40,7 @@ export type ContextScope = 'window' | 'full';
 export interface RoundMember {
   id: string;
   display_name: string;
+  avatar_slot: number;
   role: string;
   model: string | null;
   system_prompt: string;

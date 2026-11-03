@@ -638,14 +638,21 @@ async function readBody(
 
 /**
  * Soft-deleted members stay out of every read path (Agent list, channel
- * members, mention candidates, status points, search), so `include_deleted`
- * has no effect. The flag still has to parse: an unknown value is a client
- * error rather than silently meaning "false".
+ * members, mention candidates, status points, search), so `include_deleted=true`
+ * cannot be honoured without contradicting D1.13. It is rejected explicitly
+ * instead of being silently read as false; `false` and an absent flag are the
+ * only accepted values.
  */
 function parseIncludeDeleted(searchParams: URLSearchParams): boolean {
   const raw = searchParams.get('include_deleted');
-  if (raw === null || raw === 'false' || raw === 'true') {
+  if (raw === null || raw === 'false') {
     return false;
+  }
+  if (raw === 'true') {
+    throw ApiFailure.validation(
+      'include_deleted=true is not supported: soft-deleted members are absent from every read path',
+      { field: 'include_deleted', value: raw },
+    );
   }
   throw ApiFailure.validation('include_deleted must be true or false');
 }

@@ -1,6 +1,7 @@
 import type { WorkspaceUnreadView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
+import { channelReadState } from './channels.js';
 import { publishUnreadChanged } from './events.js';
 import { readOwnerId } from './members.js';
 import { advanceReadPosition } from './read-position.js';
@@ -81,12 +82,13 @@ export function readWorkspaceUnread(
   let unreadTotal = 0;
   for (const row of rows) {
     if (row.kind === 'channel') {
-      if (row.deleted_at !== null) {
+      const state = channelReadState(row);
+      if (state === 'deleted') {
         continue;
       }
       const unread = countUnread(db, memberId, row.id);
       unreadByTarget[row.id] = unread;
-      if (row.archived_at === null) {
+      if (state === 'live') {
         unreadTotal += unread;
       }
       continue;

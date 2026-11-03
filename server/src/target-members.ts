@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { assertChannelReadable, assertChannelWritable, type ChannelRow } from './channels.js';
 import { liveMemberClause } from './members.js';
+import { readTargetKind } from './sql.js';
 
 interface MemberRow {
   id: string;
@@ -28,13 +29,11 @@ export function listChannelMembers(db: Database.Database, channelId: string): Ta
  * every other channel-layer endpoint.
  */
 export function listTargetMembers(db: Database.Database, targetId: string): TargetMemberView[] {
-  const target = db.prepare('SELECT kind FROM target WHERE id = ?').get(targetId) as
-    | { kind: string }
-    | undefined;
-  if (target === undefined) {
+  const kind = readTargetKind(db, targetId);
+  if (kind === null) {
     throw ApiFailure.notFound(`target not found: ${targetId}`);
   }
-  if (target.kind === 'channel') {
+  if (kind === 'channel') {
     assertChannelReadable(db, targetId);
   }
   return readTargetMembers(db, targetId);

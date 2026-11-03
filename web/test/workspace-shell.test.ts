@@ -56,6 +56,7 @@ import {
   workspaceChatProps,
 } from '../src/workspace/WorkspaceChat.ts';
 import { WorkspaceShell } from '../src/workspace/WorkspaceShell.ts';
+import { WorkspaceComposer, WorkspaceMessageView } from '../src/workspace/WorkspaceMessages.ts';
 import { App } from '../src/App.ts';
 
 /**
@@ -301,17 +302,21 @@ test('opening a drawer or navigating never moves the selected target', () => {
 });
 
 test('a stored message maps to one chat message with the SQLite id', () => {
-  assert.deepEqual(toChatMessage(message('m-human', 1, 'human', '你好')), {
+  const identity = (view: ReturnType<typeof message>) => {
+    const mapped = toChatMessage(view);
+    return { id: mapped.id, role: mapped.role, content: mapped.content };
+  };
+  assert.deepEqual(identity(message('m-human', 1, 'human', '你好')), {
     id: 'm-human',
     role: 'user',
     content: '你好',
   });
-  assert.deepEqual(toChatMessage(message('m-agent', 2, 'agent', '收到')), {
+  assert.deepEqual(identity(message('m-agent', 2, 'agent', '收到')), {
     id: 'm-agent',
     role: 'assistant',
     content: '收到',
   });
-  assert.deepEqual(toChatMessage(message('m-system', 3, 'system', '任务已创建')), {
+  assert.deepEqual(identity(message('m-system', 3, 'system', '任务已创建')), {
     id: 'm-system',
     role: 'system',
     content: '任务已创建',
@@ -525,7 +530,8 @@ test('the context panel reads the selected target from the same workspace snapsh
 
 test('the main area is one CopilotChat bound to agentId="allibot" and threadId=target_id', () => {
   const first = WorkspaceChatArea({ targetId: CHANNEL_ID });
-  assert.equal(first.type, CopilotChat, 'the shell main area is the CopilotChat component');
+  const chat = (first.props as { children?: { type?: unknown } }).children;
+  assert.equal(chat?.type, CopilotChat, 'the shell main area is the CopilotChat component');
   const rendered = renderToStaticMarkup(
     createElement(
       CopilotKitProvider as never,
@@ -539,6 +545,16 @@ test('the main area is one CopilotChat bound to agentId="allibot" and threadId=t
   assert.equal(firstProps.agentId, ALLIBOT_AGENT_ID);
   assert.equal(firstProps.threadId, CHANNEL_ID);
   assert.equal(firstProps.chatView, WorkspaceChatView, 'the chat view hosts hydration and SSE');
+  assert.equal(
+    firstProps.messageView,
+    WorkspaceMessageView,
+    'the production view mounts the workbench message renderer',
+  );
+  assert.equal(
+    firstProps.input,
+    WorkspaceComposer,
+    'the production composer mounts mention completion',
+  );
 
   const secondProps = workspaceChatProps(DM_ID);
   assert.equal(secondProps.agentId, ALLIBOT_AGENT_ID, 'the one agent id never follows the target');
@@ -585,6 +601,25 @@ test('the shell docks one sidebar and every drawer keeps the same thread identit
 
   assert.deepEqual(calls, [], 'rendering a drawer and its skeleton performs no request');
   assert.deepEqual(reading, snapshot, 'rendering never mutates the workspace reading');
+});
+
+test('an archived DM disables the composer; an active DM keeps it', () => {
+  const renderDm = (targetId: string): string =>
+    renderToStaticMarkup(
+      createElement(WorkspaceShell, {
+        workspace: workspace(),
+        settings: workspace().settings,
+        activeTargetId: targetId,
+        viewportWidth: 1280,
+      }),
+    );
+
+  const archived = renderDm(ARCHIVED_DM_ID);
+  assert.match(archived, /data-readonly="true"/, 'the archived DM has no send entry');
+  assert.ok(archived.includes('已归档'), 'the read-only notice is readable');
+
+  const active = renderDm(DM_ID);
+  assert.doesNotMatch(active, /data-readonly="true"/, 'an active DM keeps its composer');
 });
 
 test('a narrow shell moves navigation into a drawer and keeps it reachable', () => {

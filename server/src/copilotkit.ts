@@ -15,9 +15,10 @@ export const COPILOTKIT_BASE_PATH = '/api/copilotkit';
  * node:http server. `useSingleEndpoint={false}` on the provider matches this
  * handler shape.
  *
- * `@copilotkit/runtime@1.83.0` pins `@ag-ui/client@1.0.2` and the runtime's
- * `AbstractAgent` type is nominal (a private field), while this workspace's
- * direct `@ag-ui/client@1.0.3` is a second declaration of the same class. The
+ * `@copilotkit/runtime@1.83.0` pins `@ag-ui/client@1.0.2`, and this workspace
+ * declares the same `@ag-ui/client@1.0.2` directly; the runtime's
+ * `AbstractAgent` type is nominal (a private field), so the dependency tree
+ * still carries second copies under other middleware packages. The
  * bridge is typed structurally here and the two copies agree at runtime, which
  * the process-level contract test exercises end to end.
  */

@@ -31,12 +31,17 @@ interface SseFrame {
 
 async function startEventsFixture(
   prefix: string,
-  options: { provider?: 'reply' | 'ignore'; args?: readonly string[] } = {},
+  options: {
+    provider?: 'reply' | 'ignore';
+    args?: readonly string[];
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<EventsFixture> {
   const dataDir = await makeTempDir(prefix);
   const migration = runCli(['--migrate', '--data-dir', dataDir]);
   assert.equal(migration.exitCode, 0, `migrate should exit 0; output: ${migration.output}`);
   const running = await startServer(dataDir, {
+    env: options.env,
     args: ['--scripted-provider', options.provider ?? 'ignore', ...(options.args ?? [])],
   });
   return {
@@ -255,6 +260,44 @@ class SseConnection {
   }
 }
 
+/**
+ * Read frames until one of `type` arrives. Workspace writes (channel / agent
+ * / settings) publish their own frames, so a test that observes one business
+ * fact skips the frames it is not asserting on.
+ */
+async function nextOfType(
+  stream: SseConnection,
+  type: string,
+  timeoutMs = 5_000,
+): Promise<SseFrame> {
+  for (;;) {
+    const frame = await stream.next(timeoutMs);
+    assert.ok(frame !== null, `the connection closed while waiting for ${type}`);
+    if (frame.event === type) {
+      return frame;
+    }
+  }
+}
+
+/** Consume frames for `timeoutMs`; returns the ones that arrived. */
+async function drainFrames(
+  stream: SseConnection,
+  timeoutMs = 300,
+): Promise<SseFrame[]> {
+  const frames: SseFrame[] = [];
+  for (;;) {
+    try {
+      const frame = await stream.next(timeoutMs);
+      if (frame === null) {
+        return frames;
+      }
+      frames.push(frame);
+    } catch {
+      return frames;
+    }
+  }
+}
+
 /** The stream never carries an `id:` line: there is no Last-Event-ID protocol. */
 function assertNoEventId(frame: SseFrame): void {
   assert.ok(
@@ -277,9 +320,7 @@ test('a stored message streams one live message.created frame with target, messa
     const channelId = await createChannel(fixture);
     const posted = await postMessage(fixture, channelId, { body: '第一句' });
 
-    const frame = await stream.next();
-    assert.ok(frame !== null, 'the connection should stay open');
-    assert.equal(frame.event, 'message.created');
+    const frame = await nextOfType(stream, 'message.created');
     assert.deepEqual(JSON.parse(frame.data), {
       target_id: channelId,
       message_id: posted['id'],
@@ -305,17 +346,21 @@ test('a channel-level message read still answers and the stream carries nothing 
     assert.deepEqual(await listMessages(fixture, channelId), [], 'a read writes nothing');
 
     const posted = await postMessage(fixture, channelId, { body: '只有这一句' });
-    const frame = await stream.next();
-    assert.ok(frame !== null);
-    assert.equal(frame.event, 'message.created');
+    const frame = await nextOfType(stream, 'message.created');
     assert.deepEqual(JSON.parse(frame.data), {
       target_id: channelId,
       message_id: posted['id'],
       seq: 1,
     });
 
-    // No second frame: a read never produces an event.
-    await assert.rejects(stream.next(300), /no SSE frame within/);
+    // No second message.created frame: a read never produces one. The frames
+    // the channel's own create published are not message reads.
+    const extra = await drainFrames(stream, 300);
+    assert.equal(
+      extra.filter((candidate) => candidate.event === 'message.created').length,
+      0,
+      `a read writes nothing; saw: ${extra.map((candidate) => candidate.event).join(', ')}`,
+    );
   } finally {
     await stream.close();
     await fixture.stop();
@@ -332,15 +377,14 @@ test('a replayed write (same client message id) announces nothing', async () => 
     const second = await postMessage(fixture, channelId, body);
     assert.equal(second['id'], first['id'], 'the replay returns the same message');
 
-    const frame = await stream.next();
-    assert.ok(frame !== null);
-    assert.equal(frame.event, 'message.created');
+    const frame = await nextOfType(stream, 'message.created');
     assert.equal((JSON.parse(frame.data) as Record<string, unknown>)['seq'], 1);
 
-    await assert.rejects(
-      stream.next(300),
-      /no SSE frame within/,
-      'a replay writes nothing, so it announces nothing',
+    const extra = await drainFrames(stream, 300);
+    assert.equal(
+      extra.filter((candidate) => candidate.event === 'message.created').length,
+      0,
+      'a replay writes nothing, so it announces no message',
     );
     assert.equal((await listMessages(fixture, channelId)).length, 1);
   } finally {
@@ -359,26 +403,20 @@ test('a round streams its reply as message.created and its outcome as round.outc
 
     const human = await postMessage(fixture, channelId, { body: '大家怎么看' });
 
-    const first = await stream.next();
-    assert.ok(first !== null);
-    assert.equal(first.event, 'message.created');
+    const first = await nextOfType(stream, 'message.created');
     assert.deepEqual(JSON.parse(first.data), {
       target_id: channelId,
       message_id: human['id'],
       seq: 1,
     });
 
-    const reply = await stream.next();
-    assert.ok(reply !== null);
-    assert.equal(reply.event, 'message.created');
+    const reply = await nextOfType(stream, 'message.created');
     const replyData = JSON.parse(reply.data) as Record<string, unknown>;
     assert.equal(replyData['target_id'], channelId);
     assert.equal(replyData['seq'], 2, 'the round reply is the second message in the target');
     assertNoEventId(reply);
 
-    const outcome = await stream.next();
-    assert.ok(outcome !== null);
-    assert.equal(outcome.event, 'round.outcome');
+    const outcome = await nextOfType(stream, 'round.outcome');
     assert.deepEqual(JSON.parse(outcome.data), {
       target_id: channelId,
       member_id: agent,
@@ -598,5 +636,83 @@ test('an open subscription does not hold the server open: SIGTERM still shuts it
   } finally {
     await stream.close();
     await removeTempDir(fixture.dataDir);
+  }
+});
+
+test('member.status, task.changed and workspace.changed publish after their writes commit', async () => {
+  const fixture = await startEventsFixture('allibot-events-workspace-frames-', {
+    provider: 'reply',
+    env: { OPENAI_API_KEY: 'sk-events-test' },
+  });
+  const stream = await SseConnection.open(`${fixture.base}/api/events`);
+  try {
+    const channelId = await createChannel(fixture);
+    const channelChanged = await nextOfType(stream, 'workspace.changed');
+    assert.deepEqual(JSON.parse(channelChanged.data), { source: 'channel' });
+
+    const agent = await createAgent(fixture, '甲');
+    const agentFrames = [await stream.next(), await stream.next()];
+    const workspaceAgent = agentFrames.find((frame) => frame?.event === 'workspace.changed');
+    assert.ok(workspaceAgent !== undefined && workspaceAgent !== null);
+    assert.deepEqual(JSON.parse(workspaceAgent.data), { source: 'agent' });
+    const offline = agentFrames.find((frame) => frame?.event === 'member.status');
+    assert.ok(offline !== undefined && offline !== null);
+    assert.deepEqual(JSON.parse(offline.data), { member_id: agent, status: 'offline' });
+
+    const settings = await fetch(`${fixture.base}/api/settings`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ density: 'compact' }),
+    });
+    assert.equal(settings.status, 200);
+    const settingsChanged = await nextOfType(stream, 'workspace.changed');
+    assert.deepEqual(JSON.parse(settingsChanged.data), { source: 'settings' });
+
+    const taskResponse = await postJson(fixture, '/api/tasks', {
+      channel_id: channelId,
+      title: '发帧任务',
+    });
+    assert.equal(taskResponse.status, 201);
+    const task = await readJson(taskResponse);
+    const created = await nextOfType(stream, 'task.changed');
+    assert.deepEqual(JSON.parse(created.data), {
+      task_id: task['id'],
+      target_id: task['target_id'],
+      status: 'todo',
+    });
+
+    const transition = await fetch(`${fixture.base}/api/tasks/${String(task['id'])}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'in_progress' }),
+    });
+    assert.equal(transition.status, 200);
+    const changed = await nextOfType(stream, 'task.changed');
+    assert.deepEqual(JSON.parse(changed.data), {
+      task_id: task['id'],
+      target_id: task['target_id'],
+      status: 'in_progress',
+    });
+
+    // Make the Agent available, then a human message moves its point through
+    // working -> online.
+    const consent = await postJson(fixture, '/api/remote-data-flow/openai/consent', {});
+    assert.equal(consent.status, 200);
+    await joinChannel(fixture, channelId, agent);
+    await postMessage(fixture, channelId, { body: '请回应' });
+
+    const statuses: string[] = [];
+    const deadline = Date.now() + 8_000;
+    while (statuses.length < 2 && Date.now() < deadline) {
+      const frame = await nextOfType(stream, 'member.status');
+      const data = JSON.parse(frame.data) as Record<string, unknown>;
+      if (data['member_id'] === agent) {
+        statuses.push(String(data['status']));
+      }
+    }
+    assert.deepEqual(statuses, ['working', 'online']);
+  } finally {
+    await stream.close();
+    await fixture.stop();
   }
 });

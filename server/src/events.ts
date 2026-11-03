@@ -129,6 +129,48 @@ export function publishRoundOutcome(outcome: {
   });
 }
 
+/**
+ * The frame a status point transition produces. `status` is the transition the
+ * writer just committed (working / online / error / offline); the reading that
+ * carries reasons and config stays `GET /api/workspace`, so this frame only
+ * tells a subscriber that the point moved.
+ */
+export function publishMemberStatus(change: {
+  memberId: string;
+  status: string;
+}): void {
+  eventHub.publish({
+    event: 'member.status',
+    data: { member_id: change.memberId, status: change.status },
+  });
+}
+
+/** The frame a task row change produces; `target_id` is the task thread. */
+export function publishTaskChanged(change: {
+  taskId: string;
+  targetId: string;
+  status: string;
+}): void {
+  eventHub.publish({
+    event: 'task.changed',
+    data: { task_id: change.taskId, target_id: change.targetId, status: change.status },
+  });
+}
+
+/**
+ * The frame a workspace-reading change produces. It names only the write
+ * surface that changed; subscribers re-read `GET /api/workspace` rather than
+ * assembling a reading from frames.
+ */
+export function publishWorkspaceChanged(change: {
+  source: 'channel' | 'dm' | 'settings' | 'agent';
+}): void {
+  eventHub.publish({
+    event: 'workspace.changed',
+    data: { source: change.source },
+  });
+}
+
 /** How long one connection lives before the server rotates it (30 minutes). */
 export const DEFAULT_SSE_LIFETIME_MS = 30 * 60 * 1000;
 

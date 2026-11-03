@@ -109,12 +109,27 @@ export function runNodeScript(
 
 export async function startServer(
   dataDir: string,
-  options: { env?: NodeJS.ProcessEnv; port?: number; args?: readonly string[] } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    port?: number;
+    args?: readonly string[];
+    /** Start without injecting the test double (the production default). */
+    useProductionProvider?: boolean;
+  } = {},
 ): Promise<RunningServer> {
   const port = options.port ?? 0;
+  // Tests inject the scripted double explicitly (D4.3). The production default
+  // is the real model adapter, so a test that wants the double — or any
+  // `--scripted-*` option — gets `--provider scripted` unless it selected a
+  // provider itself.
+  const requested = options.args ?? [];
+  const args =
+    options.useProductionProvider === true || requested.includes('--provider')
+      ? requested
+      : ['--provider', 'scripted', ...requested];
   const child = spawn(
     process.execPath,
-    [CLI_ENTRY, 'serve', '--data-dir', dataDir, '--port', String(port), ...(options.args ?? [])],
+    [CLI_ENTRY, 'serve', '--data-dir', dataDir, '--port', String(port), ...args],
     {
       cwd: REPO_ROOT,
       env: buildEnv(options.env),

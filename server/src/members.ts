@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { AGENT_PROVIDERS, type AgentView, type OwnerView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
+import { publishMemberStatus, publishWorkspaceChanged } from './events.js';
 import { credentialStatus, parseModelIdentifier } from './providers.js';
 import type { InFlightRounds } from './rounds.js';
 import { readStatusPoint } from './status.js';
@@ -153,6 +154,10 @@ export function createAgent(
   if (agent === null) {
     throw new Error('created Agent could not be read back');
   }
+  // The Agent list and the status points both moved; the frames carry the
+  // committed facts only.
+  publishWorkspaceChanged({ source: 'agent' });
+  publishMemberStatus({ memberId: agent.id, status: agent.status });
   return agent;
 }
 
@@ -200,6 +205,8 @@ export function updateAgent(
   if (agent === null) {
     throw new Error('updated Agent could not be read back');
   }
+  publishWorkspaceChanged({ source: 'agent' });
+  publishMemberStatus({ memberId: agent.id, status: agent.status });
   return agent;
 }
 
@@ -232,6 +239,7 @@ export function softDeleteAgent(db: Database.Database, id: string): void {
   if (!remove()) {
     throw ApiFailure.notFound(`agent not found: ${id}`);
   }
+  publishWorkspaceChanged({ source: 'agent' });
 }
 
 interface CreateInput {
