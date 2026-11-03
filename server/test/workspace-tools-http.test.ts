@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -321,6 +322,44 @@ test('a vanished root fails the round with a readable reason, zero tool calls an
       });
     }
   } finally {
+    await fixture.stop();
+  }
+});
+
+test('an unreadable runtime root also reads workspace-root-missing and fails the round', async () => {
+  const fixture = await startFixture('allibot-workspace-tools-unreadable-');
+  try {
+    const agentId = await createAgent(fixture);
+    const channelId = await createChannel(fixture);
+    await joinChannel(fixture, channelId, agentId);
+    const project = path.join(fixture.tmp, 'project');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(path.join(project, 'notes.txt'), 'UNREADABLE-ROOT\n');
+    await configureRoot(fixture, channelId, project);
+    chmodSync(project, 0o000);
+
+    const membersResponse = await fetch(`${fixture.base}/api/targets/${channelId}/members`);
+    const members = (await readJson(membersResponse))['members'] as Record<string, unknown>[];
+    for (const member of members) {
+      assert.deepEqual(member['workspace_status'], {
+        backend: 'local',
+        available: false,
+        reason: 'workspace-root-missing',
+      });
+    }
+
+    await sendMessage(fixture, channelId, '根不可读');
+    const rows = await messages(fixture, channelId);
+    assert.equal(rows.length, 1, 'the round failed before the provider produced a reply');
+    const outcome = roundOutcome(fixture.dataDir, agentId, channelId);
+    assert.equal(outcome?.['status'], 'failed');
+    assert.match(outcome?.['reason'] as string, /workspace-root-missing/);
+  } finally {
+    // Restore the mode so the temp-directory cleanup can remove the tree.
+    const project = path.join(fixture.tmp, 'project');
+    if (existsSync(project)) {
+      chmodSync(project, 0o700);
+    }
     await fixture.stop();
   }
 });
