@@ -3,6 +3,9 @@ import {
   type ChannelConfigPatch,
   type Locale,
   type PlanRunView,
+  type SopDefinitionCreate,
+  type SopDefinitionView,
+  type SopRunView,
   type TargetMemberView,
   type TeamRunView,
   type WorkspaceView,
@@ -10,6 +13,7 @@ import {
 import { createElement, type ReactNode } from 'react';
 import { ChannelConfigPanel } from './ChannelConfigPanel.ts';
 import { PlanPanel } from './PlanPanel.ts';
+import { SopPanel } from './SopPanel.ts';
 import { TeamRunsPanel } from './TeamRunsPanel.ts';
 import { readChannel, readTargetContext, type TargetKind } from './model.ts';
 import type { WorkspacePanel } from './shell-state.ts';
@@ -27,6 +31,13 @@ export interface ContextPanelProps {
   teamRuns?: readonly TeamRunView[];
   /** The selected target's Plan reading, when the shell has read it. */
   plans?: readonly PlanRunView[];
+  /** The selected channel's SOP definitions, when the shell has read them. */
+  sopDefinitions?: readonly SopDefinitionView[];
+  /** The SOP run snapshots, keyed by definition id. */
+  sopRuns?: Readonly<Record<string, readonly SopRunView[]>>;
+  /** The owner's SOP writes; both go through the host, never this panel. */
+  onCreateSop?: (input: SopDefinitionCreate) => void | Promise<void>;
+  onStartSop?: (definitionId: string) => void | Promise<void>;
   onOpenPanel?: (panel: WorkspacePanel) => void;
 }
 
@@ -57,6 +68,10 @@ export function ContextPanel({
   onChannelConfigChange,
   teamRuns,
   plans,
+  sopDefinitions,
+  sopRuns,
+  onCreateSop,
+  onStartSop,
   onOpenPanel,
 }: ContextPanelProps) {
   const context = readTargetContext(workspace, targetId);
@@ -142,6 +157,17 @@ export function ContextPanel({
                 channels: workspace.channels,
               })
             : null,
+          channel === null
+            ? null
+            : createElement(SopPanel, {
+                channel,
+                definitions: sopDefinitions ?? [],
+                runsByDefinition: sopRuns,
+                members: channelMembers,
+                locale,
+                onCreate: onCreateSop,
+                onStart: onStartSop,
+              }),
           showsPlan
             ? createElement(PlanPanel, {
                 plans: plans ?? [],

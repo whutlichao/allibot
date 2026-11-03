@@ -2,6 +2,9 @@ import {
   t,
   type ChannelConfigPatch,
   type PlanRunView,
+  type SopDefinitionCreate,
+  type SopDefinitionView,
+  type SopRunView,
   type TargetMemberView,
   type TeamRunView,
   type WorkspaceSettingsView,
@@ -31,12 +34,15 @@ import {
   readPlanUpdateFrame,
   readPlans,
 } from './workspace/plans.ts';
+import { readSopDefinitions, readSopRuns } from './workspace/sops.ts';
 import {
   deleteAgent,
+  createSopDefinition,
   joinChannelMember,
   patchChannelConfig,
   readChannelMembers,
   saveAgentConfig,
+  startSopRun,
 } from './workspace-actions.ts';
 import { applyJoinResult } from './workspace/member-reading.ts';
 
@@ -65,6 +71,10 @@ let currentChannelMembers: Record<string, TargetMemberView[]> = {};
 let currentTeamRuns: Record<string, readonly TeamRunView[]> = {};
 /** 当前 target 的 Plan 读数；plan 是独立读数，不进消息流。 */
 let currentPlans: Record<string, readonly PlanRunView[]> = {};
+/** 当前频道的 SOP 定义；SOP 是频道级流程，不是消息或任务。 */
+let currentSopDefinitions: Record<string, readonly SopDefinitionView[]> = {};
+/** SOP run 读数，按 definition id 归档；pending run 由启动响应带回。 */
+let currentSopRuns: Record<string, readonly SopRunView[]> = {};
 
 async function loadChannelMembers(channelId: string): Promise<void> {
   currentChannelMembers = {
@@ -85,6 +95,53 @@ async function loadPlans(targetId: string): Promise<void> {
     ...currentPlans,
     [targetId]: await readPlans(fetch, targetId),
   };
+}
+
+/**
+ * SOP 读数跟随频道选择 (D4.2): definitions are channel-scoped, and each
+ * definition's newest runs are one independent snapshot. The panel displays
+ * them read-only; nothing here enters the message stream.
+ */
+async function loadSops(channelId: string): Promise<void> {
+  const definitions = await readSopDefinitions(fetch, channelId);
+  currentSopDefinitions = { ...currentSopDefinitions, [channelId]: definitions };
+  const entries = await Promise.all(
+    definitions.map(
+      async (definition) => [definition.id, await readSopRuns(fetch, definition.id)] as const,
+    ),
+  );
+  const nextRuns = { ...currentSopRuns };
+  for (const [definitionId, runs] of entries) {
+    nextRuns[definitionId] = runs;
+  }
+  currentSopRuns = nextRuns;
+}
+
+/** 创建 SOP 定义：后端是正本，成功后重读该频道的定义与 run。 */
+async function createSopAction(input: SopDefinitionCreate): Promise<void> {
+  await createSopDefinition(fetch, input);
+  await loadSops(input.channel_id);
+  render();
+}
+
+/** 启动 SOP：202 的 pending run 立刻进读数，再重读该定义的 run 快照。 */
+async function startSopAction(definitionId: string): Promise<void> {
+  const run = await startSopRun(fetch, definitionId);
+  currentSopRuns = {
+    ...currentSopRuns,
+    [definitionId]: [
+      run,
+      ...(currentSopRuns[definitionId] ?? []).filter((row) => row.id !== run.id),
+    ],
+  };
+  render();
+  try {
+    const runs = await readSopRuns(fetch, definitionId);
+    currentSopRuns = { ...currentSopRuns, [definitionId]: runs };
+  } catch (error: unknown) {
+    console.error('sop run read failed', error);
+  }
+  render();
 }
 
 /** 加入频道：只有后端响应后行才移动；幂等重复时重读那张过期的成员表。 */
@@ -160,6 +217,8 @@ function render(saveFailed = false): void {
         channelMembers={currentChannelMembers}
         teamRuns={currentTeamRuns}
         plans={currentPlans}
+        sopDefinitions={currentSopDefinitions}
+        sopRuns={currentSopRuns}
         saveFailed={saveFailed}
         onSelectTarget={(targetId) => {
           currentTargetId = targetId;
@@ -186,6 +245,13 @@ function render(saveFailed = false): void {
                 console.error('plan read failed', error);
               });
           }
+          if (reading !== null && targetKind(reading, targetId) === 'channel') {
+            void loadSops(targetId)
+              .then(() => render())
+              .catch((error: unknown) => {
+                console.error('SOP read failed', error);
+              });
+          }
         }}
         onTaskTransition={(task, status) =>
           transitionTask(fetch, task, status)
@@ -202,6 +268,8 @@ function render(saveFailed = false): void {
         onJoinMember={joinChannelMemberAction}
         onSaveAgent={saveAgentAction}
         onChannelConfigChange={channelConfigAction}
+        onCreateSop={createSopAction}
+        onStartSop={startSopAction}
         onDeleteAgent={deleteAgentAction}
         onSettingsChange={(patch) => {
           // 后端是正本：先读返回值，再重渲染。
@@ -301,6 +369,13 @@ async function refreshWorkspace(): Promise<void> {
       await loadPlans(currentTargetId);
     } catch (error: unknown) {
       console.error('plan read failed', error);
+    }
+  }
+  if (currentTargetId !== null && targetKind(reading, currentTargetId) === 'channel') {
+    try {
+      await loadSops(currentTargetId);
+    } catch (error: unknown) {
+      console.error('SOP read failed', error);
     }
   }
   render();
