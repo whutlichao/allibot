@@ -394,8 +394,20 @@ function sendAttachment(
     'content-length': attachment.bytes.length,
     'content-disposition':
       `attachment; filename="${fallback}"; ` +
-      `filename*=UTF-8''${encodeURIComponent(attachment.filename)}`,
+      `filename*=UTF-8''${encodeRfc5987(attachment.filename)}`,
     'x-content-type-options': 'nosniff',
   });
   response.end(attachment.bytes);
+}
+
+/**
+ * RFC 5987 extended parameter value: percent-encode everything outside
+ * `attr-char`. `encodeURIComponent` leaves `'()*` alone, and a raw `'` would
+ * end the `UTF-8''` prefix early.
+ */
+function encodeRfc5987(value: string): string {
+  return encodeURIComponent(value).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 }

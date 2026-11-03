@@ -59,7 +59,7 @@ export async function uploadAttachment(
   const storagePath = randomUUID();
   const storedPath = attachmentStoragePath(dataDir, storagePath);
 
-  mkdirSync(path.dirname(storedPath), { recursive: true });
+  mkdirSync(path.join(dataDir, 'attachments'), { recursive: true });
   // `wx` refuses to overwrite: the opaque name is fresh, and a collision must
   // abort rather than replace someone else's bytes.
   writeFileSync(storedPath, file.bytes, { flag: 'wx' });

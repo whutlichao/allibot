@@ -232,6 +232,22 @@ test('an upload is a draft: the bytes land in the data dir and no read path expo
     const noFilename = await upload(fixture, [{ name: 'file', data: 'x' }]);
     assert.equal(noFilename.status, 400, 'a part without a filename is not a file object');
     assert.equal(errorCode(await readJson(noFilename)), 'validation_failed');
+
+    // The user filename never decides where bytes land: a traversal attempt
+    // keeps only its last path component, and the bytes stay under attachments/.
+    const traversal = await upload(fixture, [
+      { name: 'file', filename: '../../escape.txt', contentType: 'text/plain', data: 'x' },
+    ]);
+    assert.equal(traversal.status, 201, await traversal.clone().text());
+    const traversalId = (await readJson(traversal))['id'] as string;
+    const traversalRow = attachmentRow(fixture.dataDir, traversalId);
+    assert.ok(traversalRow !== undefined);
+    assert.equal(traversalRow.filename, 'escape.txt', 'path components are stripped from the name');
+    assert.equal(
+      existsSync(path.resolve(fixture.dataDir, 'escape.txt')),
+      false,
+      'nothing is written outside attachments/',
+    );
   } finally {
     await fixture.stop();
   }
@@ -280,6 +296,29 @@ test('binding a draft to a message exposes its metadata and serves the same byte
     assert.equal(binary.status, 200);
     assert.match(binary.headers.get('content-type') ?? '', /^application\/octet-stream/);
     assert.equal(sha256(Buffer.from(await binary.arrayBuffer())), sha256(secondBytes));
+
+    // A filename carrying an apostrophe, a space and a parenthesis must not
+    // break the RFC 5987 extended parameter or the quoted fallback.
+    const trickyName = "报告 'v2' (最终).txt";
+    const trickyId = await uploadFile(fixture, trickyName, fixtureBytes('tricky'), 'text/plain');
+    const trickyMessage = await postJson(fixture, `/api/targets/${channelId}/messages`, {
+      body: '难缠的文件名',
+      attachment_ids: [trickyId],
+    });
+    assert.equal(trickyMessage.status, 201, await trickyMessage.clone().text());
+    const trickyDownload = await fetch(`${fixture.base}/api/attachments/${trickyId}`);
+    assert.equal(trickyDownload.status, 200);
+    const trickyDisposition = trickyDownload.headers.get('content-disposition') ?? '';
+    assert.match(
+      trickyDisposition,
+      /filename\*=UTF-8''%E6%8A%A5%E5%91%8A%20%27v2%27%20%28%E6%9C%80%E7%BB%88%29\.txt$/,
+      `the extended filename is percent-encoded: ${trickyDisposition}`,
+    );
+    assert.match(
+      trickyDisposition,
+      /^attachment; filename="[^"\\]*"; /,
+      'the fallback filename stays quoted and free of header-breaking characters',
+    );
 
     // The bytes are still where the data directory backup unit expects them.
     const storagePath = attachmentRow(fixture.dataDir, firstId)?.storage_path ?? '';
@@ -351,6 +390,23 @@ test('a second binding is a conflict, unknown ids fail validation, and a failed 
       attachment_ids: [freshId],
     });
     assert.equal(stillABinding.status, 201, 'the draft is still bindable after the refusals');
+
+    // A retry of the same client_message_id is an idempotent replay: it returns
+    // the message the attachment is already bound to instead of conflicting.
+    const replayBody = { body: '幂等重发', client_message_id: 'attachment-replay' };
+    const replayDraft = await uploadFile(fixture, '幂等.txt', bytes, 'text/plain');
+    const replayFirst = await postJson(fixture, `/api/targets/${channelA}/messages`, {
+      ...replayBody,
+      attachment_ids: [replayDraft],
+    });
+    assert.equal(replayFirst.status, 201, await replayFirst.clone().text());
+    const replaySecond = await postJson(fixture, `/api/targets/${channelA}/messages`, {
+      ...replayBody,
+      attachment_ids: [replayDraft],
+    });
+    assert.equal(replaySecond.status, 201, await replaySecond.clone().text());
+    assert.equal((await readJson(replaySecond))['id'], (await readJson(replayFirst))['id']);
+    assert.equal(countAttachments(fixture.dataDir), 3, 'a replay uploads and binds nothing new');
   } finally {
     await fixture.stop();
   }
