@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 export interface MigrationStep {
   readonly to: number;
@@ -439,6 +439,29 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
           used INTEGER NOT NULL CHECK (used >= 0),
           limit_value INTEGER NOT NULL CHECK (limit_value IN (3, 5, 10)),
           CHECK (used <= limit_value)
+        );
+      `);
+    },
+  },
+  {
+    // The provider ticket merged after the budget step; it lands as the next
+    // strict +1 of the chain.
+    to: 11,
+    apply(db) {
+      db.exec(`
+        -- The remote data flow consent (远端数据流告知): one row per confirmed
+        -- scope, recording only when the owner confirmed it. It deliberately
+        -- has no connection parameters and no credential of any kind — the
+        -- provider is named by its scope_id, and the credential itself is read
+        -- from an environment variable at call time, never stored.
+        --
+        -- The key is the pair: a provider is confirmed once, and a second
+        -- consent for the same scope is not a new fact.
+        CREATE TABLE remote_consent_scope (
+          scope_kind TEXT NOT NULL CHECK (scope_kind = 'model'),
+          scope_id TEXT NOT NULL CHECK (scope_id IN ('anthropic', 'openai')),
+          confirmed_at TEXT NOT NULL,
+          PRIMARY KEY (scope_kind, scope_id)
         );
       `);
     },

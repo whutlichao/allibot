@@ -161,4 +161,31 @@ export const ZH_CN = {
     params: ['count'],
   },
   'memory.prompt.card': { text: '- {content}', params: ['content'] },
+
+  // 远端数据流告知（Remote Data Flow Consent，D4.2 / R1 词条 35）：清单逐条列出
+  // 会离开本机的数据面与接收方，取得一次确认；未确认时绝不发起远端调用。
+  // 本仓不做应用层端到端加密，文案不声称 E2EE。
+  'remoteFlow.surface.messageBody': { text: '消息正文', params: [] },
+  'remoteFlow.surface.authorName': { text: '发送者显示名', params: [] },
+  'remoteFlow.surface.targetName': {
+    text: 'target 的显示名（频道名称与描述、DM 对方显示名、任务标题）',
+    params: [],
+  },
+  'remoteFlow.surface.mentionedNames': { text: '被点名成员的显示名', params: [] },
+  'remoteFlow.surface.receiver': { text: '接收方（模型 provider 的远端端点）', params: [] },
+  // 轮次 reason 里的三种不可用键：未确认远端告知（consent）、缺凭证
+  // （credential）与未配置模型（model）各自可读，且都声明「零远端调用」。
+  'round.consent.missing': {
+    text: '未确认远端数据流告知（consent，模型 provider：{provider}）：本轮不发起任何远端调用，也没有回复',
+    params: ['provider'],
+  },
+  'round.credential.missing': {
+    text: '缺凭证（credential，环境变量 {env} 未设置）：本轮不发起任何远端调用，也没有回复',
+    params: ['env'],
+  },
+  'round.model.missing': {
+    text: '未配置模型（model，没有 provider:model 可解析）：本轮不发起任何远端调用，也没有回复',
+    params: [],
+  },
+  'provider.call.failed': { text: '模型调用失败：{message}', params: ['message'] },
 } as const satisfies Record<string, CatalogEntry>;

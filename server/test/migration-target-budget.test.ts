@@ -45,14 +45,14 @@ test('migrating an empty data dir adds the per-target budget table', async () =>
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 10);
+    assert.equal(readSchemaVersion(dataDir), 11);
     assert.deepEqual(columnNames(dataDir, 'target_budget'), TARGET_BUDGET_COLUMNS);
     assert.equal(countRows(dataDir, 'target_budget'), 0, 'the migration seeds no budget rows');
 
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 10);
+    assert.equal(entries[0]?.['to'], 11);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -149,7 +149,7 @@ test('a version 9 data dir upgrades to version 10 with a backup that keeps chann
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 10);
+    assert.equal(readSchemaVersion(dataDir), 11);
     assert.deepEqual(columnNames(dataDir, 'target_budget'), TARGET_BUDGET_COLUMNS);
     assert.equal(countRows(dataDir, "message WHERE id = 'kept-message'"), 1);
     assert.equal(countRows(dataDir, 'target_budget'), 0, 'the upgrade seeds no budget row');
@@ -179,7 +179,7 @@ test('a version 9 data dir upgrades to version 10 with a backup that keeps chann
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 9);
-    assert.equal(last?.['to'], 10);
+    assert.equal(last?.['to'], 11);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);
