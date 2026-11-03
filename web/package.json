@@ -15,7 +15,8 @@
     "test:agui-live": "node --import ./test/support/register-css.mjs --test test/copilotkit-contract.test.ts test/workspace-shell.test.ts",
     "test:task-board": "node --import ./test/support/register-css.mjs --test test/task-board.test.ts",
     "test:workspace-shell": "node --import ./test/support/register-css.mjs --test test/workspace-shell.test.ts",
-    "test:agent-detail": "node --import ./test/support/register-css.mjs --test test/agent-detail.test.ts"
+    "test:agent-detail": "node --import ./test/support/register-css.mjs --test test/agent-detail.test.ts",
+    "test:team-config": "node --import ./test/support/register-css.mjs --test test/team-config.test.ts"
   },
   "dependencies": {
     "@allibot/shared": "*",

@@ -119,6 +119,7 @@ function channel(overrides: Partial<ChannelView> & Pick<ChannelView, 'id' | 'nam
   return {
     description: '',
     mode: 'autonomous',
+    team: { leader_member_id: null, status: 'valid', reason: null },
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,
@@ -146,6 +147,7 @@ function task(overrides: Partial<TaskView> = {}): TaskView {
     claimed_at: '2026-11-03T00:00:00.000Z',
     created_at: '2026-11-03T00:00:00.000Z',
     updated_at: '2026-11-03T00:00:00.000Z',
+    channel_mode: 'autonomous',
     allowed_transitions: ['in_review', 'closed'],
     message_count: 2,
     unread_count: 1,

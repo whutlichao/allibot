@@ -1,4 +1,9 @@
-import type { AgentView, TargetMemberView } from '@allibot/shared';
+import type {
+  AgentView,
+  ChannelConfigPatch,
+  ChannelView,
+  TargetMemberView,
+} from '@allibot/shared';
 
 /**
  * 工作台的人类面写路径与按需读数。它们只被显式动作调用（加入频道、
@@ -88,4 +93,22 @@ export async function deleteAgent(
   if (!response.ok) {
     throw new Error(`DELETE agent ${agentId} failed with ${response.status}`);
   }
+}
+
+/**
+ * The channel configuration write (mode / leader). Both controls send the same
+ * shape to the same endpoint: the backend decides validity, archival and
+ * leader-change propagation.
+ */
+export async function patchChannelConfig(
+  fetchImpl: typeof fetch,
+  channelId: string,
+  patch: ChannelConfigPatch,
+): Promise<ChannelView> {
+  const response = await fetchImpl(`/api/channels/${encodeURIComponent(channelId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  return readJson<ChannelView>(response, `PATCH channel ${channelId}`);
 }

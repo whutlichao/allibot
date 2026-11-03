@@ -1,5 +1,6 @@
 import {
   t,
+  type ChannelConfigPatch,
   type TargetMemberView,
   type TaskStatus,
   type TaskView,
@@ -29,6 +30,7 @@ export interface AppProps {
   onJoinMember?: AsyncAction2<string, string>;
   onSaveAgent?: AsyncAction2<string, { system_prompt: string }>;
   onDeleteAgent?: AsyncAction1<string>;
+  onChannelConfigChange?: AsyncAction2<string, ChannelConfigPatch>;
   onLiveEvent?: (event: LiveEvent) => void;
 }
 
@@ -53,6 +55,7 @@ export function App({
   onJoinMember,
   onSaveAgent,
   onDeleteAgent,
+  onChannelConfigChange,
   onLiveEvent,
 }: AppProps) {
   if (workspace !== undefined) {
@@ -68,6 +71,7 @@ export function App({
       onJoinMember,
       onSaveAgent,
       onDeleteAgent,
+      onChannelConfigChange,
       saveFailed,
       onLiveEvent,
     });

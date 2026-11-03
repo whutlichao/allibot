@@ -1,5 +1,6 @@
 import {
   t,
+  type ChannelConfigPatch,
   type TargetMemberView,
   type WorkspaceSettingsView,
   type WorkspaceView,
@@ -19,6 +20,7 @@ import { shouldRefreshWorkspace } from './workspace/message-sync.ts';
 import {
   deleteAgent,
   joinChannelMember,
+  patchChannelConfig,
   readChannelMembers,
   saveAgentConfig,
 } from './workspace-actions.ts';
@@ -83,6 +85,19 @@ async function saveAgentAction(
   await refreshWorkspace();
 }
 
+/**
+ * The team configuration write (mode / leader): one PATCH, then re-read the
+ * one workspace reading. The backend owns validity and leader propagation; the
+ * shell never writes optimistically.
+ */
+async function channelConfigAction(
+  channelId: string,
+  patch: ChannelConfigPatch,
+): Promise<void> {
+  await patchChannelConfig(fetch, channelId, patch);
+  await refreshWorkspace();
+}
+
 async function deleteAgentAction(agentId: string): Promise<void> {
   await deleteAgent(fetch, agentId);
   await refreshWorkspace();
@@ -138,6 +153,7 @@ function render(saveFailed = false): void {
         }
         onJoinMember={joinChannelMemberAction}
         onSaveAgent={saveAgentAction}
+        onChannelConfigChange={channelConfigAction}
         onDeleteAgent={deleteAgentAction}
         onSettingsChange={(patch) => {
           // 后端是正本：先读返回值，再重渲染。

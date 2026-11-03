@@ -1,5 +1,6 @@
 import {
   t,
+  type ChannelConfigPatch,
   type Locale,
   type TargetMemberView,
   type TaskStatus,
@@ -61,6 +62,8 @@ export interface WorkspaceShellProps {
   onJoinMember?: AsyncAction2<string, string>;
   /** Save the Agent's system prompt; resolves after the host re-read the Agent. */
   onSaveAgent?: AsyncAction2<string, { system_prompt: string }>;
+  /** Read the channel's team config change; resolves after the host re-read it. */
+  onChannelConfigChange?: AsyncAction2<string, ChannelConfigPatch>;
   /** Soft delete the Agent; resolves after the host re-read the workspace. */
   onDeleteAgent?: AsyncAction1<string>;
   saveFailed?: boolean;
@@ -113,6 +116,7 @@ export function WorkspaceShell({
   onJoinMember,
   onSaveAgent,
   onDeleteAgent,
+  onChannelConfigChange,
   saveFailed = false,
   onLiveEvent,
 }: WorkspaceShellProps) {
@@ -281,6 +285,11 @@ export function WorkspaceShell({
       workspace,
       targetId: selectedTargetId,
       locale,
+      channelMembers: selectedMembers,
+      onChannelConfigChange:
+        selectedTargetId === null || onChannelConfigChange === undefined
+          ? undefined
+          : (patch: ChannelConfigPatch) => onChannelConfigChange(selectedTargetId, patch),
       onOpenPanel: openPanel,
     });
   } else if (drawer === 'members') {

@@ -95,6 +95,7 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
         name: '协作环',
         description: '',
         mode: 'autonomous',
+        team: { leader_member_id: null, status: 'valid', reason: null },
         response_budget_limit: 3,
         archived_at: null,
         deleted_at: null,
