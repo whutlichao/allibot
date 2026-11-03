@@ -1,0 +1,27 @@
+/*
+ * 产品扩展层：设计系统包之外声明的产品角色族。
+ *
+ * --selected* / --unread* / --warn* 是产品角色族（Role Family），
+ * 每个角色恰好一个色相；族名沿用旧名，新增档位只使用
+ * -fill / -deep / -graphic 后缀（不得使用 -light / -dark 别名）。
+ * 四档含义见 tokens.css 头部注释。
+ */
+:root {
+  /* 角色族 selected：紫相 */
+  --selected: hsl(262 80% 95%);
+  --selected-fill: hsl(262 65% 74%);
+  --selected-deep: hsl(262 60% 36%);
+  --selected-graphic: hsl(262 55% 52%);
+
+  /* 角色族 unread：青相 */
+  --unread: hsl(168 70% 92%);
+  --unread-fill: hsl(168 65% 62%);
+  --unread-deep: hsl(168 72% 24%);
+  --unread-graphic: hsl(168 55% 34%);
+
+  /* 角色族 warn：橙相 */
+  --warn: hsl(32 95% 92%);
+  --warn-fill: hsl(32 90% 68%);
+  --warn-deep: hsl(32 85% 28%);
+  --warn-graphic: hsl(32 80% 42%);
+}

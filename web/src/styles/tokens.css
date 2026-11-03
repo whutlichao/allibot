@@ -1,0 +1,49 @@
+/*
+ * 视觉契约（Visual Contract）：系统 token 层。
+ *
+ * 外部 allibot-design-system/ 包未 vendored 到本仓（本机不可得），
+ * 设计系统的 colors_and_type.css + tokens.css 无法直接加载；本文件是
+ * 它们承诺的 token 名与取值的仓内只读参照实现。token 名按名消费，
+ * 改名或删除都会打断下游全部消费点。
+ *
+ * 档位（Tier）：族名沿用旧名，四档按对比度用途分层——
+ *   淡底档 = 族名（只做背景提示，不做边界）
+ *   填充档 = -fill（族的本色，深墨文字压其上）
+ *   文字档 = -deep（同色相压深，≥4.5:1 可作正文）
+ *   图形档 = -graphic（同色相中档，≥3:1 可作焦点环、状态点、边界）
+ *
+ * 产品角色族（--selected* / --unread* / --warn*）由产品扩展层
+ * product-roles.css 声明，不在本文件内。
+ */
+:root {
+  /* 系统面 */
+  --bg: hsl(220 20% 97%);
+  --surface: hsl(0 0% 100%);
+  --panel: hsl(220 16% 95%);
+  --panel-2: hsl(220 14% 92%);
+  --fg: hsl(222 30% 14%);
+  --muted: hsl(220 12% 42%);
+  --faint: hsl(220 10% 62%);
+  --border: hsl(220 14% 88%);
+  --border-strong: hsl(220 14% 76%);
+  --on-accent: hsl(222 30% 14%);
+
+  /* 角色族 accent：蓝相 */
+  --accent: hsl(214 90% 94%);
+  --accent-fill: hsl(214 80% 72%);
+  --accent-deep: hsl(214 80% 32%);
+  --accent-graphic: hsl(214 70% 48%);
+
+  /* 状态点：只表达后端事实，不参与头像色位或角色族 */
+  --online: hsl(150 60% 32%);
+  --working: hsl(205 80% 42%);
+  --error: hsl(4 72% 46%);
+  --offline: hsl(220 10% 55%);
+
+  /* 头像色位：五个确定性色相，只用于识别同一成员 */
+  --av-0: hsl(300 45% 42%);
+  --av-1: hsl(55 75% 30%);
+  --av-2: hsl(185 65% 34%);
+  --av-3: hsl(340 60% 44%);
+  --av-4: hsl(100 40% 36%);
+}
