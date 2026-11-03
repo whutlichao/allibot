@@ -20,7 +20,7 @@ import { liveMemberClause } from './members.js';
  * rewrites history).
  */
 
-/** The wake reason's readable text; the reason only picks diagnostics copy. */
+/** The readable text of a wake reason; the reason only picks diagnostics copy. */
 function wakeText(db: Database.Database, reason: WakeReason): string {
   switch (reason) {
     case 'channel-message':
