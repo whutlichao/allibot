@@ -144,9 +144,9 @@ const USAGE =
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
   '[--scripted-report-calls] [--scripted-report-team] [--scripted-transfer-member <member-id>] ' +
   '[--scripted-team-assign-member <member-id>] [--scripted-team-assign-instruction <text>] ' +
-  '[--scripted-team-member-fail] ' +
+  '[--scripted-team-member-fail] [--scripted-shell-command <command>] ' +
   '[--fixed-clock <ISO-8601>] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>] ' +
-  '[--approval-timeout-ms <ms>]';
+  '[--approval-timeout-ms <ms>] [--shell-env-name <NAME>]';
 
 export function parseCliArgs(
   argv: readonly string[],
