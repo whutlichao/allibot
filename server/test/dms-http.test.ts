@@ -489,14 +489,20 @@ test('a pierced delivery at the DM ceiling wakes nobody and records budget-exhau
       { epoch_seq: 0, used: 3, limit_value: 3 },
       'the suppressed message spends no further jump',
     );
-    const outcomes = queryAll<{ base_seq: number; status: string; reason: string }>(
+    const outcomes = queryAll<{ member_id: string; base_seq: number; status: string; reason: string }>(
       fixture.dataDir,
-      'SELECT base_seq, status, reason FROM round_outcome WHERE target_id = ? ORDER BY rowid',
+      'SELECT member_id, base_seq, status, reason FROM round_outcome WHERE target_id = ? ORDER BY rowid',
       [dm.id],
     );
     const suppressed = outcomes.filter((row) => row.status === 'budget-exhausted');
     assert.equal(suppressed.length, 1, 'one budget-exhausted row for the suppressed pierce');
     assert.equal(suppressed[0]?.base_seq, 4, 'the fourth Agent message is the suppressed one');
+    assert.equal(suppressed[0]?.member_id, third, 'the suppressed member is the pierced third Agent');
+    assert.deepEqual(
+      outcomes.filter((row) => row.status !== 'budget-exhausted').map((row) => row.base_seq),
+      [1, 2, 3],
+      'the three delivered pierced wakes ran their round; the suppressed one did not',
+    );
     assert.ok(
       suppressed[0]?.reason.startsWith('预算耗尽'),
       `the reason is the readable budget-exhausted copy: ${suppressed[0]?.reason}`,

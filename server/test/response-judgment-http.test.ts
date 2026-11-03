@@ -276,8 +276,8 @@ test('a non-definite round that declares silence stores the structured silent st
   }
 
   // The DM face has no definite signal for an Agent-authored message either;
-  // the DM itself is created by its own ticket (#22), so the fixture writes
-  // exactly the rows that write path owns.
+  // the fixture writes the same rows the DM write path owns, so the round's
+  // response judgment can be observed on the DM face without a full creation.
   const dmFixture = await startFixture('allibot-judge-silent-dm-', 'ignore');
   try {
     const peer = await createAgent(dmFixture, '私信对象');

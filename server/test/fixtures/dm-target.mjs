@@ -2,11 +2,10 @@ import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 
 /**
- * Test-only fixture: a DM target. #22 (私信) has not landed, so there is no
- * HTTP path that creates one; this fixture writes exactly the rows that DM
- * write path will own — one `target` row of kind 'dm' and the two
- * `target_member` rows (owner + the Agent) — so the response-judgment ticket
- * can observe the DM face without implementing the DM ticket.
+ * Test-only fixture: a DM target. `POST /api/dms` owns this write now (#22);
+ * this fixture stays for tests that seed a DM directly rather than through the
+ * process, and it writes exactly the rows that write path owns — one `target`
+ * row of kind 'dm' and the two `target_member` rows (owner + the Agent).
  *
  * `systemBody` writes one owner-authored system record (seq 1) into the DM,
  * the way a reminder-due or task-pointer record would: a wake can then point
