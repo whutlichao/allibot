@@ -20,12 +20,18 @@ import type { RoundInput, RoundProvider, RoundResult } from './agent-seam.js';
  * that input from. It is a capability of the double, not a production branch.
  *
  * `reportContext` appends a report of the context window the round actually
- * read: `ctx:<count>` for how many messages, `ctxfirst` / `ctxlast` for the
- * window's boundary seqs, and `reread:<true|false>` — true once the window
- * still carries a message older than the triggering one that this member's
- * consumption cursor has not passed, i.e. the message an earlier failed round
- * did not consume. Like the prompt echo, it is how a process-level test
- * observes an input through the ordinary reply message.
+ * read: `thread:window|full` for the scope it was handed, `ctx:<count>` for how
+ * many messages, `ctxfirst` / `ctxlast` for the window's boundary seqs, and
+ * `reread:<true|false>` — true once the window still carries a message older
+ * than the triggering one that this member's consumption cursor has not passed,
+ * i.e. the message an earlier failed round did not consume. Like the prompt
+ * echo, it is how a process-level test observes an input through the ordinary
+ * reply message.
+ *
+ * `continue-task` is the double's face for the structured `continue_task`
+ * action (自动续跑): it answers normally and states the action, so "I will
+ * continue" is executable rather than a sentence in the body. Like every other
+ * behaviour it is an adapter choice, never a production branch.
  */
 export type ScriptedBehavior =
   | 'reply'
@@ -34,7 +40,8 @@ export type ScriptedBehavior =
   | 'delay'
   | 'silent'
   | 'no-body'
-  | 'iteration-limit';
+  | 'iteration-limit'
+  | 'continue-task';
 
 export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'reply',
@@ -44,6 +51,7 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'silent',
   'no-body',
   'iteration-limit',
+  'continue-task',
 ];
 
 export interface ScriptedProviderOptions {
@@ -117,6 +125,10 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
         case 'delay':
           await delay(options.delayMs);
           return replyResult(input, options);
+        case 'continue-task':
+          // The structured action rides the same round result as the reply:
+          // the output shape stays "zero or more replies plus one result".
+          return { ...replyResult(input, options), taskAction: 'continue_task' };
         case 'reply':
           return replyResult(input, options);
       }
@@ -155,5 +167,8 @@ function contextReport(input: RoundInput, options: ScriptedProviderOptions): str
   );
   const first = input.messages[0]?.seq ?? 0;
   const last = input.messages[input.messages.length - 1]?.seq ?? 0;
-  return `\nctx:${input.messages.length}\nctxfirst:${first}\nctxlast:${last}\nreread:${String(reread)}`;
+  return (
+    `\nthread:${input.contextScope}` +
+    `\nctx:${input.messages.length}\nctxfirst:${first}\nctxlast:${last}\nreread:${String(reread)}`
+  );
 }

@@ -43,10 +43,11 @@ import {
   parseProviderParam,
   remoteDataFlowView,
 } from './providers.js';
-import type { InFlightRounds } from './rounds.js';
+import { dispatchWakes, type InFlightRounds } from './rounds.js';
 import { parseSearchQuery, searchWorkspace } from './search.js';
 import { getSettings, updateSettings } from './settings.js';
 import {
+  claimTask,
   createTask,
   getTask,
   listTasks,
@@ -354,10 +355,20 @@ const ROUTES: readonly Route[] = [
     },
   },
   {
+    // Creating a task is the claim trigger: the row and its pointer commit
+    // first, then the orchestrator decides whether an available Agent picks it
+    // up. The claim facts are one transaction of their own; its wake is
+    // delivered after that commit through the same entry point every other
+    // wake uses, so there is no second orchestration path.
     method: 'POST',
     pattern: /^\/api\/tasks$/,
-    handle: async (request, response, { db }) => {
-      sendJson(response, 201, createTask(db, await readJsonBody(request)));
+    handle: async (request, response, { db, orchestration, env }) => {
+      const task = createTask(db, await readJsonBody(request));
+      const claim = claimTask(db, task.id, env);
+      if (claim !== null) {
+        await dispatchWakes(db, orchestration.provider, [claim.wake], orchestration.inFlight);
+      }
+      sendJson(response, 201, getTask(db, task.id));
     },
   },
   {
@@ -418,25 +429,27 @@ const ROUTES: readonly Route[] = [
   {
     method: 'GET',
     pattern: /^\/api\/agents$/,
-    handle: async (request, response, { db, env }) => {
+    handle: async (request, response, { db, env, orchestration }) => {
       const includeDeleted = parseIncludeDeleted(new URL(request.url ?? '/', 'http://allibot').searchParams);
-      sendJson(response, 200, { agents: listAgents(db, { includeDeleted, env }) });
+      sendJson(response, 200, {
+        agents: listAgents(db, { includeDeleted, env, inFlight: orchestration.inFlight }),
+      });
     },
   },
   {
     method: 'POST',
     pattern: /^\/api\/agents$/,
-    handle: async (request, response, { db, env }) => {
-      const agent = createAgent(db, await readJsonBody(request), env);
+    handle: async (request, response, { db, env, orchestration }) => {
+      const agent = createAgent(db, await readJsonBody(request), env, orchestration.inFlight);
       sendJson(response, 201, agent);
     },
   },
   {
     method: 'GET',
     pattern: new RegExp(`^/api/agents/${AGENT_ID}$`),
-    handle: async (_request, response, { db, env }, ...params) => {
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
       if (agent === null) {
         throw ApiFailure.notFound(`agent not found: ${id}`);
       }
@@ -446,8 +459,14 @@ const ROUTES: readonly Route[] = [
   {
     method: 'PATCH',
     pattern: new RegExp(`^/api/agents/${AGENT_ID}$`),
-    handle: async (request, response, { db, env }, ...params) => {
-      const agent = updateAgent(db, decodeId(params[0]), await readJsonBody(request), env);
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const agent = updateAgent(
+        db,
+        decodeId(params[0]),
+        await readJsonBody(request),
+        env,
+        orchestration.inFlight,
+      );
       sendJson(response, 200, agent);
     },
   },

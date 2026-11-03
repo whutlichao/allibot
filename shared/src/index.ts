@@ -36,14 +36,47 @@ export const CREDENTIAL_STATUSES = ['present', 'missing'] as const;
 export type CredentialStatus = (typeof CREDENTIAL_STATUSES)[number];
 
 /**
+ * The four status point states (D1.12 / R1 词条 26). `working` is a
+ * process-local in-flight fact, `error` is the latest stored non-merged round
+ * outcome being failed, and `offline` is derived from availability.
+ */
+export const AGENT_STATUSES = ['online', 'working', 'error', 'offline'] as const;
+export type AgentStatus = (typeof AGENT_STATUSES)[number];
+
+/**
+ * The three availability facts that make an Agent 未启用 (offline): no model is
+ * configured, the provider's remote-data-flow consent is missing, or the
+ * provider's credential is missing from the environment. They are enum values,
+ * never credential values.
+ */
+export const OFFLINE_REASONS = [
+  'model-missing',
+  'consent-missing',
+  'credential-missing',
+] as const;
+export type OfflineReason = (typeof OFFLINE_REASONS)[number];
+
+/**
+ * One status point as the human face returns it. `offline_reason` is the
+ * availability fact that keeps the Agent offline and is `null` in every other
+ * state; it never carries a credential.
+ */
+export interface StatusPointView {
+  status: AgentStatus;
+  offline_reason: OfflineReason | null;
+}
+
+/**
  * The Agent configuration as the human face returns it. `member` holds the
  * identity; `agent_config` holds everything below `created_at`.
  *
  * `credential_status` reports whether the environment variable the model's
  * provider reads is set — "present" or "missing" — and never carries the key
- * itself: the database is not a secret store (D1.10).
+ * itself: the database is not a secret store (D1.10). `status` and
+ * `offline_reason` are the status point, computed from backend facts only; the
+ * visual avatar slot is a separate contract and status never moves it.
  */
-export interface AgentView {
+export interface AgentView extends StatusPointView {
   id: string;
   kind: 'agent';
   display_name: string;

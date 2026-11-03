@@ -70,7 +70,7 @@ const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
   'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
   '[--provider <scripted|model>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit>] ' +
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task>] ' +
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
   '[--sse-lifetime-ms <ms>]';
