@@ -22,6 +22,7 @@ const BASELINE_MODES = new Set([
   'v12',
   'v13',
   'v14',
+  'v15',
 ]);
 
 if ((mode !== 'ok' && mode !== 'fail' && !BASELINE_MODES.has(mode ?? '')) || dataDir === undefined) {
