@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
@@ -43,6 +44,40 @@ test('migrate initializes an empty data directory at schema version 1 and record
     assert.ok(startedAt <= finishedAt, 'start timestamp should not be after finish timestamp');
   } finally {
     await removeTempDir(dataDir);
+  }
+});
+
+test('initializing a non-empty data directory backs it up first without copying the lock file', async () => {
+  const parent = await makeTempDir('allibot-migrate-nonempty-');
+  const dataDir = path.join(parent, 'data');
+
+  try {
+    mkdirSync(dataDir);
+    writeFileSync(path.join(dataDir, 'sentinel.txt'), 'keep me\n', 'utf8');
+    const snapshot = path.join(parent, 'snapshot');
+    cpSync(dataDir, snapshot, { recursive: true });
+
+    const result = runCli(['--migrate', '--data-dir', dataDir]);
+
+    assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
+    assert.equal(readSchemaVersion(dataDir), 1);
+
+    const backups = readdirSync(parent).filter((name) => name.startsWith('data.backup-'));
+    assert.equal(backups.length, 1, `expected exactly one backup directory, saw: ${backups.join(', ')}`);
+    const backupPath = path.join(parent, backups[0] ?? '');
+    assert.equal(existsSync(path.join(backupPath, '.allibot.lock')), false);
+
+    const diff = spawnSync('diff', ['-r', backupPath, snapshot], { encoding: 'utf8' });
+    assert.equal(diff.status, 0, `backup must match the pre-migration data dir; diff: ${diff.stdout}`);
+
+    const entries = readLedger(dataDir);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0]?.['from'], null);
+    assert.equal(entries[0]?.['to'], 1);
+    assert.equal(entries[0]?.['result'], 'ok');
+    assert.equal(entries[0]?.['backup_path'], backupPath);
+  } finally {
+    await removeTempDir(parent);
   }
 });
 
