@@ -45,6 +45,18 @@ export const ZH_CN = {
     text: 'allibot：{message}',
     params: ['message'],
   },
+  'cli.schema.tooOld': {
+    text:
+      'version_mismatch：数据库{found}，本构建期望 Schema 版本 {expected}；' +
+      '启动服务前先运行 `allibot --migrate --data-dir {data_dir}`。',
+    params: ['found', 'expected', 'data_dir'],
+  },
+  'cli.schema.tooNew': {
+    text:
+      'version_mismatch：数据库 Schema 版本 {found} 高于本构建的 {expected}；' +
+      '拒绝执行，没有降级路径。',
+    params: ['found', 'expected'],
+  },
 
   // 工作区设置面板：语言偏好 / 消息密度 / 主题三档。
   'settings.title': { text: '工作区设置', params: [] },

@@ -1,3 +1,4 @@
+import { t } from '@allibot/shared';
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
@@ -565,8 +566,10 @@ export function runMigrations(
     // reason, exactly like a step that threw (D1.7 "失败也记").
     const startedAt = new Date().toISOString();
     const refusal = new Error(
-      `version_mismatch: database schema version ${currentVersion} is newer than this build's ` +
-        `schema version ${targetVersion}; refusing to migrate, there is no downgrade path`,
+      t('zh-CN', 'cli.schema.tooNew', {
+        found: currentVersion,
+        expected: targetVersion,
+      }),
     );
     appendMigrationRecord(dataDir, {
       from: currentVersion,
@@ -644,16 +647,20 @@ export function openDatabase(dataDir: string): Database.Database {
 export function assertServeableSchemaVersion(dataDir: string): void {
   const version = readSchemaVersion(databasePath(dataDir));
   if (version === null || version < SCHEMA_VERSION) {
-    const found = version === null ? 'has no schema version' : `is at schema version ${version}`;
     throw new Error(
-      `version_mismatch: database ${found} but this build expects schema version ${SCHEMA_VERSION}; ` +
-        `run \`allibot --migrate --data-dir ${dataDir}\` before starting the server`,
+      t('zh-CN', 'cli.schema.tooOld', {
+        found: version === null ? '没有 Schema 版本' : `处于 Schema 版本 ${version}`,
+        expected: SCHEMA_VERSION,
+        data_dir: dataDir,
+      }),
     );
   }
   if (version > SCHEMA_VERSION) {
     throw new Error(
-      `version_mismatch: database schema version ${version} is newer than this build's ` +
-        `schema version ${SCHEMA_VERSION}; refusing to start, there is no downgrade path`,
+      t('zh-CN', 'cli.schema.tooNew', {
+        found: version,
+        expected: SCHEMA_VERSION,
+      }),
     );
   }
 }

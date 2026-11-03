@@ -40,6 +40,7 @@ test('a database newer than the code is refused by serve and --migrate without t
     const migrate = runCli(['--migrate', '--data-dir', dataDir]);
     assert.notEqual(migrate.exitCode, 0, `--migrate must refuse; output: ${migrate.output}`);
     assert.match(migrate.output, /version_mismatch/);
+    assert.match(migrate.output, /Schema 版本/, 'the refusal copy renders in zh-CN');
     assert.equal(databaseSha256(dataDir), before, '--migrate must not change the database file');
 
     // D1.7 "失败也记": the refused attempt is still a migration attempt.
@@ -55,6 +56,7 @@ test('a database newer than the code is refused by serve and --migrate without t
     const serve = runCli(['serve', '--data-dir', dataDir, '--port', '0'], { timeoutMs: 5_000 });
     assert.notEqual(serve.exitCode, 0, `serve must refuse; output: ${serve.output}`);
     assert.match(serve.output, /version_mismatch/);
+    assert.match(serve.output, /没有降级路径/, 'the serve refusal copy renders in zh-CN');
     assert.equal(databaseSha256(dataDir), before, 'serve must not change the database file');
   } finally {
     await removeTempDir(dataDir);

@@ -110,7 +110,12 @@ function ThreadSync({ onEvent, onSnapshot }: ThreadSyncProps) {
     const subscription = agent.subscribe({
       onStateSnapshotEvent: ({ event }) => {
         const snapshot = readTargetMembersSnapshot(event.snapshot);
-        if (snapshot !== null) {
+        // A late frame from the thread that was just left must not relabel the
+        // new thread's messages.
+        if (
+          snapshot !== null &&
+          (threadIdRef.current === null || snapshot.target_id === threadIdRef.current)
+        ) {
           onSnapshotRef.current(snapshot);
         }
       },
