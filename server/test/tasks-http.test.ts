@@ -300,6 +300,7 @@ test('GET /api/tasks lists the board payload and filters by channel; GET /api/ta
         'allowed_transitions',
         'assignee_member_id',
         'channel_id',
+        'channel_mode',
         'claimed_at',
         'created_at',
         'id',

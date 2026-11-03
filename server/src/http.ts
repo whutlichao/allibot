@@ -230,32 +230,32 @@ const ROUTES: readonly Route[] = [
   {
     method: 'GET',
     pattern: /^\/api\/channels$/,
-    handle: async (_request, response, { db }) => {
-      sendJson(response, 200, { channels: listChannels(db) });
+    handle: async (_request, response, { db, env }) => {
+      sendJson(response, 200, { channels: listChannels(db, env) });
     },
   },
   {
     method: 'POST',
     pattern: /^\/api\/channels$/,
-    handle: async (request, response, { db }) => {
-      sendJson(response, 201, createChannel(db, await readJsonBody(request)));
+    handle: async (request, response, { db, env }) => {
+      sendJson(response, 201, createChannel(db, await readJsonBody(request), env));
     },
   },
   {
     method: 'GET',
     pattern: new RegExp(`^/api/channels/${CHANNEL_ID}$`),
-    handle: async (_request, response, { db }, ...params) => {
-      sendJson(response, 200, getChannel(db, decodeId(params[0])));
+    handle: async (_request, response, { db, env }, ...params) => {
+      sendJson(response, 200, getChannel(db, decodeId(params[0]), env));
     },
   },
   {
     method: 'PATCH',
     pattern: new RegExp(`^/api/channels/${CHANNEL_ID}$`),
-    handle: async (request, response, { db }, ...params) => {
+    handle: async (request, response, { db, env }, ...params) => {
       sendJson(
         response,
         200,
-        updateChannel(db, decodeId(params[0]), await readJsonBody(request)),
+        updateChannel(db, decodeId(params[0]), await readJsonBody(request), env),
       );
     },
   },
@@ -271,8 +271,8 @@ const ROUTES: readonly Route[] = [
   {
     method: 'POST',
     pattern: new RegExp(`^/api/channels/${CHANNEL_ID}/archive$`),
-    handle: async (_request, response, { db }, ...params) => {
-      sendJson(response, 200, archiveChannel(db, decodeId(params[0])));
+    handle: async (_request, response, { db, env }, ...params) => {
+      sendJson(response, 200, archiveChannel(db, decodeId(params[0]), env));
     },
   },
   {

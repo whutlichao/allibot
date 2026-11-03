@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { TASK_STATUSES, type TaskStatus, type TaskView } from '@allibot/shared';
+import {
+  TASK_STATUSES,
+  type ChannelMode,
+  type TaskStatus,
+  type TaskView,
+} from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { openEpoch } from './budget.js';
@@ -51,6 +56,8 @@ interface TaskRow {
 }
 
 interface CountedTaskRow extends TaskRow {
+  /** The owning channel's mode, derived on read (never stored on the task). */
+  channel_mode: string;
   message_count: number;
 }
 
@@ -66,9 +73,10 @@ interface CountedTaskRow extends TaskRow {
  */
 const TASK_SELECT = `
 SELECT t.id, t.channel_id, t.target_id, t.title, t.status, t.assignee_member_id,
-       t.claimed_at, t.created_at, t.updated_at,
+       t.claimed_at, t.created_at, t.updated_at, c.mode AS channel_mode,
        (SELECT count(*) FROM message m WHERE m.target_id = t.target_id) AS message_count
-FROM task t`;
+FROM task t
+JOIN channel c ON c.id = t.channel_id`;
 
 /** The create body accepts the channel and the title; nothing else. */
 const CREATE_FIELD_KEYS = new Set(['channel_id', 'title']);
@@ -82,15 +90,13 @@ const PATCH_FIELD_KEYS = new Set(['title', 'status', 'assignee_member_id']);
  * by id still works.
  */
 export function listTasks(db: Database.Database, query: { channelId?: string }): TaskView[] {
-  const where = query.channelId === undefined ? '' : 'WHERE t.channel_id = ?';
+  const where =
+    query.channelId === undefined
+      ? 'WHERE c.deleted_at IS NULL'
+      : 'WHERE c.deleted_at IS NULL AND t.channel_id = ?';
   const params = query.channelId === undefined ? [] : [query.channelId];
   const rows = db
-    .prepare(
-      `${TASK_SELECT}
-        JOIN channel c ON c.id = t.channel_id AND c.deleted_at IS NULL
-       ${where}
-       ORDER BY t.created_at, t.rowid`,
-    )
+    .prepare(`${TASK_SELECT} ${where} ORDER BY t.created_at, t.rowid`)
     .all(...params) as CountedTaskRow[];
   const ownerId = readOwnerId(db);
   return rows.map((row) => toTaskView(row, countUnread(db, ownerId, row.target_id)));
@@ -555,10 +561,18 @@ function toTaskView(row: CountedTaskRow, unreadCount: number): TaskView {
     claimed_at: row.claimed_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    channel_mode: parseChannelMode(row.channel_mode),
     allowed_transitions: [...TASK_STATUS_TRANSITIONS[status]],
     message_count: row.message_count,
     unread_count: unreadCount,
   };
+}
+
+function parseChannelMode(value: string): ChannelMode {
+  if (value !== 'autonomous' && value !== 'team') {
+    throw new Error(`task row carries an unknown channel mode: ${value}`);
+  }
+  return value;
 }
 
 function parseStoredStatus(value: string): TaskStatus {

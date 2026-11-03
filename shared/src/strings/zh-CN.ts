@@ -358,4 +358,29 @@ export const ZH_CN = {
   'workspace.member.notice.open': { text: '查看成员面板', params: [] },
   'workspace.roster.channelOnly': { text: '成员名册只属于频道。', params: [] },
   'workspace.roster.ownerRole': { text: 'owner', params: [] },
+  // team 模式配置（#37）：频道配置区的模式 / 队长 / 配置无效原因。模式与
+  // 队长都是频道级配置，不落消息、不唤醒；配置无效时消息照常落库但零唤醒。
+  'channel.config.title': { text: '频道配置', params: [] },
+  'channel.config.mode.label': { text: '协作拓扑', params: [] },
+  'channel.config.mode.autonomous': { text: '自主', params: [] },
+  'channel.config.mode.team': { text: 'team 模式', params: [] },
+  'channel.config.leader.label': { text: '队长', params: [] },
+  'channel.config.leader.placeholder': { text: '选择队长', params: [] },
+  'channel.config.leader.unknown': { text: '未知成员', params: [] },
+  'channel.config.leader.saving': { text: '保存中…', params: [] },
+  'channel.config.leader.saveFailed': { text: '保存失败，请重试。', params: [] },
+  'channel.config.leader.loading': { text: '正在读取频道成员…', params: [] },
+  'channel.config.invalid': { text: '配置无效', params: [] },
+  // 队长不可用的可读原因（D3.8）：读模型与轮次共用同一段文案。
+  'team.invalid.leaderMissing': { text: '队长成员不存在或已被移除。', params: [] },
+  'team.invalid.leaderNotAgent': { text: '队长必须是 Agent 成员。', params: [] },
+  'team.invalid.leaderDeleted': { text: '队长已被软删除。', params: [] },
+  'team.invalid.leaderDisabled': { text: '队长已被禁用（enabled=0）。', params: [] },
+  'team.invalid.leaderNotMember': { text: '队长已不是该频道的成员。', params: [] },
+  'team.invalid.modelMissing': { text: '队长没有配置可用的模型。', params: [] },
+  'team.invalid.consentMissing': { text: '队长所属模型 provider 尚未确认远端数据流告知。', params: [] },
+  'team.invalid.credentialMissing': {
+    text: '队长所属模型 provider 缺少凭证（{credential_env}）。',
+    params: ['credential_env'],
+  },
 } as const satisfies Record<string, CatalogEntry>;
