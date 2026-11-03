@@ -8,9 +8,11 @@
     "build": "tsc -p tsconfig.json && vite build",
     "typecheck": "tsc -p tsconfig.test.json",
     "test:visual-contract": "node --test test/visual-contract.test.ts",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:strings": "node --test test/strings.test.ts"
   },
   "dependencies": {
+    "@allibot/shared": "*",
     "@copilotkit/react-core": "1.83.0",
     "react": "19.2.0",
     "react-dom": "19.2.0"

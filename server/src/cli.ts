@@ -1,10 +1,8 @@
+import { t } from '@allibot/shared';
 import type { Server } from 'node:http';
 import { parseCliArgs, type CliOptions } from './args.js';
-import {
-  databasePath,
-  legacyDataDirWarning,
-  resolveDataDir,
-} from './data-dir.js';
+import { tFromDb } from './copy.js';
+import { databasePath, resolveDataDir } from './data-dir.js';
 import {
   assertServeableSchemaVersion,
   databaseExists,
@@ -32,17 +30,35 @@ async function run(argv: readonly string[]): Promise<number> {
   const { command, port } = options;
   const resolution = resolveDataDir(options.dataDir);
   if (resolution.origin === 'legacy') {
-    console.error(legacyDataDirWarning(resolution.dataDir));
+    // 数据目录解析发生在库打开之前，所以这条兼容读取提示用源文案的默认
+    // 语言偏好渲染；库内 locale 只在库可用之后才读得到。
+    console.error(t('zh-CN', 'cli.dataDir.legacyWarning', { data_dir: resolution.dataDir }));
   }
 
   if (command === 'migrate') {
     const lock = await acquireDataDirLock(resolution.dataDir);
     try {
       const outcome = migrateDataDir(resolution.dataDir);
-      if (outcome.status === 'already-current') {
-        console.log(`already at schema version ${outcome.version}`);
-      } else {
-        console.log(`migrated ${resolution.dataDir} to schema version ${outcome.to}`);
+      // 迁移已提交，库可直接打开；回执按库内语言偏好渲染。
+      const db = openDatabase(resolution.dataDir);
+      try {
+        if (outcome.status === 'already-current') {
+          console.log(
+            tFromDb(db, 'cli.migrate.alreadyCurrent', {
+              data_dir: resolution.dataDir,
+              schema_version: outcome.version,
+            }),
+          );
+        } else {
+          console.log(
+            tFromDb(db, 'cli.migrate.migrated', {
+              data_dir: resolution.dataDir,
+              schema_version: outcome.to,
+            }),
+          );
+        }
+      } finally {
+        db.close();
       }
       return 0;
     } finally {
@@ -69,7 +85,7 @@ async function run(argv: readonly string[]): Promise<number> {
       resolution.dataDir,
       orchestration,
     );
-    console.log(`allibot server listening on http://${HOST}:${boundPort}`);
+    console.log(tFromDb(db, 'cli.serve.listening', { url: `http://${HOST}:${boundPort}` }));
     console.log(`allibot member-face adapter: ${orchestration.provider.name}`);
 
     return await waitForShutdown(server);

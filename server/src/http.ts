@@ -30,6 +30,7 @@ import {
 } from './members.js';
 import { appendMessageAndDispatch, listMessages, parseMessageRequest, parsePageQuery } from './messages.js';
 import type { InFlightRounds } from './rounds.js';
+import { getSettings, updateSettings } from './settings.js';
 import {
   joinChannel,
   listChannelMembers,
@@ -229,6 +230,20 @@ const ROUTES: readonly Route[] = [
         orchestration,
       );
       sendJson(response, 201, result);
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/settings$/,
+    handle: async (_request, response, { db }) => {
+      sendJson(response, 200, getSettings(db));
+    },
+  },
+  {
+    method: 'PATCH',
+    pattern: /^\/api\/settings$/,
+    handle: async (request, response, { db }) => {
+      sendJson(response, 200, updateSettings(db, await readJsonBody(request)));
     },
   },
   {

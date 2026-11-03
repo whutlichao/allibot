@@ -50,13 +50,13 @@ function countRows(dataDir: string, table: string): number {
   }
 }
 
-test('migrating an empty data dir adds attachment at schema version 5', async () => {
+test('migrating an empty data dir adds attachment and reaches the current schema version', async () => {
   const dataDir = await makeTempDir('allibot-attachments-migrate-');
   try {
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 6);
+    assert.equal(readSchemaVersion(dataDir), 7);
     assert.deepEqual(attachmentColumns(dataDir), [
       'id',
       'message_id',
@@ -81,14 +81,14 @@ test('migrating an empty data dir adds attachment at schema version 5', async ()
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 6);
+    assert.equal(entries[0]?.['to'], 7);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
   }
 });
 
-test('a version 4 data dir upgrades to version 5 with a backup that keeps message history', async () => {
+test('a version 4 data dir upgrades through the chain with a backup that keeps message history', async () => {
   const parent = await makeTempDir('allibot-attachments-upgrade-');
   const dataDir = path.join(parent, 'data');
 
@@ -132,7 +132,7 @@ test('a version 4 data dir upgrades to version 5 with a backup that keeps messag
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 6);
+    assert.equal(readSchemaVersion(dataDir), 7);
     assert.deepEqual(attachmentColumns(dataDir), [
       'id',
       'message_id',
@@ -169,7 +169,7 @@ test('a version 4 data dir upgrades to version 5 with a backup that keeps messag
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 4);
-    assert.equal(last?.['to'], 6);
+    assert.equal(last?.['to'], 7);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);

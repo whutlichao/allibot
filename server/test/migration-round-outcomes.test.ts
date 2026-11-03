@@ -64,13 +64,13 @@ const ROUND_OUTCOME_COLUMNS = [
   'merged',
 ];
 
-test('migrating an empty data dir adds round_outcome at schema version 6', async () => {
+test('migrating an empty data dir adds round_outcome at the current schema version', async () => {
   const dataDir = await makeTempDir('allibot-round-outcomes-migrate-');
   try {
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 6);
+    assert.equal(readSchemaVersion(dataDir), 7);
     assert.deepEqual(columnNames(dataDir, 'round_outcome'), ROUND_OUTCOME_COLUMNS);
     assert.equal(countRows(dataDir, 'round_outcome'), 0, 'the migration seeds no round outcomes');
 
@@ -90,7 +90,7 @@ test('migrating an empty data dir adds round_outcome at schema version 6', async
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 6);
+    assert.equal(entries[0]?.['to'], 7);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -136,21 +136,21 @@ test('round_outcome refuses UPDATE and DELETE at the database level', async () =
   }
 });
 
-test('a version 5 data dir upgrades to version 6 with a backup that keeps channel and message rows', async () => {
+test('a version 6 data dir upgrades to version 7 with a backup that keeps channel and message rows', async () => {
   const parent = await makeTempDir('allibot-round-outcomes-upgrade-');
   const dataDir = path.join(parent, 'data');
 
   try {
     mkdirSync(dataDir);
-    const baseline = spawnSync(process.execPath, [MIGRATION_FIXTURE, 'v5', dataDir], {
+    const baseline = spawnSync(process.execPath, [MIGRATION_FIXTURE, 'v6', dataDir], {
       encoding: 'utf8',
     });
     assert.equal(
       baseline.status,
       0,
-      `the version-5 fixture should succeed; output: ${baseline.stdout}${baseline.stderr}`,
+      `the version-6 fixture should succeed; output: ${baseline.stdout}${baseline.stderr}`,
     );
-    assert.equal(readSchemaVersion(dataDir), 5);
+    assert.equal(readSchemaVersion(dataDir), 6);
 
     const seeded = new Database(path.join(dataDir, 'allibot.db'));
     try {
@@ -180,7 +180,7 @@ test('a version 5 data dir upgrades to version 6 with a backup that keeps channe
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 6);
+    assert.equal(readSchemaVersion(dataDir), 7);
     assert.deepEqual(columnNames(dataDir, 'round_outcome'), ROUND_OUTCOME_COLUMNS);
     assert.equal(countRows(dataDir, "message WHERE id = 'kept-message'"), 1);
 
@@ -195,7 +195,7 @@ test('a version 5 data dir upgrades to version 6 with a backup that keeps channe
           schema_version: number;
         }
       ).schema_version;
-      assert.equal(version, 5, 'the backup keeps the pre-migration schema version');
+      assert.equal(version, 6, 'the backup keeps the pre-migration schema version');
       const tables = (
         backupDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
           name: string;
@@ -208,8 +208,8 @@ test('a version 5 data dir upgrades to version 6 with a backup that keeps channe
 
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
-    assert.equal(last?.['from'], 5);
-    assert.equal(last?.['to'], 6);
+    assert.equal(last?.['from'], 6);
+    assert.equal(last?.['to'], 7);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);
