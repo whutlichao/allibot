@@ -1,3 +1,5 @@
+import type { WorkspaceSettingsView } from './settings.js';
+
 export type ApiErrorCode =
   | 'validation_failed'
   | 'not_found'
@@ -341,6 +343,44 @@ export interface ReminderListView {
   pending: ReminderView[];
   delivered: ReminderView[];
   missed: ReminderView[];
+}
+
+/**
+ * The human row as the workspace returns it. The database holds exactly one
+ * owner row (`member_single_owner`), so the reading is one object, never a
+ * list.
+ */
+export interface OwnerView {
+  id: string;
+  kind: 'owner';
+  display_name: string;
+  avatar_slot: number;
+}
+
+/**
+ * The app shell's one backend reading (D1.8 / ADR 0002). Every panel renders
+ * from this same snapshot, so the frontend never keeps a second source of
+ * truth.
+ *
+ * `agents` is the 本机 Agent list: every live Agent, not filtered by channel.
+ * `channels` carries archived channels with their `archived_at`; a deleted
+ * channel is absent, as are its tasks and messages. `status_points` is keyed
+ * by Agent member id and answers exactly what the per-Agent read answers;
+ * `settings` is the same body `GET /api/settings` returns.
+ *
+ * Unread is split in two: `unread_total` is the channel-type plus dm-type sum,
+ * while a task-type target is counted only in its task payload's
+ * `unread_count`. The reading is read-only: it writes no message, wakes no
+ * member and spends no response budget.
+ */
+export interface WorkspaceView extends WorkspaceUnreadView {
+  owner: OwnerView;
+  agents: AgentView[];
+  channels: ChannelView[];
+  dms: DmView[];
+  tasks: TaskView[];
+  settings: WorkspaceSettingsView;
+  status_points: Record<string, StatusPointView>;
 }
 
 export {

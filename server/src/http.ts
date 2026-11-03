@@ -32,7 +32,6 @@ import {
   createAgent,
   getAgent,
   listAgents,
-  readOwnerId,
   softDeleteAgent,
   updateAgent,
 } from './members.js';
@@ -60,7 +59,8 @@ import {
   listChannelMembers,
   listTargetMembers,
 } from './target-members.js';
-import { markOwnerRead, readWorkspaceUnread } from './unread.js';
+import { markOwnerRead } from './unread.js';
+import { readWorkspace } from './workspace.js';
 
 export const HOST = '127.0.0.1';
 
@@ -189,14 +189,13 @@ const ROUTES: readonly Route[] = [
     },
   },
   {
-    // The workspace reading. #25 lands only the unread keys its acceptance
-    // fixes; #27 extends this same handler into the complete workspace read
-    // model (owner, agents, channels, dms, tasks, settings, status points)
-    // without changing the unread module behind these two numbers.
+    // The workspace reading (D1.8): the app shell's one backend snapshot. It
+    // composes the existing read models — agents, channels, DMs, tasks, unread,
+    // settings and status points — and writes nothing.
     method: 'GET',
     pattern: /^\/api\/workspace$/,
-    handle: async (_request, response, { db }) => {
-      sendJson(response, 200, readWorkspaceUnread(db, readOwnerId(db)));
+    handle: async (_request, response, { db, env, orchestration }) => {
+      sendJson(response, 200, readWorkspace(db, env, orchestration.inFlight));
     },
   },
   {

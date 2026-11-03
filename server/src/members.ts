@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { AGENT_PROVIDERS, type AgentView } from '@allibot/shared';
+import { AGENT_PROVIDERS, type AgentView, type OwnerView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { credentialStatus, parseModelIdentifier } from './providers.js';
@@ -31,16 +31,26 @@ export function liveMemberClause(alias = 'member'): string {
 
 /**
  * The one human row, read by kind rather than by display name or list
- * position. The owner's read position is the unread badge's baseline.
+ * position. The owner's read position is the unread badge's baseline, and the
+ * workspace reading returns this same row as its `owner`.
  */
-export function readOwnerId(db: Database.Database): string {
-  const row = db.prepare("SELECT id FROM member WHERE kind = 'owner'").get() as
-    | { id: string }
-    | undefined;
+export function readOwner(db: Database.Database): OwnerView {
+  const row = db
+    .prepare("SELECT id, display_name, avatar_slot FROM member WHERE kind = 'owner'")
+    .get() as { id: string; display_name: string; avatar_slot: number } | undefined;
   if (row === undefined) {
     throw new Error('owner row is missing');
   }
-  return row.id;
+  return {
+    id: row.id,
+    kind: 'owner',
+    display_name: row.display_name,
+    avatar_slot: row.avatar_slot,
+  };
+}
+
+export function readOwnerId(db: Database.Database): string {
+  return readOwner(db).id;
 }
 
 interface AgentRow {
