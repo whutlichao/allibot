@@ -1,3 +1,3 @@
 export function App() {
-  return <main>allibot</main>;
+  return <main className="app-shell">allibot</main>;
 }

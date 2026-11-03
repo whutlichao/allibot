@@ -1,0 +1,24 @@
+/*
+ * 组件样式：按 token 名消费视觉契约；头像底色由 --av-* 内联设置。
+ */
+.app-shell {
+  min-block-size: 100dvh;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* 头像色位：7px 圆角方块，不是圆形；底色由 --av-* 内联设置。 */
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 28px;
+  block-size: 28px;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  flex: none;
+  user-select: none;
+}
