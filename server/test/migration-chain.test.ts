@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
@@ -73,6 +79,113 @@ test('a 1->2 fixture migration backs up the whole data directory and records the
     await removeTempDir(parent);
   }
 });
+
+test('a failing migration step rolls the database back and records the failure', async () => {
+  const parent = await makeTempDir('allibot-chain-fail-');
+  const dataDir = path.join(parent, 'data');
+
+  try {
+    const baseline = runCli(['--migrate', '--data-dir', dataDir]);
+    assert.equal(baseline.exitCode, 0, `baseline migrate should exit 0; output: ${baseline.output}`);
+    const before = readDatabaseShape(dataDir);
+
+    const fixture = spawnSync(process.execPath, [MIGRATION_FIXTURE, 'fail', dataDir], {
+      encoding: 'utf8',
+    });
+
+    assert.notEqual(
+      fixture.status,
+      0,
+      `a failing step must exit non-zero; output: ${fixture.stdout}${fixture.stderr}`,
+    );
+    assert.deepEqual(readDatabaseShape(dataDir), before, 'the database must roll back completely');
+    assert.equal(
+      readDatabaseShape(dataDir).tables.includes('fixture_business'),
+      false,
+      'the failed step must not leave its table behind',
+    );
+
+    const entries = readLedger(dataDir);
+    const last = entries[entries.length - 1];
+    assert.ok(last !== undefined);
+    assert.equal(last['result'], 'failed');
+    assert.equal(last['from'], 1);
+    assert.equal(last['to'], 2);
+    assert.match(String(last['reason']), /injected migration step failure/);
+
+    const backups = readdirSync(parent).filter((name) => name.startsWith('data.backup-'));
+    assert.equal(backups.length, 1, 'the pre-migration backup stays in place after a failure');
+    assert.equal(last['backup_path'], path.join(parent, backups[0] ?? ''));
+  } finally {
+    await removeTempDir(parent);
+  }
+});
+
+test('backup failure aborts the migration before any schema step runs', async () => {
+  const parent = await makeTempDir('allibot-chain-unwritable-');
+  const dataDir = path.join(parent, 'data');
+
+  try {
+    const baseline = runCli(['--migrate', '--data-dir', dataDir]);
+    assert.equal(baseline.exitCode, 0, `baseline migrate should exit 0; output: ${baseline.output}`);
+    const before = readDatabaseShape(dataDir);
+
+    chmodSync(parent, 0o555);
+    try {
+      const fixture = spawnSync(process.execPath, [MIGRATION_FIXTURE, 'ok', dataDir], {
+        encoding: 'utf8',
+      });
+
+      assert.notEqual(
+        fixture.status,
+        0,
+        `backup failure must exit non-zero; output: ${fixture.stdout}${fixture.stderr}`,
+      );
+    } finally {
+      chmodSync(parent, 0o755);
+    }
+
+    assert.deepEqual(readDatabaseShape(dataDir), before, 'the database must be untouched');
+    assert.equal(
+      readDatabaseShape(dataDir).tables.includes('fixture_business'),
+      false,
+      'no business table may appear when the backup fails',
+    );
+
+    const entries = readLedger(dataDir);
+    const last = entries[entries.length - 1];
+    assert.ok(last !== undefined);
+    assert.equal(last['result'], 'failed');
+    assert.equal(last['from'], 1);
+    assert.equal(last['to'], 2);
+    assert.equal(last['backup_path'], null);
+    assert.ok(
+      typeof last['reason'] === 'string' && last['reason'].length > 0,
+      'the failed audit record carries a readable reason',
+    );
+  } finally {
+    await removeTempDir(parent);
+  }
+});
+
+function readDatabaseShape(dataDir: string): { version: unknown; tables: string[] } {
+  const db = new Database(path.join(dataDir, 'allibot.db'), { readonly: true });
+  try {
+    const version = (
+      db.prepare('SELECT schema_version FROM schema_meta').get() as {
+        schema_version: unknown;
+      }
+    ).schema_version;
+    const tables = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    return { version, tables };
+  } finally {
+    db.close();
+  }
+}
 
 function readSchemaVersion(dataDir: string): unknown {
   const db = new Database(path.join(dataDir, 'allibot.db'), { readonly: true });
