@@ -2,6 +2,7 @@ import {
   t,
   type ChannelConfigPatch,
   type TargetMemberView,
+  type TeamRunView,
   type WorkspaceSettingsView,
   type WorkspaceView,
 } from '@allibot/shared';
@@ -16,6 +17,7 @@ import {
   initialTargetId,
   targetKind,
 } from './workspace/model.ts';
+import { isTeamTarget, readTeamRuns } from './workspace/team-runs.ts';
 import { shouldRefreshWorkspace } from './workspace/message-sync.ts';
 import {
   deleteAgent,
@@ -47,11 +49,20 @@ let currentViewportWidth = window.innerWidth;
 let refreshGeneration = 0;
 /** 当前频道成员表：成员面板 / 名册按需读，不把「未加入」当猜测。 */
 let currentChannelMembers: Record<string, TargetMemberView[]> = {};
+/** 当前 team target 的运行记录；run 是独立读数，不进消息流。 */
+let currentTeamRuns: Record<string, TeamRunView[]> = {};
 
 async function loadChannelMembers(channelId: string): Promise<void> {
   currentChannelMembers = {
     ...currentChannelMembers,
     [channelId]: await readChannelMembers(fetch, channelId),
+  };
+}
+
+async function loadTeamRuns(targetId: string): Promise<void> {
+  currentTeamRuns = {
+    ...currentTeamRuns,
+    [targetId]: await readTeamRuns(fetch, targetId),
   };
 }
 
@@ -126,6 +137,7 @@ function render(saveFailed = false): void {
         activeTargetId={currentTargetId}
         viewportWidth={currentViewportWidth}
         channelMembers={currentChannelMembers}
+        teamRuns={currentTeamRuns}
         saveFailed={saveFailed}
         onSelectTarget={(targetId) => {
           currentTargetId = targetId;
@@ -136,6 +148,13 @@ function render(saveFailed = false): void {
               .then(() => render())
               .catch((error: unknown) => {
                 console.error('channel members read failed', error);
+              });
+          }
+          if (reading !== null && isTeamTarget(reading, targetId)) {
+            void loadTeamRuns(targetId)
+              .then(() => render())
+              .catch((error: unknown) => {
+                console.error('team runs read failed', error);
               });
           }
         }}
@@ -211,6 +230,13 @@ async function refreshWorkspace(): Promise<void> {
       await loadChannelMembers(currentTargetId);
     } catch (error: unknown) {
       console.error('channel members read failed', error);
+    }
+  }
+  if (currentTargetId !== null && isTeamTarget(reading, currentTargetId)) {
+    try {
+      await loadTeamRuns(currentTargetId);
+    } catch (error: unknown) {
+      console.error('team runs read failed', error);
     }
   }
   render();

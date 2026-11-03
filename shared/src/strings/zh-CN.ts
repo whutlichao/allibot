@@ -414,6 +414,18 @@ export const ZH_CN = {
   'channel.config.leader.saveFailed': { text: '保存失败，请重试。', params: [] },
   'channel.config.leader.loading': { text: '正在读取频道成员…', params: [] },
   'channel.config.invalid': { text: '配置无效', params: [] },
+  // 运行面板（#38）：run 是取证面，不是消息；状态、reason、归属与时间都来自
+  // `GET /api/targets/{id}/team-runs` 的同一份读数。
+  'workspace.teamRuns.title': { text: '运行记录', params: [] },
+  'workspace.teamRuns.empty': { text: '还没有 team 运行记录。', params: [] },
+  'workspace.teamRuns.status.running': { text: '运行中', params: [] },
+  'workspace.teamRuns.status.completed': { text: '已完成', params: [] },
+  'workspace.teamRuns.status.failed': { text: '失败', params: [] },
+  'workspace.teamRuns.status.invalidLeader': { text: '队长不可用', params: [] },
+  'workspace.teamRuns.attribution.task': { text: '任务', params: [] },
+  'workspace.teamRuns.attribution.channel': { text: '频道', params: [] },
+  'workspace.teamRuns.reason': { text: '原因', params: [] },
+  'workspace.teamRuns.time': { text: '时间', params: [] },
   // 队长不可用的可读原因（D3.8）：读模型与轮次共用同一段文案。
   'team.invalid.leaderMissing': { text: '队长成员不存在或已被移除。', params: [] },
   'team.invalid.leaderNotAgent': { text: '队长必须是 Agent 成员。', params: [] },

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
@@ -6,6 +7,7 @@ import { ZH_CN } from '../../shared/dist/index.js';
 import {
   makeTempDir,
   removeTempDir,
+  REPO_ROOT,
   runCli,
   startServer,
   type RunningServer,
@@ -31,6 +33,13 @@ interface Fixture {
 
 const LEADER_NAME = '队长';
 const MEMBER_NAME = '成员';
+const AGENT_MESSAGE_FIXTURE = path.join(
+  REPO_ROOT,
+  'server',
+  'test',
+  'fixtures',
+  'agent-message.mjs',
+);
 
 async function startFixture(
   prefix: string,
@@ -253,6 +262,14 @@ test('creating a task in a team channel wakes the leader once from the created r
       !String(leaderOutcomes[0]?.reason).includes(ZH_CN['round.mandatory.claim'].text),
       'a team-change round never claims it was a claim',
     );
+    assert.ok(
+      !String(leaderOutcomes[0]?.reason).includes(ZH_CN['round.mandatory.mention'].text),
+      'a team-change round never claims it was a mention',
+    );
+    assert.ok(
+      !String(leaderOutcomes[0]?.reason).includes(ZH_CN['round.mandatory.humanMessage'].text),
+      'a team-change round never claims a human message',
+    );
 
     const runs = teamRuns(fixture);
     assert.equal(runs.length, 1);
@@ -309,6 +326,45 @@ test('a team task thread wakes only the leader and has no mention penetration', 
     const leaderRound = taskOutcomes.find((row) => row.base_seq === human.seq);
     assert.equal(leaderRound?.member_id, leader);
     assert.equal(leaderRound?.status, 'replied');
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('a leader-authored task message wakes nobody', async () => {
+  const fixture = await startFixture('allibot-team-task-leader-author-');
+  try {
+    const { leader, channelId } = await setupTeam(fixture);
+    const task = await createTask(fixture, channelId, '队长自己说话');
+    const outcomesBefore = outcomes(fixture).length;
+    const messagesBefore = messagesOf(fixture, task.targetId).length;
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        AGENT_MESSAGE_FIXTURE,
+        JSON.stringify({
+          dataDir: fixture.dataDir,
+          targetId: task.targetId,
+          authorMemberId: leader,
+          body: '队长自己在任务线程里说的一句',
+          behavior: 'reply',
+        }),
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(
+      result.status,
+      0,
+      `the agent-message fixture should succeed; output: ${result.stdout}${result.stderr}`,
+    );
+
+    assert.equal(
+      messagesOf(fixture, task.targetId).length,
+      messagesBefore + 1,
+      'the leader-authored message still lands',
+    );
+    assert.equal(outcomes(fixture).length, outcomesBefore, 'a leader author is a zero-wake surface');
   } finally {
     await fixture.stop();
   }

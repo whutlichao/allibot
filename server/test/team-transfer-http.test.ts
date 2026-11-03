@@ -435,6 +435,81 @@ test('a leader who is the assignee transfers with zero additional wake', async (
   }
 });
 
+test('a team transfer with an unusable leader lands invalid-leader and wakes nobody', async () => {
+  const fixture = await startFixture('allibot-transfer-invalid-leader-');
+  try {
+    const leader = await createAgent(fixture, '队长');
+    const first = await createAgent(fixture, '成员甲');
+    const second = await createAgent(fixture, '成员乙');
+    const channelId = await createChannel(fixture);
+    for (const memberId of [leader, first, second]) {
+      await joinChannel(fixture, channelId, memberId);
+    }
+    await makeTeam(fixture, channelId, leader);
+    const task = await createTask(fixture, channelId, '队长不可用转派');
+    await assign(fixture, task.id, first);
+
+    const disabled = await patchJson(fixture, `/api/agents/${leader}`, { enabled: 0 });
+    assert.equal(disabled.status, 200, await disabled.clone().text());
+    const invalidBefore = readDatabase<{ total: number }>(
+      fixture,
+      "SELECT count(*) AS total FROM team_run WHERE status = 'invalid-leader'",
+    )[0]?.total;
+    const outcomesBefore = outcomes(fixture).length;
+
+    const assigneeRecord = messagesOf(fixture, task.targetId).find(
+      (message) => message.body.includes('任务已指派给'),
+    );
+    assert.ok(assigneeRecord !== undefined);
+    const result = runMemberRound(fixture, {
+      targetId: task.targetId,
+      memberId: first,
+      fromSeq: assigneeRecord.seq,
+      transferMemberId: second,
+    });
+    assert.equal(result.ok, true);
+
+    const invalidAfter = readDatabase<{
+      total: number;
+    }>(fixture, "SELECT count(*) AS total FROM team_run WHERE status = 'invalid-leader'")[0]?.total;
+    assert.equal(
+      invalidAfter,
+      (invalidBefore ?? 0) + 1,
+      'the trigger that should have reached the leader leaves its invalid-leader run',
+    );
+    const invalidRun = readDatabase<{
+      target_id: string;
+      task_id: string | null;
+      reason: string | null;
+      started_at: string;
+      finished_at: string | null;
+    }>(
+      fixture,
+      "SELECT target_id, task_id, reason, started_at, finished_at FROM team_run WHERE status = 'invalid-leader' ORDER BY rowid DESC LIMIT 1",
+    )[0];
+    assert.equal(invalidRun?.target_id, task.targetId);
+    assert.equal(invalidRun?.task_id, task.id);
+    assert.ok(invalidRun?.reason?.includes('队长已被禁用'));
+    assert.ok(invalidRun?.started_at.length);
+    assert.ok(invalidRun?.finished_at !== null);
+
+    const transferRecord = messagesOf(fixture, task.targetId).find(
+      (message) => message.body.includes('转派给'),
+    );
+    assert.ok(transferRecord !== undefined, 'the transfer itself still lands its system record');
+    assert.equal(outcomes(fixture).length, outcomesBefore + 1, 'only the actor round ran');
+    assert.equal(
+      outcomes(fixture).some(
+        (row) => row.member_id === leader && row.base_seq === transferRecord?.seq,
+      ),
+      false,
+      'no team-change leader round was woken',
+    );
+  } finally {
+    await fixture.stop();
+  }
+});
+
 test('a transfer to a non-member is a structured refusal with no write and no wake', async () => {
   const fixture = await startFixture('allibot-transfer-refused-');
   try {

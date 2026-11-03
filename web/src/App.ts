@@ -4,6 +4,7 @@ import {
   type TargetMemberView,
   type TaskStatus,
   type TaskView,
+  type TeamRunView,
   type WorkspaceSettingsView,
   type WorkspaceView,
 } from '@allibot/shared';
@@ -24,6 +25,8 @@ export interface AppProps {
   viewportWidth?: number;
   /** Channel member tables the shell may render, keyed by channel id. */
   channelMembers?: Record<string, readonly TargetMemberView[]>;
+  /** Team run snapshots the shell may render, keyed by target id. */
+  teamRuns?: Record<string, readonly TeamRunView[]>;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
   onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
@@ -50,6 +53,7 @@ export function App({
   activeTargetId,
   viewportWidth,
   channelMembers,
+  teamRuns,
   onSelectTarget,
   onTaskTransition,
   onJoinMember,
@@ -65,6 +69,7 @@ export function App({
       activeTargetId,
       viewportWidth,
       channelMembers,
+      teamRuns,
       onSelectTarget,
       onTaskTransition,
       onSettingsChange,

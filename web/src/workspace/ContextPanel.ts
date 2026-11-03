@@ -3,10 +3,12 @@ import {
   type ChannelConfigPatch,
   type Locale,
   type TargetMemberView,
+  type TeamRunView,
   type WorkspaceView,
 } from '@allibot/shared';
 import { createElement, type ReactNode } from 'react';
 import { ChannelConfigPanel } from './ChannelConfigPanel.ts';
+import { TeamRunsPanel } from './TeamRunsPanel.ts';
 import { readChannel, readTargetContext, type TargetKind } from './model.ts';
 import type { WorkspacePanel } from './shell-state.ts';
 import { taskStatusLabel } from './status-label.ts';
@@ -19,6 +21,8 @@ export interface ContextPanelProps {
   channelMembers?: readonly TargetMemberView[];
   /** The team-config write; mode and leader both use the one channel PATCH. */
   onChannelConfigChange?: (patch: ChannelConfigPatch) => void | Promise<void>;
+  /** The selected target's run snapshot, when the shell has read it. */
+  teamRuns?: readonly TeamRunView[];
   onOpenPanel?: (panel: WorkspacePanel) => void;
 }
 
@@ -47,10 +51,16 @@ export function ContextPanel({
   locale,
   channelMembers,
   onChannelConfigChange,
+  teamRuns,
   onOpenPanel,
 }: ContextPanelProps) {
   const context = readTargetContext(workspace, targetId);
   const channel = readChannel(workspace, targetId);
+  const selectedTask =
+    context?.kind === 'task'
+      ? workspace.tasks.find((task) => task.target_id === context.targetId)
+      : undefined;
+  const showsTeamRuns = channel?.mode === 'team' || selectedTask?.channel_mode === 'team';
 
   function panelButton(panel: WorkspacePanel, label: string): ReactNode {
     return createElement(
@@ -116,6 +126,14 @@ export function ContextPanel({
                 { className: 'context-panel__status', 'data-task-status': context.taskStatus },
                 taskStatusLabel(locale, context.taskStatus),
               ),
+          showsTeamRuns
+            ? createElement(TeamRunsPanel, {
+                runs: teamRuns ?? [],
+                locale,
+                tasks: workspace.tasks,
+                channels: workspace.channels,
+              })
+            : null,
           createElement(
             'div',
             { className: 'context-panel__entries' },

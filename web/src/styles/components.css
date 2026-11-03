@@ -1063,3 +1063,81 @@
   font-size: 12px;
   color: var(--muted);
 }
+
+/* 运行记录面板（#38）：状态、reason、归属与时间是取证读数，不是消息气泡。 */
+.team-runs {
+  margin-block-start: 8px;
+  border-block-start: 1px solid var(--border);
+  padding-block-start: 8px;
+}
+
+.team-runs__title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.team-runs__empty {
+  margin: 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+.team-runs__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.team-runs__run {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+}
+
+.team-runs__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.team-runs__status {
+  font-weight: 600;
+}
+
+.team-runs__run[data-team-run-status='running'] .team-runs__status {
+  color: var(--working);
+}
+
+.team-runs__run[data-team-run-status='failed'] .team-runs__status {
+  color: var(--offline);
+}
+
+.team-runs__run[data-team-run-status='invalid-leader'] .team-runs__status {
+  color: var(--error);
+}
+
+.team-runs__attribution,
+.team-runs__reason,
+.team-runs__time {
+  margin: 0;
+  font-size: 13px;
+}
+
+.team-runs__reason,
+.team-runs__time {
+  color: var(--muted);
+}
+
+.team-runs__label {
+  margin-inline-end: 4px;
+  color: var(--faint);
+  font-weight: 500;
+}
