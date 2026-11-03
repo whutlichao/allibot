@@ -85,6 +85,7 @@ async function run(argv: readonly string[]): Promise<number> {
       db,
       resolution.dataDir,
       orchestration,
+      { sseLifetimeMs: options.sseLifetimeMs },
     );
     console.log(tFromDb(db, 'cli.serve.listening', { url: `http://${HOST}:${boundPort}` }));
     console.log(`allibot member-face adapter: ${orchestration.provider.name}`);
@@ -138,6 +139,9 @@ function waitForShutdown(server: Server): Promise<number> {
         }
         resolve(0);
       });
+      // An open subscription is a long-lived response; shutting down must not
+      // wait for its rotation. Dropping the sockets lets `close` finish now.
+      server.closeAllConnections();
     };
 
     process.once('SIGTERM', () => shutdown('SIGTERM'));

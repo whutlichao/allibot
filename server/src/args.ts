@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import { DEFAULT_SSE_LIFETIME_MS } from './events.js';
 import { SCRIPTED_BEHAVIORS, type ScriptedBehavior } from './scripted-provider.js';
 
 export type CliCommand = 'serve' | 'migrate';
@@ -40,6 +41,12 @@ export interface CliOptions {
    * not a production branch.
    */
   scriptedEchoPrompt: boolean;
+  /**
+   * How long one `/api/events` connection lives before the server sends the
+   * rotate frame and closes it. Production keeps the 30-minute default; a test
+   * injects a short value instead of waiting.
+   */
+  sseLifetimeMs: number;
 }
 
 const DEFAULT_PORT = 3000;
@@ -58,7 +65,7 @@ const USAGE =
   'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
   '[--provider <scripted|model>] ' +
   '[--scripted-provider <reply|ignore|fail|delay|silent|no-body>] [--scripted-delay-ms <ms>] ' +
-  '[--scripted-reply <body>] [--scripted-echo-prompt]';
+  '[--scripted-reply <body>] [--scripted-echo-prompt] [--sse-lifetime-ms <ms>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -75,6 +82,7 @@ export function parseCliArgs(
       'scripted-delay-ms': { type: 'string' },
       'scripted-reply': { type: 'string', multiple: true },
       'scripted-echo-prompt': { type: 'boolean' },
+      'sse-lifetime-ms': { type: 'string' },
     },
     strict: true,
     allowPositionals: true,
@@ -93,6 +101,7 @@ export function parseCliArgs(
     scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
     scriptedReplies: parseScriptedReplies(values['scripted-reply']),
     scriptedEchoPrompt: values['scripted-echo-prompt'] === true,
+    sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
   };
 }
 
@@ -165,6 +174,17 @@ function parseDelayMs(raw: string | undefined): number {
   }
   if (!/^\d+$/.test(raw)) {
     throw new Error(`invalid --scripted-delay-ms value: ${raw}`);
+  }
+  return Number(raw);
+}
+
+/** A connection lifetime is a positive integer; 0 would rotate every stream instantly. */
+function parseSseLifetimeMs(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_SSE_LIFETIME_MS;
+  }
+  if (!/^\d+$/.test(raw) || Number(raw) === 0) {
+    throw new Error(`invalid --sse-lifetime-ms value: ${raw}`);
   }
   return Number(raw);
 }

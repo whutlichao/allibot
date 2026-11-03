@@ -13,6 +13,7 @@ import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
 import { collectWakes, dispatchWakes, type InFlightRounds } from './rounds.js';
+import { publishMessageCreated } from './events.js';
 
 /** The human face may only write human messages. */
 const HUMAN_MESSAGE_KIND = 'human';
@@ -123,7 +124,14 @@ export function appendMessage(
     }
     return { ...inserted, created: true };
   });
-  return write();
+  const appended = write();
+  // A stored message is the fact the global subscription relays. A replay
+  // writes nothing, so it announces nothing; a failed write never returns, so
+  // its rollback reaches no subscriber either.
+  if (appended.created) {
+    publishMessageCreated({ targetId: input.targetId, id: appended.id, seq: appended.seq });
+  }
+  return appended;
 }
 
 /**
