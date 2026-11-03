@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import type {
   RoundMcpCallResult,
@@ -32,7 +32,10 @@ import type { McpServerEntry } from '@allibot/shared';
  *   no consent;
  * - the host cwd is the project root when one exists, otherwise a disposable
  *   `<data_dir>/mcp-hosts/<session_id>/` directory (not a project workspace and
- *   not a file-tool root).
+ *   not a file-tool root), removed when the round releases its connections;
+ * - in the Docker backend stdio servers run inside the Agent container via
+ *   `docker exec -i` (#49). This ticket only assembles the local host and the
+ *   host-side http / sse connections; the container lifecycle is not here.
  *
  * Every tool call goes through the one #44 tool gate as an execution-class
  * call (`mcp:<server>/<tool>` with stable JSON arguments). A denial is a
@@ -171,6 +174,12 @@ export async function buildRoundMcp(
       await Promise.all(
         connected.map((server) => server.client.close().catch(() => undefined)),
       );
+      if (options.projectRoot === null && hostRoot !== null) {
+        // The disposable runtime host is not business data: drop it with the
+        // round's connections so mcp-hosts/ does not grow one directory per
+        // round.
+        rmSync(hostRoot, { recursive: true, force: true });
+      }
     },
   };
 }
