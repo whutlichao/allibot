@@ -67,6 +67,11 @@ export const ZH_CN = {
       '以最大 seq #{largest} 为准；不排队、不重放',
     params: ['count', 'largest'],
   },
+  // 预算耗尽不是错误：消息已落库、零唤醒，本轮被压制。
+  'round.budgetExhausted': {
+    text: '预算耗尽：本世代已用 {used}/{limit} 跳，本条消息的唤醒被压制（消息照常落库）',
+    params: ['used', 'limit'],
+  },
   'round.finished.completed': { text: '正常完成', params: [] },
   'round.finished.error': { text: '错误', params: [] },
   'system.member.piercedJoin': {
