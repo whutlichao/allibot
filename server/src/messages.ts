@@ -338,8 +338,8 @@ export function parseMessageRequest(targetId: string, body: unknown): AppendMess
 }
 
 /**
- * The upload drafts this message binds. The order is the order the read path
- * renders them in; a repeated id is a client mistake, not two attachments.
+ * The upload drafts this message binds. A repeated id is a client mistake, not
+ * two attachments; the read path lists what was bound in upload order.
  */
 function parseAttachmentIds(value: unknown): string[] {
   if (value === undefined) {
