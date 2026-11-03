@@ -10,11 +10,13 @@
     "test:visual-contract": "node --test test/visual-contract.test.ts",
     "preview": "vite preview",
     "test:strings": "node --test test/strings.test.ts",
+    "test:web-render": "node --test test/web-render.test.ts",
     "test:agui-contract": "node --import ./test/support/register-css.mjs --test test/copilotkit-contract.test.ts"
   },
   "dependencies": {
     "@allibot/shared": "*",
     "@copilotkit/react-core": "1.83.0",
+    "markdown-it": "15.0.3",
     "react": "19.2.0",
     "react-dom": "19.2.0"
   },
