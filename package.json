@@ -17,6 +17,7 @@
     "test": "npm run build && npm run test --workspace server && npm run test:strings && npm run test:visual-contract",
     "test:strings": "npm run build --workspace shared && npm run test:strings --workspace shared && npm run test:strings --workspace web",
     "test:visual-contract": "npm run test:visual-contract --workspace web",
-    "test:agui-contract": "npm run build && node --test server/test/agui-contract.test.ts && npm run test:agui-contract --workspace web"
+    "test:agui-contract": "npm run build && node --test server/test/agui-contract.test.ts && npm run test:agui-contract --workspace web",
+    "test:agui-live": "npm run build && node --test server/test/agui-live.test.ts && npm run test:agui-live --workspace web"
   }
 }

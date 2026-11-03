@@ -10,7 +10,8 @@
     "test:visual-contract": "node --test test/visual-contract.test.ts",
     "preview": "vite preview",
     "test:strings": "node --test test/strings.test.ts",
-    "test:agui-contract": "node --import ./test/support/register-css.mjs --test test/copilotkit-contract.test.ts"
+    "test:agui-contract": "node --import ./test/support/register-css.mjs --test test/copilotkit-contract.test.ts",
+    "test:agui-live": "node --import ./test/support/register-css.mjs --test test/copilotkit-live-contract.test.ts"
   },
   "dependencies": {
     "@allibot/shared": "*",

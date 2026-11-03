@@ -534,8 +534,12 @@ export async function runRound(
   }
   // The other-target wakes wait here rather than running in parallel: one
   // member still has at most one round in flight. They were deferred into this
-  // round's turn, not delivered to another member, so they carry no jump.
+  // round's turn, not delivered to another member, so they carry no jump. A
+  // cancelled run starts none of them: they were never rounds.
   for (const deferred of turn.deferred) {
+    if (signal?.aborted) {
+      break;
+    }
     await runRound(db, provider, deferred, inFlight, { signal });
   }
   // The reply is itself an Agent message, so it relays to the other members
