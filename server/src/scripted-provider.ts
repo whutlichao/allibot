@@ -7,6 +7,7 @@ import type {
   RoundResult,
   TeamAssignToolResult,
 } from './agent-seam.js';
+import { stableJson } from './permissions.js';
 import { codepointLength } from './team-assignments.js';
 import { agentHomeRoot } from './workspace-root.js';
 
@@ -60,7 +61,10 @@ export type ScriptedBehavior =
   | 'plan'
   | 'sop-create'
   | 'sop-start'
-  | 'workspace';
+  | 'workspace'
+  | 'permission'
+  | 'mcp-approval'
+  | 'team-approval';
 
 export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'reply',
@@ -78,6 +82,9 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'sop-create',
   'sop-start',
   'workspace',
+  'permission',
+  'mcp-approval',
+  'team-approval',
 ];
 
 export interface ScriptedProviderOptions {
@@ -197,7 +204,13 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
         case 'plan':
           return await planResult(input, options, callReport);
         case 'workspace':
-          return workspaceResult(input, options, callReport);
+          return await workspaceResult(input, options, callReport);
+        case 'permission':
+          return await permissionResult(input, options, callReport);
+        case 'mcp-approval':
+          return await mcpApprovalResult(input, options, callReport);
+        case 'team-approval':
+          return await teamApprovalResult(input, options, callReport);
         case 'sop-create':
         case 'sop-start':
           // The member face has no SOP write tool (D4.2): the double states
@@ -451,11 +464,11 @@ function sopUnavailableResult(
  * A round with no project root reports `available:false` and its actual tool
  * set; the test reads that as "no file tools and no shell".
  */
-function workspaceResult(
+async function workspaceResult(
   input: RoundInput,
   options: ScriptedProviderOptions,
   callReport: string,
-): RoundResult {
+): Promise<RoundResult> {
   const toolsLine = `[workspace-tools] ${input.tools.length === 0 ? '-' : input.tools.join(',')}`;
   const workspace = input.workspace;
   if (workspace === null) {
@@ -473,29 +486,29 @@ function workspaceResult(
   const lines: string[] = [
     `[workspace] root:${workspace.root} backend:${workspace.backend}` +
       ` shell:${workspace.allow_local_shell}`,
-    reportFileCall('workspace-read', files.Read({ path: 'notes.txt' })),
-    reportFileCall('workspace-glob', files.Glob({ pattern: '**/*.txt' })),
-    reportFileCall('workspace-grep', files.Grep({ pattern: 'NEEDLE' })),
+    reportFileCall('workspace-read', await files.Read({ path: 'notes.txt' })),
+    reportFileCall('workspace-glob', await files.Glob({ pattern: '**/*.txt' })),
+    reportFileCall('workspace-grep', await files.Grep({ pattern: 'NEEDLE' })),
     reportFileCall(
       'workspace-absolute-inside',
-      files.Read({ path: path.join(workspace.root, 'notes.txt') }),
+      await files.Read({ path: path.join(workspace.root, 'notes.txt') }),
     ),
     reportFileCall(
       'workspace-write',
-      files.Write({ path: 'written.txt', content: 'written-by-tool' }),
+      await files.Write({ path: 'written.txt', content: 'written-by-tool' }),
     ),
     reportFileCall(
       'workspace-edit',
-      files.Edit({
+      await files.Edit({
         path: 'written.txt',
         old_string: 'written-by-tool',
         new_string: 'edited-by-tool',
       }),
     ),
-    reportFileCall('workspace-reread', files.Read({ path: 'written.txt' })),
-    reportFileCall('workspace-dotdot', files.Read({ path: '../outside.txt' })),
-    reportFileCall('workspace-absolute', files.Read({ path: outside })),
-    reportFileCall('workspace-symlink', files.Read({ path: 'escape/outside.txt' })),
+    reportFileCall('workspace-reread', await files.Read({ path: 'written.txt' })),
+    reportFileCall('workspace-dotdot', await files.Read({ path: '../outside.txt' })),
+    reportFileCall('workspace-absolute', await files.Read({ path: outside })),
+    reportFileCall('workspace-symlink', await files.Read({ path: 'escape/outside.txt' })),
   ];
 
   if (workspace.skills_root !== null) {
@@ -503,23 +516,23 @@ function workspaceResult(
     lines.push(
       reportFileCall(
         'workspace-skills-read',
-        files.Read({ path: path.join(skills, 'demo', 'SKILL.md') }),
+        await files.Read({ path: path.join(skills, 'demo', 'SKILL.md') }),
       ),
       reportFileCall(
         'workspace-skills-glob',
-        files.Glob({ pattern: '**/*.md', path: skills }),
+        await files.Glob({ pattern: '**/*.md', path: skills }),
       ),
       reportFileCall(
         'workspace-skills-grep',
-        files.Grep({ pattern: 'SKILL-NEEDLE', path: skills }),
+        await files.Grep({ pattern: 'SKILL-NEEDLE', path: skills }),
       ),
       reportFileCall(
         'workspace-skills-write',
-        files.Write({ path: path.join(skills, 'demo', 'SKILL.md'), content: 'hacked' }),
+        await files.Write({ path: path.join(skills, 'demo', 'SKILL.md'), content: 'hacked' }),
       ),
       reportFileCall(
         'workspace-skills-edit',
-        files.Edit({
+        await files.Edit({
           path: path.join(skills, 'demo', 'SKILL.md'),
           old_string: 'SKILL-NEEDLE',
           new_string: 'hacked',
@@ -535,7 +548,7 @@ function workspaceResult(
   lines.push(
     reportFileCall(
       'workspace-home-write',
-      files.Write({
+      await files.Write({
         path: path.join(agentHomeRoot(input.member.id), 'AGENTS.md'),
         content: 'hacked',
       }),
@@ -546,6 +559,155 @@ function workspaceResult(
     verdict: 'replied',
     replies: [`${lines.join('\n')}${callReport}${teamReport(input, options)}`],
   };
+}
+
+/**
+ * The double's permission-gate behaviour (#44 / D5.5 / D5.6). It asks the
+ * round's synchronous gate face to classify a fixed set of calls (including the
+ * local-shell hook and an MCP name with stable argument JSON), then performs
+ * two writes in one round so a test can observe the DENIED result and the
+ * multi-batch reopen. The double never decides anything itself: every line is
+ * the production gate's answer.
+ */
+async function permissionResult(
+  input: RoundInput,
+  options: ScriptedProviderOptions,
+  callReport: string,
+): Promise<RoundResult> {
+  const workspace = input.workspace;
+  const toolsLine = `[workspace-tools] ${input.tools.length === 0 ? '-' : input.tools.join(',')}`;
+  if (workspace === null) {
+    return {
+      verdict: 'replied',
+      replies: [
+        `[permission] available:false${callReport}\n${toolsLine}` +
+          teamReport(input, options),
+      ],
+    };
+  }
+  const permission = workspace.permission;
+  const files = workspace.files;
+  const mcpArgs = stableJson({ z: 'last', a: 1 });
+  const checks: string[] = [
+    `[permission] mode:${permission.mode} shell:${workspace.allow_local_shell}`,
+    checkLine('Read:notes.txt', permission.check({ tool_name: 'Read', pattern: 'notes.txt' })),
+    checkLine('Write:notes.txt', permission.check({ tool_name: 'Write', pattern: 'notes.txt' })),
+    checkLine('Write:sub/deep.txt', permission.check({ tool_name: 'Write', pattern: 'sub/deep.txt' })),
+    checkLine('Bash:rm -rf /', permission.check({ tool_name: 'Bash', pattern: 'rm -rf /' })),
+    checkLine('Bash:ls -la', permission.check({ tool_name: 'Bash', pattern: 'ls -la' })),
+    checkLine(
+      'mcp:demo/echo:{"a":1,"z":"last"}',
+      permission.check({ tool_name: 'mcp:demo/echo', pattern: mcpArgs }),
+    ),
+  ];
+  const lines: string[] = [
+    ...checks,
+    reportFileCall(
+      'approval-one',
+      await files.Write({ path: 'approval-one.txt', content: 'one' }),
+    ),
+    reportFileCall(
+      'approval-two',
+      await files.Write({ path: 'approval-two.txt', content: 'two' }),
+    ),
+    reportFileCall('approval-read', await files.Read({ path: 'notes.txt' })),
+    `[shell-approval] ${await permission.authorize({
+      tool_name: 'Bash',
+      pattern: 'ls -la',
+      arguments: { command: 'ls -la' },
+    })}`,
+    toolsLine,
+  ];
+  return {
+    verdict: 'replied',
+    replies: [`${lines.join('\n')}${callReport}${teamReport(input, options)}`],
+  };
+}
+
+function checkLine(label: string, check: { decision: string; reason: string }): string {
+  return `[permission-check] ${label}=${check.decision}:${check.reason}`;
+}
+
+
+/**
+ * The double's MCP approval face (#44 / D5.5 / D5.6): MCP tools are execute
+ * class, so an ask-writes round asks. The arguments carry secret-shaped fields
+ * to prove the approval row masks them; the production gate writes the row, the
+ * double only calls the same face the future MCP adapter will.
+ */
+async function mcpApprovalResult(
+  input: RoundInput,
+  options: ScriptedProviderOptions,
+  callReport: string,
+): Promise<RoundResult> {
+  const workspace = input.workspace;
+  if (workspace === null) {
+    return {
+      verdict: 'replied',
+      replies: [`[mcp-approval] available:false${callReport}${teamReport(input, options)}`],
+    };
+  }
+  const args = {
+    api_key: 'sk-live-approval-SECRET',
+    nested: { token: 'token-approval-SECRET' },
+    plain: 'readable',
+  };
+  const outcome = await workspace.permission.authorize({
+    tool_name: 'mcp:demo/echo',
+    pattern: stableJson(args),
+    tool_call_id: 'mcp-call-stable',
+    arguments: args,
+  });
+  // Re-registering the same call id after the decision is the idempotent
+  // duplicate-registration case: it must not reopen a batch or add a call.
+  const replay = await workspace.permission.authorize({
+    tool_name: 'mcp:demo/echo',
+    pattern: stableJson(args),
+    tool_call_id: 'mcp-call-stable',
+    arguments: args,
+  });
+  return {
+    verdict: 'replied',
+    replies: [
+      `[mcp-approval] mcp:demo/echo:${outcome}` +
+        `\n[mcp-approval-repeat] mcp:demo/echo:${replay}` +
+        `${callReport}${teamReport(input, options)}`,
+    ],
+  };
+}
+
+/**
+ * The double's TeamAssign approval face (#44 / D5.6): the leader assigns, and
+ * the member sub-round performs one gated write, so an ask carries
+ * `context_kind='team-assignment'` and the assignment id. The production gate
+ * writes the approval; the double observes the sub-round's tool result.
+ */
+async function teamApprovalResult(
+  input: RoundInput,
+  options: ScriptedProviderOptions,
+  callReport: string,
+): Promise<RoundResult> {
+  if (input.team?.assignment !== null && input.team?.assignment !== undefined) {
+    const workspace = input.workspace;
+    if (workspace === null) {
+      return {
+        verdict: 'replied',
+        replies: [`[team-approval] available:false${callReport}${teamReport(input, options)}`],
+      };
+    }
+    const result = await workspace.files.Write({
+      path: 'team-approval.txt',
+      content: 'member-wrote',
+    });
+    return {
+      verdict: 'replied',
+      replies: [
+        `[team-approval] member:${reportFileCall('team-approval-write', result)}` +
+          `${callReport}${teamReport(input, options)}`,
+      ],
+    };
+  }
+  return await teamAssignResult(input, options, callReport, false);
 }
 
 /** The double's readable line for one file-tool result (never production copy). */

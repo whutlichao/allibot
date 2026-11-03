@@ -37,6 +37,7 @@ function channel(overrides: Partial<ChannelView> = {}): ChannelView {
     mode: 'autonomous',
     team: { leader_member_id: null, status: 'valid', reason: null },
     workspace: { root: null, backend: 'local', allow_local_shell: 0 },
+    permission_mode: 'ask-writes',
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,
@@ -54,6 +55,7 @@ function members(status: WorkspaceStatusView): TargetMemberView[] {
       display_name: 'owner',
       avatar_slot: 0,
       workspace_status: status,
+      permission_mode: 'ask-writes',
     },
     {
       id: AGENT_ID,
@@ -61,6 +63,7 @@ function members(status: WorkspaceStatusView): TargetMemberView[] {
       display_name: '工作区成员',
       avatar_slot: 1,
       workspace_status: status,
+      permission_mode: 'ask-writes',
     },
   ];
 }
@@ -88,6 +91,7 @@ function workspace(target: ChannelView): WorkspaceView {
     channels: [target],
     dms: [],
     tasks: [TASK],
+    pending_approvals: 0,
     unread_total: 0,
     unread_by_target: { [CHANNEL_ID]: 0 },
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },

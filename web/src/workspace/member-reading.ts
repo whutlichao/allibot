@@ -162,6 +162,12 @@ export function applyJoinResult(
           available: false,
           reason: 'workspace-root-missing',
         },
+        // The channel's default is the owner row's effective mode; the new
+        // Agent follows it unless it already carries an override.
+        permission_mode:
+          members.find((member) => member.kind === 'owner')?.permission_mode ??
+          agent.permission_mode ??
+          agent.effective_permission_mode,
       },
     ],
     joined,

@@ -116,8 +116,12 @@ async function joinChannel(fixture: Fixture, channelId: string, memberId: string
 }
 
 async function configureRoot(fixture: Fixture, channelId: string, root: string): Promise<void> {
+  // #44 makes every write pass the tool gate. The file-tool behaviour writes
+  // freely, so this fixture selects the mode that auto-allows root-internal
+  // writes; the approval modes have their own suite.
   const patched = await patchJson(fixture, `/api/channels/${channelId}`, {
     workspace_root: root,
+    permission_mode: 'trusted-writes',
   });
   assert.equal(patched.status, 200, await patched.clone().text());
 }

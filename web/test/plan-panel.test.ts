@@ -81,6 +81,7 @@ function channel(overrides: Partial<ChannelView> & Pick<ChannelView, 'id' | 'nam
     mode: 'autonomous',
     team: { leader_member_id: null, status: 'valid', reason: null },
     workspace: { root: null, backend: 'local', allow_local_shell: 0 },
+    permission_mode: 'ask-writes',
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,
@@ -128,6 +129,8 @@ function agent(): AgentView {
     max_iterations: 8,
     auto_claim: 0,
     workspace_backend: null,
+    permission_mode: null,
+    effective_permission_mode: 'ask-writes',
     home_path: '/tmp/allibot-home/agents/agent-1',
   };
 }
@@ -154,6 +157,7 @@ function workspace(): WorkspaceView {
     tasks: [task()],
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
     status_points: { [AGENT_ID]: { status: 'online', offline_reason: null } },
+    pending_approvals: 0,
     unread_total: 0,
     unread_by_target: {
       [AUTONOMOUS_CHANNEL_ID]: 0,

@@ -41,6 +41,8 @@ export const LIVE_EVENT_TYPES = [
   'workspace.changed',
   'team_assignment',
   'plan_update',
+  'approval.requested',
+  'approval.resolved',
 ] as const;
 
 export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];

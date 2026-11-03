@@ -264,7 +264,9 @@ async function configureRoot(fixture: Fixture, channelId: string, root: string):
   const patched = await fetch(`${fixture.base}/api/channels/${channelId}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ workspace_root: root }),
+    // #44: every file write passes the tool gate. This suite observes the
+    // home boundary, so it selects the mode that auto-allows root writes.
+    body: JSON.stringify({ workspace_root: root, permission_mode: 'trusted-writes' }),
   });
   assert.equal(patched.status, 200, await patched.clone().text());
 }

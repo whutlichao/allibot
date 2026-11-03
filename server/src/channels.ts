@@ -15,6 +15,7 @@ import {
   assertAssignableTeamLeader,
   readTeamView,
 } from './team.js';
+import { requirePermissionMode, DEFAULT_PERMISSION_MODE } from './permissions.js';
 import { validateWorkspaceRoot } from './workspace-root.js';
 
 /** The allowed response budget upper bounds; the default is 3. */
@@ -30,6 +31,7 @@ export interface ChannelRow {
   workspace_root: string | null;
   workspace_backend: string;
   allow_local_shell: number;
+  permission_mode: string;
   response_budget_limit: number;
   archived_at: string | null;
   deleted_at: string | null;
@@ -49,11 +51,13 @@ interface ChannelWriteInput {
   workspaceRootProvided?: boolean;
   workspaceRoot?: string | null;
   workspaceBackend?: WorkspaceBackend;
+  permissionMode?: import('@allibot/shared').PermissionMode;
+  allowLocalShell?: 0 | 1;
 }
 
 const CHANNEL_SELECT = `
 SELECT id, name, description, mode, team_leader_member_id, workspace_root,
-       workspace_backend, allow_local_shell, response_budget_limit,
+       workspace_backend, allow_local_shell, permission_mode, response_budget_limit,
        archived_at, deleted_at, created_at, updated_at
 FROM channel`;
 
@@ -64,6 +68,8 @@ const FIELD_KEYS = {
   team_leader_member_id: 'teamLeaderMemberId',
   workspace_root: 'workspaceRoot',
   workspace_backend: 'workspaceBackend',
+  permission_mode: 'permissionMode',
+  allow_local_shell: 'allowLocalShell',
   response_budget_limit: 'responseBudgetLimit',
 } as const;
 
@@ -186,6 +192,8 @@ export function updateChannel(
       const nextDescription = patch.description ?? current.description;
       const nextBudget = patch.responseBudgetLimit ?? current.response_budget_limit;
       const nextBackend = patch.workspaceBackend ?? (current.workspace_backend as WorkspaceBackend);
+      const nextPermissionMode = patch.permissionMode ?? current.permission_mode;
+      const nextAllowLocalShell = patch.allowLocalShell ?? (current.allow_local_shell === 1 ? 1 : 0);
       const nextRoot = patch.workspaceRootProvided === true
         ? (patch.workspaceRoot === null
             ? null
@@ -200,7 +208,9 @@ export function updateChannel(
         nextDescription !== current.description ||
         nextBudget !== current.response_budget_limit ||
         nextRoot !== current.workspace_root ||
-        nextBackend !== current.workspace_backend;
+        nextBackend !== current.workspace_backend ||
+        nextPermissionMode !== current.permission_mode ||
+        nextAllowLocalShell !== current.allow_local_shell;
       if (!changed) {
         return { found: true, changed: false, teamChanged: false };
       }
@@ -208,8 +218,8 @@ export function updateChannel(
       db.prepare(
         `UPDATE channel
             SET name = ?, description = ?, mode = ?, team_leader_member_id = ?,
-                workspace_root = ?, workspace_backend = ?, response_budget_limit = ?,
-                updated_at = ?
+                workspace_root = ?, workspace_backend = ?, permission_mode = ?,
+                allow_local_shell = ?, response_budget_limit = ?, updated_at = ?
           WHERE id = ?`,
       ).run(
         nextName,
@@ -218,6 +228,8 @@ export function updateChannel(
         leader,
         nextRoot,
         nextBackend,
+        nextPermissionMode,
+        nextAllowLocalShell,
         nextBudget,
         new Date().toISOString(),
         id,
@@ -403,6 +415,12 @@ function parsePatchInput(body: unknown): ChannelWriteInput {
   if (record['workspace_backend'] !== undefined) {
     patch.workspaceBackend = requireWorkspaceBackend(record['workspace_backend']);
   }
+  if (record['permission_mode'] !== undefined) {
+    patch.permissionMode = requirePermissionMode(record['permission_mode']);
+  }
+  if (record['allow_local_shell'] !== undefined) {
+    patch.allowLocalShell = requireBinary(record['allow_local_shell'], 'allow_local_shell');
+  }
   const description = optionalString(record, 'description');
   if (description !== undefined) {
     patch.description = description;
@@ -464,6 +482,14 @@ function requireAutonomousCreateMode(value: unknown): void {
       { field: 'mode', value },
     );
   }
+}
+
+/** The explicit local-shell switch (#44 hook; shell execution is #46). */
+function requireBinary(value: unknown, field: string): 0 | 1 {
+  if (value !== 0 && value !== 1) {
+    throw ApiFailure.validation(`${field} must be 0 or 1`, { field, value });
+  }
+  return value;
 }
 
 /** `null` clears the leader; a non-empty string names the new one. */
@@ -541,6 +567,10 @@ function toChannelView(
       backend: row.workspace_backend as WorkspaceBackend,
       allow_local_shell: row.allow_local_shell === 1 ? 1 : 0,
     },
+    permission_mode:
+      typeof row.permission_mode === 'string'
+        ? (row.permission_mode as ChannelView['permission_mode'])
+        : DEFAULT_PERMISSION_MODE,
     response_budget_limit: row.response_budget_limit,
     archived_at: row.archived_at,
     deleted_at: row.deleted_at,

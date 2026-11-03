@@ -1,12 +1,16 @@
 import {
   t,
   type AgentRulesView,
+  type ApprovalDecisionInput,
+  type ApprovalView,
   type ChannelConfigPatch,
   type PlanRunView,
   type SopDefinitionCreate,
   type SopDefinitionView,
   type SopRunView,
   type TargetMemberView,
+  type PermissionRuleInput,
+  type PermissionRuleView,
   type TaskStatus,
   type TaskView,
   type TeamRunView,
@@ -38,6 +42,10 @@ export interface AppProps {
   sopDefinitions?: Record<string, readonly SopDefinitionView[]>;
   /** SOP run snapshots, keyed by definition id. */
   sopRuns?: Record<string, readonly SopRunView[]>;
+  /** The approval list reading (#44). */
+  approvals?: readonly ApprovalView[];
+  /** Permission rule sets, keyed by scope. */
+  permissionRules?: Readonly<Record<string, readonly PermissionRuleView[]>>;
   /** Effective rules per Agent id, keyed by Agent. */
   agentRules?: Record<string, AgentRulesView>;
   onAgentRulesNeeded?: (agentId: string, channelId: string | null) => void;
@@ -50,6 +58,12 @@ export interface AppProps {
   onChannelConfigChange?: AsyncAction2<string, ChannelConfigPatch>;
   onCreateSop?: (input: SopDefinitionCreate) => void | Promise<void>;
   onStartSop?: (definitionId: string) => void | Promise<void>;
+  onApprovalDecision?: (replyId: string, input: ApprovalDecisionInput) => void | Promise<void>;
+  onPermissionRulesChange?: (
+    scope: { kind: 'channel' | 'agent'; id: string },
+    rules: PermissionRuleInput[],
+  ) => void | Promise<void>;
+  onAgentPermissionModeChange?: (agentId: string, mode: string | null) => void | Promise<void>;
   onLiveEvent?: (event: LiveEvent) => void;
 }
 
@@ -73,6 +87,8 @@ export function App({
   plans,
   sopDefinitions,
   sopRuns,
+  approvals,
+  permissionRules,
   agentRules,
   onAgentRulesNeeded,
   onSelectTarget,
@@ -83,6 +99,9 @@ export function App({
   onChannelConfigChange,
   onCreateSop,
   onStartSop,
+  onApprovalDecision,
+  onPermissionRulesChange,
+  onAgentPermissionModeChange,
   onLiveEvent,
 }: AppProps) {
   if (workspace !== undefined) {
@@ -96,6 +115,8 @@ export function App({
       plans,
       sopDefinitions,
       sopRuns,
+      approvals,
+      permissionRules,
       agentRules,
       onAgentRulesNeeded,
       onSelectTarget,
@@ -107,6 +128,9 @@ export function App({
       onChannelConfigChange,
       onCreateSop,
       onStartSop,
+      onApprovalDecision,
+      onPermissionRulesChange,
+      onAgentPermissionModeChange,
       saveFailed,
       onLiveEvent,
     });

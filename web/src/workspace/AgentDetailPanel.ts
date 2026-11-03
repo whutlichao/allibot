@@ -4,6 +4,9 @@ import {
   type AgentRulesView,
   type AgentView,
   type Locale,
+  type PermissionMode,
+  type PermissionRuleInput,
+  type PermissionRuleView,
 } from '@allibot/shared';
 import { createElement, useState, type ReactNode } from 'react';
 import type { AsyncAction, AsyncAction1 } from '../async-action.ts';
@@ -17,6 +20,8 @@ import {
   type AgentDetailTab,
 } from './agent-detail.ts';
 import { ruleSectionStatus } from './agent-rules.ts';
+import { PermissionRulesEditor } from './PermissionRulesEditor.ts';
+import { agentPermissionModePatch, permissionModeOptions } from './permissions.ts';
 import { StatusPoint } from './StatusPoint.ts';
 import { offlineReasonLabel } from './status-label.ts';
 
@@ -48,6 +53,12 @@ export interface AgentDetailPanelProps {
   onSave?: AsyncAction1<{ system_prompt: string }>;
   /** 软删除该 Agent；未提供时不渲染删除动作。 */
   onDelete?: AsyncAction;
+  /** The Agent's permission rule set (#44); undefined while it is loading. */
+  permissionRules?: readonly PermissionRuleView[];
+  /** The host's full-replacement rule write; absent = read-only display. */
+  onPermissionRulesChange?: (rules: PermissionRuleInput[]) => void | Promise<void>;
+  /** The raw Agent permission-mode override write (null = follow channel). */
+  onPermissionModeChange?: (mode: PermissionMode | null) => void | Promise<void>;
 }
 
 /**
@@ -68,6 +79,9 @@ export function AgentDetailPanel({
   initialDraft,
   onSave,
   onDelete,
+  permissionRules,
+  onPermissionRulesChange,
+  onPermissionModeChange,
 }: AgentDetailPanelProps) {
   const [state, setState] = useState(() =>
     initialAgentDetailState(agent, initialTab, initialDraft),
@@ -226,7 +240,44 @@ export function AgentDetailPanel({
             ? t(locale, 'workspace.agentDetail.yes')
             : t(locale, 'workspace.agentDetail.no'),
         ),
+        fact(
+          'permission',
+          t(locale, 'workspace.permission.mode.label'),
+          onPermissionModeChange === undefined
+            ? agent.permission_mode === null
+              ? t(locale, 'workspace.permission.mode.followChannel')
+              : `${agent.permission_mode}`
+            : createElement(
+                'select',
+                {
+                  className: 'agent-detail__select',
+                  'data-action': 'agent-permission-mode',
+                  'data-permission-mode': agent.permission_mode ?? 'follow',
+                  value: agent.permission_mode ?? 'follow',
+                  onChange: (event: { target: { value: string } }) => {
+                    const patch = agentPermissionModePatch(agent, event.target.value);
+                    if (patch !== null) {
+                      void onPermissionModeChange(patch.permission_mode);
+                    }
+                  },
+                },
+                createElement(
+                  'option',
+                  { value: 'follow' },
+                  t(locale, 'workspace.permission.mode.followChannel'),
+                ),
+                ...permissionModeOptions(locale).map((option) =>
+                  createElement('option', { key: option.value, value: option.value }, option.label),
+                ),
+              ),
+        ),
       ),
+      createElement(PermissionRulesEditor, {
+        key: `agent-rules:${agent.id}`,
+        rules: permissionRules,
+        locale,
+        onSave: onPermissionRulesChange,
+      }),
     );
   }
 

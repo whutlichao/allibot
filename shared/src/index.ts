@@ -101,6 +101,17 @@ export interface AgentView extends StatusPointView {
    */
   workspace_backend: WorkspaceBackend | null;
   /**
+   * The raw Agent-level permission-mode override (D5.5). `null` means follow
+   * the channel; a DM has no channel, so the default `ask-writes` applies.
+   */
+  permission_mode: PermissionMode | null;
+  /**
+   * The mode this Agent resolves to without a channel context: its override or
+   * the product default. A targeted context reads the per-target effective
+   * mode from `TargetMemberView.permission_mode` instead.
+   */
+  effective_permission_mode: PermissionMode;
+  /**
    * The Agent home path, derived from `member_id` and the process-level global
    * layer root (D5.2). It is read-only: no database column stores it, so a
    * restart with the same home root returns the same value.
@@ -216,6 +227,107 @@ export interface WorkspaceStatusView {
 }
 
 /**
+ * The three product permission modes (D5.5). There is no bypass / "don't ask"
+ * level: those names are refused at the write path, not stored.
+ */
+export const PERMISSION_MODES = ['read-only', 'ask-writes', 'trusted-writes'] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+/** The rule behaviour; merged as deny > ask > allow. */
+export const PERMISSION_BEHAVIORS = ['allow', 'deny', 'ask'] as const;
+export type PermissionBehavior = (typeof PERMISSION_BEHAVIORS)[number];
+
+/** The two rule scopes: a channel's set or one Agent's set. */
+export const PERMISSION_SCOPE_KINDS = ['channel', 'agent'] as const;
+export type PermissionScopeKind = (typeof PERMISSION_SCOPE_KINDS)[number];
+
+/** One stored permission rule as the human face reads it. */
+export interface PermissionRuleView {
+  id: string;
+  scope_kind: PermissionScopeKind;
+  scope_id: string;
+  tool_name: string;
+  /** Case-sensitive glob; the empty string matches every call of the tool. */
+  pattern: string;
+  behavior: PermissionBehavior;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One rule in a full replacement (`PUT .../permission-rules`) or in an
+ * approval decision's `rules?`. The scope comes from the URL / the approval's
+ * target context, so a row never repeats it.
+ */
+export interface PermissionRuleInput {
+  tool_name: string;
+  pattern: string;
+  behavior: PermissionBehavior;
+}
+
+/** The effective mode in one target context plus the raw Agent override. */
+export interface PermissionReading {
+  /** The mode this target context resolves to: override or channel default. */
+  permission_mode: PermissionMode;
+  /** The raw Agent override; `null` means follow the channel / default. */
+  permission_mode_override: PermissionMode | null;
+}
+
+/** One tool call inside an approval request (arguments already masked). */
+export interface ApprovalToolCallView {
+  tool_call_id: string;
+  tool_name: string;
+  /** The pattern subject: file path / command / stable MCP argument JSON. */
+  pattern: string;
+  /** The batch ordinal this call joined. */
+  batch: number;
+  /** Masked readable arguments; secret-shaped fields are `***`. */
+  arguments: Record<string, unknown>;
+  requested_at: string;
+}
+
+/** One human decision on one tool call. */
+export interface ApprovalDecisionView {
+  tool_call_id: string;
+  confirmed: boolean;
+  decided_at: string;
+}
+
+export type ApprovalStatus = 'pending' | 'confirmed' | 'denied' | 'failed' | 'expired';
+export type ApprovalContextKind = 'round' | 'team-assignment' | 'sop';
+
+/** One batch of calls: the Nth ask reopens a resolved reply as a new batch. */
+export interface ApprovalBatchView {
+  batch: number;
+  requested_at: string;
+  tool_calls: ApprovalToolCallView[];
+  decisions: ApprovalDecisionView[];
+}
+
+/** One approval request as the human face reads it. */
+export interface ApprovalView {
+  reply_id: string;
+  target_id: string | null;
+  context_kind: ApprovalContextKind;
+  context_id: string | null;
+  status: ApprovalStatus;
+  requested_at: string;
+  resolved_at: string | null;
+  tool_calls: ApprovalToolCallView[];
+  decisions: ApprovalDecisionView[];
+  /** The same calls grouped by batch, oldest first. */
+  batches: ApprovalBatchView[];
+}
+
+/** The approval decision request body. */
+export interface ApprovalDecisionInput {
+  tool_call_id: string;
+  confirmed: boolean;
+  /** A complete replacement of the rules for the approval's scope. */
+  rules?: PermissionRuleInput[];
+}
+
+/**
  * The team reading of a channel: the configured leader and whether that
  * configuration is currently usable. `reason` is the same readable reason the
  * round side would use; `status='invalid'` never falls back to autonomous.
@@ -237,6 +349,8 @@ export interface ChannelConfigPatch {
   /** `null` clears the project root; a string is validated and canonicalized. */
   workspace_root?: string | null;
   workspace_backend?: WorkspaceBackend;
+  /** The channel's permission default; it has no override (rules do). */
+  permission_mode?: PermissionMode;
 }
 
 /**
@@ -252,6 +366,11 @@ export interface ChannelView {
   team: ChannelTeamView;
   /** The one shared project root and the channel's workspace defaults. */
   workspace: ChannelWorkspaceView;
+  /**
+   * The channel's permission default. A member's effective mode is this value
+   * unless the Agent carries an override.
+   */
+  permission_mode: PermissionMode;
   response_budget_limit: number;
   archived_at: string | null;
   deleted_at: string | null;
@@ -271,6 +390,8 @@ export interface TargetMemberView {
    * still decides that row's `backend`.
    */
   workspace_status: WorkspaceStatusView;
+  /** The member's effective mode in this target context (D5.5). */
+  permission_mode: PermissionMode;
 }
 
 /**
@@ -696,6 +817,8 @@ export interface WorkspaceView extends WorkspaceUnreadView {
   tasks: TaskView[];
   settings: WorkspaceSettingsView;
   status_points: Record<string, StatusPointView>;
+  /** The number of `pending` approval requests (D5.6). */
+  pending_approvals: number;
 }
 
 export {

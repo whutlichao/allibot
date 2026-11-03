@@ -1,12 +1,18 @@
 import type {
   AgentView,
+  ApprovalDecisionInput,
+  ApprovalView,
   ChannelConfigPatch,
   ChannelView,
+  PermissionMode,
+  PermissionRuleInput,
+  PermissionRuleView,
   SopDefinitionCreate,
   SopDefinitionView,
   SopRunView,
   TargetMemberView,
 } from '@allibot/shared';
+import type { PermissionScope } from './workspace/permissions.ts';
 
 /**
  * 工作台的人类面写路径与按需读数。它们只被显式动作调用（加入频道、
@@ -76,7 +82,10 @@ export async function joinChannelMember(
 export async function saveAgentConfig(
   fetchImpl: typeof fetch,
   agentId: string,
-  patch: { system_prompt: string },
+  patch: {
+    system_prompt?: string;
+    permission_mode?: PermissionMode | null;
+  },
 ): Promise<AgentView> {
   const response = await fetchImpl(`/api/agents/${encodeURIComponent(agentId)}`, {
     method: 'PATCH',
@@ -142,4 +151,74 @@ export async function startSopRun(
     method: 'POST',
   });
   return readJson<SopRunView>(response, `POST SOP ${definitionId} start`);
+}
+
+// ---------------------------------------------------------------------------
+// 权限规则与审批 (#44): the host's write paths. The workspace/ panels stay
+// presentation-only; these functions are called by main.tsx on an explicit
+// action, never by opening a drawer.
+// ---------------------------------------------------------------------------
+
+function permissionRulesUrl(scope: PermissionScope): string {
+  const base = scope.kind === 'channel' ? '/api/channels' : '/api/agents';
+  return `${base}/${encodeURIComponent(scope.id)}/permission-rules`;
+}
+
+export async function readPermissionRules(
+  fetchImpl: typeof fetch,
+  scope: PermissionScope,
+): Promise<PermissionRuleView[]> {
+  const response = await fetchImpl(permissionRulesUrl(scope));
+  const body = await readJson<{ rules?: PermissionRuleView[] }>(
+    response,
+    `GET ${scope.kind} permission rules`,
+  );
+  return body.rules ?? [];
+}
+
+export async function savePermissionRules(
+  fetchImpl: typeof fetch,
+  scope: PermissionScope,
+  rules: readonly PermissionRuleInput[],
+): Promise<PermissionRuleView[]> {
+  const response = await fetchImpl(permissionRulesUrl(scope), {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(rules),
+  });
+  const body = await readJson<{ rules?: PermissionRuleView[] }>(
+    response,
+    `PUT ${scope.kind} permission rules`,
+  );
+  return body.rules ?? [];
+}
+
+export async function readApprovals(
+  fetchImpl: typeof fetch,
+  status: 'pending' | 'all' = 'all',
+): Promise<ApprovalView[]> {
+  const response = await fetchImpl(`/api/approvals?status=${status}`);
+  const body = await readJson<{ approvals?: ApprovalView[] }>(response, 'GET approvals');
+  return body.approvals ?? [];
+}
+
+export async function readApproval(
+  fetchImpl: typeof fetch,
+  replyId: string,
+): Promise<ApprovalView> {
+  const response = await fetchImpl(`/api/approvals/${encodeURIComponent(replyId)}`);
+  return readJson<ApprovalView>(response, `GET approval ${replyId}`);
+}
+
+export async function submitApprovalDecision(
+  fetchImpl: typeof fetch,
+  replyId: string,
+  input: ApprovalDecisionInput,
+): Promise<ApprovalView> {
+  const response = await fetchImpl(`/api/approvals/${encodeURIComponent(replyId)}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return readJson<ApprovalView>(response, `POST approval ${replyId}`);
 }

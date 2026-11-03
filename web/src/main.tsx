@@ -1,7 +1,12 @@
 import {
   t,
   type AgentRulesView,
+  type ApprovalDecisionInput,
+  type ApprovalView,
   type ChannelConfigPatch,
+  type PermissionMode,
+  type PermissionRuleInput,
+  type PermissionRuleView,
   type PlanRunView,
   type SopDefinitionCreate,
   type SopDefinitionView,
@@ -35,15 +40,24 @@ import {
   readPlanUpdateFrame,
   readPlans,
 } from './workspace/plans.ts';
+import { readApprovalFrame } from './workspace/approvals.ts';
+import {
+  permissionScopeKey,
+  type PermissionScope,
+} from './workspace/permissions.ts';
 import { readSopDefinitions, readSopRuns } from './workspace/sops.ts';
 import {
   deleteAgent,
   createSopDefinition,
   joinChannelMember,
   patchChannelConfig,
+  readApprovals,
+  readPermissionRules,
   readTargetMembers,
   saveAgentConfig,
+  savePermissionRules,
   startSopRun,
+  submitApprovalDecision,
 } from './workspace-actions.ts';
 import { applyJoinResult } from './workspace/member-reading.ts';
 import { readAgentRules } from './workspace/agent-rules.ts';
@@ -76,6 +90,10 @@ let currentChannelMembers: Record<string, TargetMemberView[]> = {};
 let currentTeamRuns: Record<string, readonly TeamRunView[]> = {};
 /** 当前 target 的 Plan 读数；plan 是独立读数，不进消息流。 */
 let currentPlans: Record<string, readonly PlanRunView[]> = {};
+/** 审批读数（独立于消息流）：列表与单条来自 GET /api/approvals。 */
+let currentApprovals: readonly ApprovalView[] = [];
+/** 权限规则集，按 `permissionScopeKey` 归档；频道 / Agent 共用一套形状。 */
+let currentPermissionRules: Record<string, readonly PermissionRuleView[]> = {};
 /** 当前频道的 SOP 定义；SOP 是频道级流程，不是消息或任务。 */
 let currentSopDefinitions: Record<string, readonly SopDefinitionView[]> = {};
 /** SOP run 读数，按 definition id 归档；pending run 由启动响应带回。 */
@@ -95,6 +113,33 @@ async function loadTeamRuns(targetId: string): Promise<void> {
     ...currentTeamRuns,
     [targetId]: await readTeamRuns(fetch, targetId),
   };
+}
+
+async function loadApprovals(): Promise<void> {
+  currentApprovals = await readApprovals(fetch, 'all');
+}
+
+/**
+ * The permission rule sets follow the workspace reading: every channel and
+ * Agent has one set. A rule write only changes its own scope, so the shell
+ * re-reads all of them after a write (the sets are tiny).
+ */
+async function loadPermissionRules(workspace: WorkspaceView): Promise<void> {
+  const scopes: PermissionScope[] = [
+    ...workspace.channels.map((channel) => ({ kind: 'channel' as const, id: channel.id })),
+    ...workspace.agents.map((agent) => ({ kind: 'agent' as const, id: agent.id })),
+  ];
+  const entries = await Promise.all(
+    scopes.map(
+      async (scope) =>
+        [permissionScopeKey(scope), await readPermissionRules(fetch, scope)] as const,
+    ),
+  );
+  const next: Record<string, readonly PermissionRuleView[]> = {};
+  for (const [key, rules] of entries) {
+    next[key] = rules;
+  }
+  currentPermissionRules = next;
 }
 
 async function loadAgentRules(agentId: string, channelId: string | null): Promise<void> {
@@ -180,10 +225,33 @@ async function joinChannelMemberAction(
 
 async function saveAgentAction(
   agentId: string,
-  patch: { system_prompt: string },
+  patch: { system_prompt?: string; permission_mode?: PermissionMode | null },
 ): Promise<void> {
   await saveAgentConfig(fetch, agentId, patch);
   await refreshWorkspace();
+}
+
+/** One approval decision; the backend is the source of truth, then re-read. */
+async function approvalDecisionAction(
+  replyId: string,
+  input: ApprovalDecisionInput,
+): Promise<void> {
+  await submitApprovalDecision(fetch, replyId, input);
+  await loadApprovals();
+  await refreshWorkspace();
+}
+
+/** The full-replacement permission rule write for one channel / Agent scope. */
+async function permissionRulesAction(
+  scope: PermissionScope,
+  rules: PermissionRuleInput[],
+): Promise<void> {
+  const saved = await savePermissionRules(fetch, scope, rules);
+  currentPermissionRules = {
+    ...currentPermissionRules,
+    [permissionScopeKey(scope)]: saved,
+  };
+  render();
 }
 
 /**
@@ -231,6 +299,8 @@ function render(saveFailed = false): void {
         plans={currentPlans}
         sopDefinitions={currentSopDefinitions}
         sopRuns={currentSopRuns}
+        approvals={currentApprovals}
+        permissionRules={currentPermissionRules}
         agentRules={currentAgentRules}
         onAgentRulesNeeded={(agentId, channelId) => {
           void loadAgentRules(agentId, channelId)
@@ -293,6 +363,13 @@ function render(saveFailed = false): void {
         onCreateSop={createSopAction}
         onStartSop={startSopAction}
         onDeleteAgent={deleteAgentAction}
+        onApprovalDecision={approvalDecisionAction}
+        onPermissionRulesChange={permissionRulesAction}
+        onAgentPermissionModeChange={(agentId, mode) =>
+          saveAgentAction(agentId, {
+            permission_mode: mode === null ? null : (mode as PermissionMode),
+          })
+        }
         onSettingsChange={(patch) => {
           // 后端是正本：先读返回值，再重渲染。
           writeSettings(patch)
@@ -334,6 +411,18 @@ function render(saveFailed = false): void {
               });
             return;
           }
+          if (event.event === 'approval.requested' || event.event === 'approval.resolved') {
+            const frame = readApprovalFrame(event.data);
+            if (frame === null) {
+              return;
+            }
+            void loadApprovals()
+              .then(() => refreshWorkspace())
+              .catch((error: unknown) => {
+                console.error('approval read failed', error);
+              });
+            return;
+          }
           if (shouldRefreshWorkspace(event.event)) {
             void refreshWorkspace().catch((error: unknown) => {
               console.error('workspace refresh failed', error);
@@ -363,6 +452,12 @@ async function refreshWorkspace(): Promise<void> {
 
   currentWorkspace = reading;
   currentSettings = reading.settings;
+  try {
+    await loadPermissionRules(reading);
+    await loadApprovals();
+  } catch (error: unknown) {
+    console.error('permission / approval read failed', error);
+  }
   const targets = new Set(allNavEntries(buildWorkspaceNav(reading)).map((entry) => entry.targetId));
   if (currentTargetId === null || !targets.has(currentTargetId)) {
     currentTargetId = initialTargetId(reading);

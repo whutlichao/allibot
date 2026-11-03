@@ -24,8 +24,9 @@ import type {
 import { isInsideOrEqual } from './workspace-root.js';
 
 /**
- * 受限文件工具 (#42 / D5.1). The project root is the only writable root; the
- * member's `skills/` directory is a read-only second root.
+ * 受限文件工具 (#42 / D5.1) 与工具闸门 (#44 / D5.5). The project root is the
+ * only writable root; the member's `skills/` directory is a read-only second
+ * root.
  *
  * Path rules, in one place:
  * - a relative path starts at the project root; an absolute path is accepted
@@ -37,7 +38,10 @@ import { isInsideOrEqual } from './workspace-root.js';
  * - `Write` / `Edit` resolve into the read-only skills root as `read-only`.
  *
  * Every failure is a tool result, not an exception: the round continues, no
- * approval is requested and no permission rule can turn it into success.
+ * approval is requested for a hard root escape and no permission rule can turn
+ * it into success. A permission denial is the `denied` tool result (`DENIED`),
+ * also not a round error; an approval wait that times out throws so the round
+ * closes failed.
  */
 
 interface FileRoot {
@@ -57,15 +61,49 @@ type PathAction = 'read' | 'write' | 'edit';
 const MAX_READ_BYTES = 2 * 1024 * 1024;
 const MAX_GREP_MATCHES = 200;
 
+/**
+ * The one gate face the file tools ask before executing. The gate decides
+ * allow / deny / ask; an ask waits for the human decision inside `authorize`.
+ */
+export interface RoundFileGate {
+  authorize(request: {
+    tool_name: string;
+    pattern: string;
+    arguments: Record<string, unknown>;
+    root_internal_write?: boolean;
+  }): Promise<'allow' | 'denied'>;
+}
+
 export function createRoundFileTools(options: {
   root: string;
   skillsRoot: string | null;
+  gate?: RoundFileGate;
 }): RoundFileTools {
   const roots: FileRoot[] = [
     { path: realpathSync(options.root), scope: 'project', writable: true },
   ];
   if (options.skillsRoot !== null) {
     roots.push({ path: options.skillsRoot, scope: 'skills', writable: false });
+  }
+  const gate = options.gate;
+
+  /** Apply the gate after the hard path checks; DENIED is a tool result. */
+  async function authorize(
+    toolName: string,
+    subject: string,
+    args: Record<string, unknown>,
+    rootInternalWrite = false,
+  ): Promise<RoundFileToolResult | null> {
+    if (gate === undefined) {
+      return null;
+    }
+    const decision = await gate.authorize({
+      tool_name: toolName,
+      pattern: subject,
+      arguments: args,
+      root_internal_write: rootInternalWrite,
+    });
+    return decision === 'denied' ? failure('denied', 'DENIED') : null;
   }
 
   function resolve(requested: unknown, action: PathAction): ResolvedPath | RoundFileToolResult {
@@ -117,7 +155,7 @@ export function createRoundFileTools(options: {
     };
   }
 
-  function Read(request: ReadFileRequest): RoundFileToolResult {
+  async function Read(request: ReadFileRequest): Promise<RoundFileToolResult> {
     const resolved = resolve(request?.path, 'read');
     if (!('realPath' in resolved)) {
       return resolved;
@@ -126,6 +164,14 @@ export function createRoundFileTools(options: {
       if (statSync(resolved.realPath).isDirectory()) {
         return failure('is-directory', `path is a directory: ${request.path}`);
       }
+    } catch {
+      return failure('io-error', `file cannot be read: ${request.path}`);
+    }
+    const denied = await authorize('Read', resolved.relativePath, { path: request.path });
+    if (denied !== null) {
+      return denied;
+    }
+    try {
       const bytes = readFileSync(resolved.realPath);
       if (bytes.byteLength > MAX_READ_BYTES) {
         return failure('io-error', 'file is too large to read');
@@ -142,7 +188,7 @@ export function createRoundFileTools(options: {
     }
   }
 
-  function Glob(request: GlobFileRequest): RoundFileToolResult {
+  async function Glob(request: GlobFileRequest): Promise<RoundFileToolResult> {
     const pattern = request?.pattern;
     if (
       typeof pattern !== 'string' ||
@@ -159,6 +205,13 @@ export function createRoundFileTools(options: {
     if (!statSync(base.realPath).isDirectory()) {
       return failure('not-a-directory', 'glob base is not a directory');
     }
+    const denied = await authorize('Glob', pattern, {
+      pattern,
+      ...(request.path === undefined ? {} : { path: request.path }),
+    });
+    if (denied !== null) {
+      return denied;
+    }
     const matcher = globMatcher(pattern);
     const paths: string[] = [];
     for (const found of walkFiles(base.realPath)) {
@@ -171,7 +224,7 @@ export function createRoundFileTools(options: {
     return { ok: true, scope: base.root.scope, paths };
   }
 
-  function Grep(request: GrepFileRequest): RoundFileToolResult {
+  async function Grep(request: GrepFileRequest): Promise<RoundFileToolResult> {
     const source = request?.pattern;
     if (typeof source !== 'string' || source.length === 0) {
       return failure('invalid-pattern', 'grep pattern must be a non-empty regular expression');
@@ -185,6 +238,13 @@ export function createRoundFileTools(options: {
     const base = resolve(request?.path ?? '.', 'read');
     if (!('realPath' in base)) {
       return base;
+    }
+    const denied = await authorize('Grep', base.relativePath, {
+      pattern: source,
+      ...(request.path === undefined ? {} : { path: request.path }),
+    });
+    if (denied !== null) {
+      return denied;
     }
     let files: string[];
     try {
@@ -231,13 +291,22 @@ export function createRoundFileTools(options: {
     return { ok: true, scope: base.root.scope, matches };
   }
 
-  function Write(request: WriteFileRequest): RoundFileToolResult {
+  async function Write(request: WriteFileRequest): Promise<RoundFileToolResult> {
     if (typeof request?.content !== 'string') {
       return failure('invalid-path', 'write content must be a string');
     }
     const resolved = resolve(request?.path, 'write');
     if (!('realPath' in resolved)) {
       return resolved;
+    }
+    const denied = await authorize(
+      'Write',
+      resolved.relativePath,
+      { path: request.path, content: request.content },
+      resolved.root.scope === 'project',
+    );
+    if (denied !== null) {
+      return denied;
     }
     try {
       writeFileSync(resolved.realPath, request.content, 'utf8');
@@ -252,7 +321,7 @@ export function createRoundFileTools(options: {
     }
   }
 
-  function Edit(request: EditFileRequest): RoundFileToolResult {
+  async function Edit(request: EditFileRequest): Promise<RoundFileToolResult> {
     if (
       typeof request?.old_string !== 'string' ||
       request.old_string.length === 0 ||
@@ -268,6 +337,23 @@ export function createRoundFileTools(options: {
       if (statSync(resolved.realPath).isDirectory()) {
         return failure('is-directory', `path is a directory: ${request.path}`);
       }
+    } catch {
+      return failure('io-error', `file cannot be edited: ${request.path}`);
+    }
+    const denied = await authorize(
+      'Edit',
+      resolved.relativePath,
+      {
+        path: request.path,
+        old_string: request.old_string,
+        new_string: request.new_string,
+      },
+      resolved.root.scope === 'project',
+    );
+    if (denied !== null) {
+      return denied;
+    }
+    try {
       const content = readFileSync(resolved.realPath, 'utf8');
       const parts = content.split(request.old_string);
       if (parts.length === 1) {

@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { assertChannelReadable, assertChannelWritable, type ChannelRow } from './channels.js';
 import { liveMemberClause } from './members.js';
+import { readTargetPermissionContext, DEFAULT_PERMISSION_MODE } from './permissions.js';
 import { readTargetKind } from './sql.js';
 import {
   readTargetWorkspaceBinding,
@@ -94,6 +95,8 @@ function readTargetMembers(db: Database.Database, targetId: string): TargetMembe
     display_name: row.display_name,
     avatar_slot: row.avatar_slot,
     workspace_status: readWorkspaceStatus(binding, row, db),
+    permission_mode:
+      readTargetPermissionContext(db, row.id, targetId)?.effective ?? DEFAULT_PERMISSION_MODE,
   }));
 }
 

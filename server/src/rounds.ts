@@ -37,6 +37,8 @@ import { createPlanFace } from './plans.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
+import { createToolGate } from './tool-gate.js';
+import { readTargetPermissionContext } from './permissions.js';
 import { createRoundFileTools } from './workspace-files.js';
 import {
   readRoundWorkspaceBinding,
@@ -643,6 +645,10 @@ export async function runRound(
   const turn: Turn = { targetId: wake.targetId, repeats: [], deferred: [] };
   inFlight.set(wake.memberId, turn);
   const startedAt = new Date().toISOString();
+  // 审批 identity (D5.6): the reply id is allocated before the adapter runs. If
+  // this round later lands a message, this id is the message id; every approval
+  // batch of this reply uses the same stable identity.
+  const replyId = randomUUID();
   // 运行记录 (D3.3): a real leader round on a team target opens one run. The
   // target state is the same reading the wake surface used, so the run names
   // the same leader, channel and task the delivery did.
@@ -675,7 +681,7 @@ export async function runRound(
   let result: RoundResult;
   let interrupted = false;
   try {
-    input = readRoundInput(db, wake, { teamRun, assign });
+    input = readRoundInput(db, wake, { teamRun, assign, replyId });
     const settled = await runProviderRound(provider, input, signal);
     interrupted = settled.interrupted;
     result = settled.result;
@@ -691,6 +697,7 @@ export async function runRound(
     committed = commitRound(db, wake, turn, startedAt, result, input, {
       jump,
       interrupted,
+      replyId,
     });
     if (teamRun !== null) {
       closeRoundTeamRun(db, teamRun, committed);
@@ -984,6 +991,8 @@ async function executeTeamAssignment(
     jumpConsumed: 1,
   });
 
+  // The sub-round gets its own stable reply identity; it never lands a message,
+  // so this id only ever names its approval batches (D5.6).
   const subInput = readAssignmentRoundInput(db, {
     team,
     run,
@@ -992,6 +1001,7 @@ async function executeTeamAssignment(
     instruction: request.instruction,
     baseSeq: context.baseSeq,
     reason: context.wakeReason,
+    replyId: randomUUID(),
   });
   const turn: Turn = { targetId: team.targetId, repeats: [], deferred: [] };
   const ownsTurn = inFlight.get(request.member_id) === undefined;
@@ -1092,6 +1102,7 @@ function readAssignmentRoundInput(
     instruction: string;
     baseSeq: number;
     reason: WakeReason;
+    replyId: string;
   },
 ): RoundInput {
   const member = db
@@ -1105,7 +1116,11 @@ function readAssignmentRoundInput(
     throw new Error(`assignment member not found: ${params.memberId}`);
   }
   const targetKind: RoundTargetKind = params.team.targetKind;
-  const workspace = readRoundWorkspace(db, member.id, params.team.targetId);
+  const workspace = readRoundWorkspace(db, member.id, params.team.targetId, {
+    replyId: params.replyId,
+    contextKind: 'team-assignment',
+    contextId: params.assignmentId,
+  });
   const messages = readContextWindow(db, params.team.targetId, 'window');
   const memories = recallForRound(db, member.id, params.team.targetId, messages);
   const prompt = composeSystemPrompt(db, member, targetKind, false, params.reason, memories, {
@@ -1170,6 +1185,11 @@ function readRoundWorkspace(
   db: Database.Database,
   memberId: string,
   targetId: string,
+  approval: {
+    replyId: string;
+    contextKind: 'round' | 'team-assignment';
+    contextId: string | null;
+  },
 ): RoundWorkspaceContext | null {
   const failure = readRoundWorkspaceFailure(db, memberId, targetId);
   if (failure !== null) {
@@ -1179,12 +1199,33 @@ function readRoundWorkspace(
   if (binding === null) {
     return null;
   }
+  const permission = readTargetPermissionContext(db, memberId, targetId);
+  if (permission === null) {
+    throw new Error(`permission context not found: ${targetId}`);
+  }
+  const gate = createToolGate({
+    db,
+    permission,
+    replyId: approval.replyId,
+    contextKind: approval.contextKind,
+    contextId: approval.contextId,
+  });
   return {
     root: binding.root,
     backend: 'local',
-    allow_local_shell: binding.allowLocalShell,
+    permission_mode: permission.effective,
+    allow_local_shell: permission.allowLocalShell,
     skills_root: binding.skillsRoot,
-    files: createRoundFileTools({ root: binding.root, skillsRoot: binding.skillsRoot }),
+    permission: {
+      mode: permission.effective,
+      check: (request) => gate.check(request),
+      authorize: (request) => gate.authorize(request),
+    },
+    files: createRoundFileTools({
+      root: binding.root,
+      skillsRoot: binding.skillsRoot,
+      gate,
+    }),
   };
 }
 
@@ -1212,7 +1253,11 @@ export interface RoundOutcomeRow {
 function readRoundInput(
   db: Database.Database,
   wake: Wake,
-  context: { teamRun: StartedTeamRun | null; assign: TeamAssignExecutor | null },
+  context: {
+    teamRun: StartedTeamRun | null;
+    assign: TeamAssignExecutor | null;
+    replyId: string;
+  },
 ): RoundInput {
   const member = db
     .prepare(
@@ -1252,7 +1297,11 @@ function readRoundInput(
   // is the Plan owner, so the same face serves the leader and a plain member.
   const planAvailable =
     targetKind === 'task' || (targetKind === 'channel' && teamState !== null);
-  const workspace = readRoundWorkspace(db, member.id, wake.targetId);
+  const workspace = readRoundWorkspace(db, member.id, wake.targetId, {
+    replyId: context.replyId,
+    contextKind: 'round',
+    contextId: null,
+  });
   const tools = readRoundTools(
     db,
     member.id,
@@ -1518,9 +1567,9 @@ function commitRound(
   startedAt: string,
   result: RoundResult,
   roundInput: RoundInput | undefined,
-  options: { jump: number; interrupted: boolean },
+  options: { jump: number; interrupted: boolean; replyId: string },
 ): CommittedRound {
-  const { jump, interrupted } = options;
+  const { jump, interrupted, replyId } = options;
   const discipline = roundInput?.discipline ?? { definite: false, signal: null };
   const messages: WrittenMessage[] = [];
   const outcomes: RoundOutcomeRow[] = [];
@@ -1530,7 +1579,7 @@ function commitRound(
     pendingWakes: Wake[];
   } => {
     const joinedSeq = interrupted ? null : commitJoin(db, wake, result, messages);
-    const reply = interrupted ? null : commitReply(db, wake, result, messages);
+    const reply = interrupted ? null : commitReply(db, wake, result, messages, replyId);
     const finishedAt = new Date().toISOString();
 
     // Long-term memory is written back deterministically at round close
@@ -2009,6 +2058,7 @@ function commitReply(
   wake: Wake,
   result: RoundResult,
   written: WrittenMessage[],
+  replyId: string,
 ): { id: string; seq: number; body: string } | null {  if (result.verdict !== 'replied' || !hasBody(result)) {
     return null;
   }
@@ -2019,7 +2069,10 @@ function commitReply(
   if (body === undefined || body.length === 0) {
     return null;
   }
-  const reply = { ...insertMessage(db, wake.targetId, 'agent', wake.memberId, body), body };
+  const reply = {
+    ...insertMessage(db, wake.targetId, 'agent', wake.memberId, body, replyId),
+    body,
+  };
   written.push(reply);
   return reply;
 }
@@ -2055,8 +2108,9 @@ function insertMessage(
   kind: 'agent' | 'system',
   authorMemberId: string,
   body: string,
+  id?: string,
 ): { id: string; seq: number } {
-  return insertMessageRow(db, { targetId, kind, authorMemberId, body });
+  return insertMessageRow(db, { id, targetId, kind, authorMemberId, body });
 }
 
 /**

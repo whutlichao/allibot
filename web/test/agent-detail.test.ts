@@ -62,6 +62,8 @@ function agent(overrides: Partial<AgentView> & Pick<AgentView, 'id' | 'display_n
     max_iterations: 8,
     auto_claim: 1,
     workspace_backend: null,
+    permission_mode: null,
+    effective_permission_mode: 'ask-writes',
     home_path: '/tmp/allibot-home/agents/agent-1',
     status: 'online',
     offline_reason: null,
@@ -99,6 +101,7 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
         mode: 'autonomous',
         team: { leader_member_id: null, status: 'valid', reason: null },
     workspace: { root: null, backend: 'local', allow_local_shell: 0 },
+        permission_mode: 'ask-writes',
         response_budget_limit: 3,
         archived_at: null,
         deleted_at: null,
@@ -113,6 +116,7 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
       },
     ],
     tasks: [],
+    pending_approvals: 0,
     unread_total: 0,
     unread_by_target: { [CHANNEL_ID]: 0, [DM_ID]: 0 },
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
@@ -127,9 +131,9 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
 
 function channelMembers(): TargetMemberView[] {
   return [
-    { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
-    { id: AGENT_ID, kind: 'agent', display_name: '阿蓝', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
-    { id: OFFLINE_ID, kind: 'agent', display_name: '阿灰', avatar_slot: 3, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
+    { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
+    { id: AGENT_ID, kind: 'agent', display_name: '阿蓝', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
+    { id: OFFLINE_ID, kind: 'agent', display_name: '阿灰', avatar_slot: 3, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
   ];
 }
 

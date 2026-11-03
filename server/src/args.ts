@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from './approvals.js';
 import { DEFAULT_SSE_LIFETIME_MS } from './events.js';
 import { DEFAULT_REMINDER_TICK_MS } from './reminders.js';
 import { SCRIPTED_BEHAVIORS, type ScriptedBehavior } from './scripted-provider.js';
@@ -104,6 +105,12 @@ export interface CliOptions {
    * Plan occurrence timestamps become deterministic without waiting 30 days.
    */
   fixedClock: string | undefined;
+  /**
+   * How long one approval batch waits for a human decision. Production keeps
+   * the spec's 600 seconds; a test injects a short value exactly like the SSE
+   * lifetime / reminder tick injections.
+   */
+  approvalTimeoutMs: number;
 }
 
 const DEFAULT_PORT = 3000;
@@ -120,13 +127,14 @@ const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
   'usage: allibot <serve|--migrate> [--data-dir <path>] [--home-dir <path>] [--port <port>] ' +
   '[--provider <scripted|model>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|workspace>] ' +
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|workspace|permission|mcp-approval|team-approval>] ' +
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
   '[--scripted-report-calls] [--scripted-report-team] [--scripted-transfer-member <member-id>] ' +
   '[--scripted-team-assign-member <member-id>] [--scripted-team-assign-instruction <text>] ' +
   '[--scripted-team-member-fail] ' +
-  '[--fixed-clock <ISO-8601>] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
+  '[--fixed-clock <ISO-8601>] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>] ' +
+  '[--approval-timeout-ms <ms>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -154,6 +162,7 @@ export function parseCliArgs(
       'sse-lifetime-ms': { type: 'string' },
       'reminder-tick-ms': { type: 'string' },
       'fixed-clock': { type: 'string' },
+      'approval-timeout-ms': { type: 'string' },
     },
     strict: true,
     allowPositionals: true,
@@ -200,6 +209,7 @@ export function parseCliArgs(
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
     reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),
     fixedClock: parseFixedClock(values['fixed-clock']),
+    approvalTimeoutMs: parseApprovalTimeoutMs(values['approval-timeout-ms']),
   };
 }
 
@@ -347,6 +357,17 @@ function parseReminderTickMs(raw: string | undefined): number {
   }
   if (!/^\d+$/.test(raw) || Number(raw) === 0) {
     throw new Error(`invalid --reminder-tick-ms value: ${raw}`);
+  }
+  return Number(raw);
+}
+
+/** An approval wait is a positive integer; 0 would time out every ask instantly. */
+function parseApprovalTimeoutMs(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_APPROVAL_TIMEOUT_MS;
+  }
+  if (!/^\d+$/.test(raw) || Number(raw) === 0) {
+    throw new Error(`invalid --approval-timeout-ms value: ${raw}`);
   }
   return Number(raw);
 }
