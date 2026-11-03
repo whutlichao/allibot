@@ -421,3 +421,36 @@ test('a TeamAssign call runs the member inside the leader round and records one 
   assert.match(leaderReply, /jump=1/, 'the tool result reports the consumed jump');
   assert.match(leaderReply, /output=[1-9]\d*/, 'the full member output is returned in the tool result');
 });
+
+test('two TeamAssign calls in one leader round each spend one jump', async (t) => {
+  const fixture = await startTeamFixture('allibot-team-assign-two-', {
+    behavior: 'team-assign',
+    assign: ['a', 'b'],
+    extraArgs: ['--scripted-report-calls'],
+  });
+  t.after(async () => fixture.stop());
+
+  await postChannelMessage(fixture, '请分头处理');
+
+  const assignments = assignmentRows(fixture);
+  assert.equal(assignments.length, 2, 'one assignment per TeamAssign call');
+  assert.deepEqual(
+    assignments.map((row) => row.member_id),
+    fixture.memberIds,
+    'each call names its own member',
+  );
+  assert.deepEqual(assignments.map((row) => row.state), ['completed', 'completed']);
+  assert.deepEqual(assignments.map((row) => row.jump_consumed), [1, 1]);
+  assert.match(assignments[0]?.reply_excerpt ?? '', /calls:2/);
+  assert.match(assignments[1]?.reply_excerpt ?? '', /calls:3/);
+
+  const channelBudget = budgetRows(fixture).find((row) => row.target_id === fixture.channelId);
+  assert.equal(channelBudget?.used, 2, 'two calls advance the channel budget twice, not once');
+
+  assert.equal(channelMessages(fixture).length, 2, 'neither member output becomes a message');
+  assert.deepEqual(
+    outcomeRows(fixture).map((row) => row.member_id),
+    [fixture.leaderId],
+    'the member sub-rounds write no round_outcome',
+  );
+});
