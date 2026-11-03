@@ -144,6 +144,30 @@ export const ZH_CN = {
     text: '结构化动作 continue_task 到达本世代上限（{rounds} 轮），不再续跑',
     params: ['rounds'],
   },
+  // 转派（#38 / D3.5）：受派者的结构化动作。拒绝是结构化结果，不是轮次失败；
+  // 转派本身只追加 system 变更记录，不写消息正文、不开人类世代。
+  'round.transfer.done': {
+    text: '已按结构化动作 transfer_task 把任务转派给 {assignee}',
+    params: ['assignee'],
+  },
+  'round.transfer.rejected': {
+    text: '结构化动作 transfer_task 被拒绝：{reason}',
+    params: ['reason'],
+  },
+  'round.transfer.notAssignee': {
+    text: '只有当前受派者才能转派这张任务',
+    params: [],
+  },
+  'round.transfer.self': { text: '不能把任务转派给自己', params: [] },
+  'round.transfer.same': { text: '目标成员已经是当前受派者', params: [] },
+  'round.transfer.notMember': {
+    text: '目标必须是同一频道的另一个活 Agent 成员',
+    params: [],
+  },
+  'round.transfer.noTarget': {
+    text: '结构化动作没有给出目标成员',
+    params: [],
+  },
   'system.member.piercedJoin': {
     text: '{name} 加入了频道：它被点名时并不在频道里，回复时顺带加入（成员变化只随真实回复发生）',
     params: ['name'],
@@ -190,6 +214,10 @@ export const ZH_CN = {
   },
   'task.event.assignee.assigned': { text: '任务已指派给 {assignee}。', params: ['assignee'] },
   'task.event.assignee.unassigned': { text: '任务已收回指派。', params: [] },
+  'task.event.assignee.transferred': {
+    text: '任务由 {previous} 转派给 {assignee}。',
+    params: ['previous', 'assignee'],
+  },
   'task.event.assignee.reassigned': {
     text: '任务由 {previous} 改派给 {assignee}。',
     params: ['previous', 'assignee'],

@@ -536,6 +536,74 @@ function appendAssigneeEvent(
   return seq;
 }
 
+/**
+ * 转派 (Transfer, #38 / D3.5): the current assignee hands its task to another
+ * live Agent member of the same channel. It changes only the assignee, appends
+ * one system change record and adds the new assignee to the task target. It
+ * does not open a human epoch, does not change the task five-state, does not
+ * write a message body and never crosses the channel boundary.
+ *
+ * The caller owns the transaction (a round's commit), so a rejected transfer
+ * writes nothing and the round keeps its own outcome.
+ */
+export type TaskTransferResult =
+  | { ok: true; assigneeEventSeq: number; assigneeName: string }
+  | { ok: false; reason: string };
+
+export function transferTaskAsMember(
+  db: Database.Database,
+  taskId: string,
+  actorMemberId: string,
+  targetMemberId: string,
+): TaskTransferResult {
+  const task = readTaskRow(db, taskId);
+  if (task.assignee_member_id !== actorMemberId) {
+    return { ok: false, reason: tFromDb(db, 'round.transfer.notAssignee') };
+  }
+  if (targetMemberId === actorMemberId) {
+    return { ok: false, reason: tFromDb(db, 'round.transfer.self') };
+  }
+  if (targetMemberId === task.assignee_member_id) {
+    return { ok: false, reason: tFromDb(db, 'round.transfer.same') };
+  }
+  const target = db
+    .prepare(
+      `SELECT id, display_name FROM member
+        WHERE id = ? AND kind = 'agent' AND ${liveMemberClause()}`,
+    )
+    .get(targetMemberId) as { id: string; display_name: string } | undefined;
+  if (target === undefined) {
+    return { ok: false, reason: tFromDb(db, 'round.transfer.notMember') };
+  }
+  const membership = db
+    .prepare('SELECT 1 FROM target_member WHERE target_id = ? AND member_id = ?')
+    .get(task.channel_id, targetMemberId);
+  if (membership === undefined) {
+    return { ok: false, reason: tFromDb(db, 'round.transfer.notMember') };
+  }
+
+  const previousName = displayName(db, actorMemberId);
+  db.prepare('UPDATE task SET assignee_member_id = ?, updated_at = ? WHERE id = ?').run(
+    targetMemberId,
+    new Date().toISOString(),
+    taskId,
+  );
+  addAssigneeToThread(db, task.target_id, targetMemberId);
+  const event = appendMessage(db, {
+    targetId: task.target_id,
+    kind: 'system',
+    body: tFromDb(db, 'task.event.assignee.transferred', {
+      previous: previousName,
+      assignee: target.display_name,
+    }),
+  });
+  return {
+    ok: true,
+    assigneeEventSeq: event.seq,
+    assigneeName: target.display_name,
+  };
+}
+
 function addAssigneeToThread(
   db: Database.Database,
   targetId: string,

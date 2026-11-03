@@ -59,6 +59,11 @@ export interface CliOptions {
    */
   scriptedReportCalls: boolean;
   /**
+   * The member a scripted `transfer-task` round hands the task to. Like every
+   * `--scripted-*` value it only configures the test double, never production.
+   */
+  scriptedTransferMemberId: string | undefined;
+  /**
    * How long one `/api/events` connection lives before the server sends the
    * rotate frame and closes it. Production keeps the 30-minute default; a test
    * injects a short value instead of waiting.
@@ -85,10 +90,11 @@ const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
   'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
   '[--provider <scripted|model>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task>] ' +
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task>] ' +
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
-  '[--scripted-report-calls] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
+  '[--scripted-report-calls] [--scripted-transfer-member <member-id>] ' +
+  '[--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -107,6 +113,7 @@ export function parseCliArgs(
       'scripted-echo-prompt': { type: 'boolean' },
       'scripted-report-context': { type: 'boolean' },
       'scripted-report-calls': { type: 'boolean' },
+      'scripted-transfer-member': { type: 'string' },
       'sse-lifetime-ms': { type: 'string' },
       'reminder-tick-ms': { type: 'string' },
     },
@@ -129,7 +136,8 @@ export function parseCliArgs(
         values['scripted-reply'] !== undefined ||
         values['scripted-echo-prompt'] === true ||
         values['scripted-report-context'] === true ||
-        values['scripted-report-calls'] === true,
+        values['scripted-report-calls'] === true ||
+        values['scripted-transfer-member'] !== undefined,
     ),
     scriptedProvider: parseScriptedProvider(values['scripted-provider']),
     scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
@@ -137,6 +145,7 @@ export function parseCliArgs(
     scriptedEchoPrompt: values['scripted-echo-prompt'] === true,
     scriptedReportContext: values['scripted-report-context'] === true,
     scriptedReportCalls: values['scripted-report-calls'] === true,
+    scriptedTransferMemberId: parseScriptedTransferMember(values['scripted-transfer-member']),
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
     reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),
   };
@@ -208,6 +217,16 @@ function parseScriptedReplies(raw: readonly string[] | undefined): readonly stri
     throw new Error('invalid --scripted-reply value: a reply body must not be empty');
   }
   return raw;
+}
+
+function parseScriptedTransferMember(raw: string | undefined): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw.trim().length === 0) {
+    throw new Error('invalid --scripted-transfer-member value: a member id must not be empty');
+  }
+  return raw.trim();
 }
 
 function parseDelayMs(raw: string | undefined): number {

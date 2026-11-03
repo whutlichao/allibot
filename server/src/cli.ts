@@ -141,6 +141,7 @@ function createOrchestration(
           echoPrompt: options.scriptedEchoPrompt,
           reportContext: options.scriptedReportContext,
           reportCalls: options.scriptedReportCalls,
+          transferMemberId: options.scriptedTransferMemberId,
         });
   return { provider, inFlight: createInFlightRounds() };
 }

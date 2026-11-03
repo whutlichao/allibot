@@ -30,8 +30,10 @@ import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
 import { readTeamTargetState, readTeamWakeState } from './team.js';
+import { recordInvalidLeaderRun } from './team-runs.js';
 import { closeTeamRun, startTeamRun, type StartedTeamRun } from './team-runs.js';
 import { countUnread } from './unread.js';
+import { transferTaskAsMember } from './tasks.js';
 
 /**
  * 自动续跑 (Auto-continue) is bounded independently of the response budget:
@@ -1076,6 +1078,9 @@ function commitTaskAction(
   result: RoundResult,
   written: WrittenMessage[],
 ): { clause: string; wake: Wake | null } | null {
+  if (result.taskAction === 'transfer_task') {
+    return commitTransferAction(db, wake, roundInput, result);
+  }
   if (result.taskAction !== 'continue_task' || roundInput === undefined) {
     return null;
   }
@@ -1137,6 +1142,71 @@ function commitTaskAction(
       fromSeq: record.seq,
       reason: 'continue',
     },
+  };
+}
+
+/**
+ * Handle one round's structured `transfer_task` action (转派, D3.5).
+ *
+ * Only the task's current assignee can transfer it, only to another live Agent
+ * member of the same channel. The assignee change and the system change record
+ * share the round's transaction; a refusal writes nothing and is readable in
+ * the round reason. 人类世代 does not open here, and no message body is
+ * written. On a team channel the change wakes the leader with `team-change`
+ * (from_seq = the system record) unless the leader is the actor; an autonomous
+ * channel adds no wake.
+ */
+function commitTransferAction(
+  db: Database.Database,
+  wake: Wake,
+  roundInput: RoundInput | undefined,
+  result: RoundResult,
+): { clause: string; wake: Wake | null } | null {
+  if (roundInput === undefined || roundInput.targetKind !== 'task') {
+    return null;
+  }
+  if (result.taskTransferMemberId === undefined || result.taskTransferMemberId.length === 0) {
+    return {
+      clause: tFromDb(db, 'round.transfer.rejected', {
+        reason: tFromDb(db, 'round.transfer.noTarget'),
+      }),
+      wake: null,
+    };
+  }
+  const task = db
+    .prepare('SELECT id FROM task WHERE target_id = ?')
+    .get(wake.targetId) as { id: string } | undefined;
+  if (task === undefined) {
+    return null;
+  }
+  // Imported lazily at module scope would be a cycle: tasks.ts already knows
+  // this write path, and this module only formats the outcome.
+  const transfer = transferTaskAsMember(db, task.id, wake.memberId, result.taskTransferMemberId);
+  if (!transfer.ok) {
+    return {
+      clause: tFromDb(db, 'round.transfer.rejected', { reason: transfer.reason }),
+      wake: null,
+    };
+  }
+  const team = readTeamTargetState(db, wake.targetId, process.env);
+  let nextWake: Wake | null = null;
+  if (team !== null && wake.memberId !== team.leaderMemberId) {
+    if (team.available) {
+      nextWake = {
+        memberId: team.leaderMemberId,
+        targetId: wake.targetId,
+        fromSeq: transfer.assigneeEventSeq,
+        reason: 'team-change',
+      };
+    } else {
+      // The transfer itself is a task change that should have reached the
+      // leader: an unusable leader leaves the invalid-leader run instead.
+      recordInvalidLeaderRun(db, team);
+    }
+  }
+  return {
+    clause: tFromDb(db, 'round.transfer.done', { assignee: transfer.assigneeName }),
+    wake: nextWake,
   };
 }
 
