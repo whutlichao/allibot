@@ -7,6 +7,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/index.css';
 import { App } from './App.ts';
+import { transitionTask } from './task-board/task-board.ts';
 import {
   allNavEntries,
   buildWorkspaceNav,
@@ -61,6 +62,18 @@ function render(saveFailed = false): void {
           currentTargetId = targetId;
           render();
         }}
+        onTaskTransition={(task, status) =>
+          transitionTask(fetch, task, status)
+            .then(async (outcome) => {
+              if (!outcome.ok) {
+                return false;
+              }
+              // 写路径成功后重新读工作台读数；看板不做乐观更新。
+              await refreshWorkspace();
+              return true;
+            })
+            .catch(() => false)
+        }
         onSettingsChange={(patch) => {
           // 后端是正本：先读返回值，再重渲染。
           writeSettings(patch)

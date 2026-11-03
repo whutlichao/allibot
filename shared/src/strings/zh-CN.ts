@@ -252,4 +252,11 @@ export const ZH_CN = {
   'workspace.status.working': { text: '工作中', params: [] },
   'workspace.status.error': { text: '出错', params: [] },
   'workspace.status.offline': { text: '未启用', params: [] },
+
+  // 任务看板（Task Board）：按任务状态分列的呈现面，列名沿用任务状态的
+  // 可读文案；筛选只收窄视图，不改变任务恰好属于一个频道的归属事实。
+  'taskBoard.filter.label': { text: '频道筛选', params: [] },
+  'taskBoard.filter.all': { text: '全部频道', params: [] },
+  'taskBoard.transition.label': { text: '流转', params: [] },
+  'taskBoard.chip.thread': { text: '任务线程', params: [] },
 } as const satisfies Record<string, CatalogEntry>;
