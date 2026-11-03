@@ -111,10 +111,7 @@ export class AllibotAgent extends AbstractAgent {
           // Resolving the target is the snapshot read: an unknown, deleted, or
           // unreadable target throws here and closes the run with RUN_ERROR.
           const snapshot = readTargetMembersSnapshot(this.database, input.threadId);
-          emit({
-            type: 'STATE_SNAPSHOT',
-            snapshot: snapshot as unknown as Record<string, unknown>,
-          } as BaseEvent);
+          emit({ type: 'STATE_SNAPSHOT', snapshot } as BaseEvent);
 
           for (const message of input.messages) {
             if (controller.signal.aborted) {
@@ -149,6 +146,16 @@ export class AllibotAgent extends AbstractAgent {
                     type: 'TEXT_MESSAGE_START',
                     messageId: reply.id,
                     role: 'assistant',
+                    name: reply.authorDisplayName,
+                    metadata: {
+                      allibot_kind: 'agent',
+                      author_member_id: reply.memberId,
+                      author_display_name: reply.authorDisplayName,
+                      author_avatar_slot: reply.authorAvatarSlot,
+                      task_ref: null,
+                      task_pointer: null,
+                      mentions: [],
+                    },
                   } as BaseEvent);
                   emit({
                     type: 'TEXT_MESSAGE_CONTENT',

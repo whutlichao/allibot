@@ -46,12 +46,13 @@ export const AGENT_STATUSES = ['online', 'working', 'error', 'offline'] as const
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
 
 /**
- * The three availability facts that make an Agent 未启用 (offline): no model is
- * configured, the provider's remote-data-flow consent is missing, or the
- * provider's credential is missing from the environment. They are enum values,
- * never credential values.
+ * The availability facts that make an Agent 未启用 (offline): its own enabled
+ * switch is off, no model is configured, the provider's remote-data-flow
+ * consent is missing, or the provider's credential is missing from the
+ * environment. They are enum values, never credential values.
  */
 export const OFFLINE_REASONS = [
+  'disabled',
   'model-missing',
   'consent-missing',
   'credential-missing',

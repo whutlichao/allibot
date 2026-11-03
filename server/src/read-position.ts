@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { maxSeqForTarget } from './sql.js';
 
 /**
  * 已读位置 (Read Position): one row per member per target, the canonical "how
@@ -40,7 +41,7 @@ export function advanceReadPosition(
   seq: number,
 ): { previous: number; current: number } {
   const previous = readLastReadSeq(db, memberId, targetId);
-  const current = Math.max(previous, Math.min(seq, maxSeq(db, targetId)));
+  const current = Math.max(previous, Math.min(seq, maxSeqForTarget(db, targetId)));
   if (current !== previous) {
     db.prepare(
       `INSERT INTO read_position (member_id, target_id, last_read_seq)
@@ -50,12 +51,4 @@ export function advanceReadPosition(
     ).run(memberId, targetId, current);
   }
   return { previous, current };
-}
-
-/** The newest stored seq of one target; an empty target reads as 0. */
-export function maxSeq(db: Database.Database, targetId: string): number {
-  const row = db
-    .prepare('SELECT coalesce(MAX(seq), 0) AS last FROM message WHERE target_id = ?')
-    .get(targetId) as { last: number };
-  return row.last;
 }

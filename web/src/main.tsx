@@ -186,7 +186,7 @@ async function refreshWorkspace(): Promise<void> {
     currentTargetId = initialTargetId(reading);
   }
   // 成员面板 / 名册是频道范围读数；SSE 的成员 / 状态事实会走到这里，
-  // 因此跟随工作区读数一起刷新当前频道的成员表。
+  // 因此跟随工作台读数一起刷新当前频道的成员表。
   if (
     currentTargetId !== null &&
     targetKind(reading, currentTargetId) === 'channel'

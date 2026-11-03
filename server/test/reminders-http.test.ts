@@ -131,6 +131,20 @@ interface SseFrame {
   data: string;
 }
 
+/** Read frames until one of `type` arrives (workspace writes publish their own). */
+async function nextOfType(
+  subscription: Subscription,
+  type: string,
+  timeoutMs = 5_000,
+): Promise<SseFrame> {
+  for (;;) {
+    const frame = await subscription.next(timeoutMs);
+    if (frame.event === type) {
+      return frame;
+    }
+  }
+}
+
 /** One open subscription, read frame by frame; a real fetch against the process. */
 class Subscription {
   private readonly frames: SseFrame[] = [];
@@ -376,15 +390,13 @@ test('a due reminder lands one system message in its channel, once, with no unre
     assert.equal(created.status, 201, await created.clone().text());
     const reminder = await readJson(created);
 
-    const reminderFrame = await subscription.next();
-    assert.equal(reminderFrame.event, 'reminder.due');
+    const reminderFrame = await nextOfType(subscription, 'reminder.due');
     assert.deepEqual(JSON.parse(reminderFrame.data), {
       reminder_id: reminder['id'],
       target_id: channelId,
     });
 
-    const messageFrame = await subscription.next();
-    assert.equal(messageFrame.event, 'message.created');
+    const messageFrame = await nextOfType(subscription, 'message.created');
     const messageData = JSON.parse(messageFrame.data) as Record<string, unknown>;
     assert.equal(messageData['target_id'], channelId);
     assert.equal(messageData['seq'], 1);
@@ -442,8 +454,7 @@ test('a reminder found beyond the 24-hour window is marked missed and lands no m
     assert.equal(created.status, 201, await created.clone().text());
     const reminder = await readJson(created);
 
-    const frame = await subscription.next();
-    assert.equal(frame.event, 'reminder.due');
+    const frame = await nextOfType(subscription, 'reminder.due');
     assert.deepEqual(JSON.parse(frame.data), {
       reminder_id: reminder['id'],
       target_id: channelId,
@@ -493,8 +504,8 @@ test('a reminder with no channel is marked due without a message.created frame',
       }),
     );
 
-    const first = await subscription.next();
-    const second = await subscription.next();
+    const first = await nextOfType(subscription, 'reminder.due');
+    const second = await nextOfType(subscription, 'reminder.due');
     assert.deepEqual(
       [JSON.parse(first.data), JSON.parse(second.data)],
       [

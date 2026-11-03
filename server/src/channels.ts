@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { ChannelView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
+import { publishWorkspaceChanged } from './events.js';
+import { OWNER_ID_SUBQUERY } from './sql.js';
 
 /**
  * The M1 channel modes. `team` belongs to T10 and is rejected as invalid
@@ -45,12 +47,6 @@ const FIELD_KEYS = {
 
 type FieldKey = keyof typeof FIELD_KEYS;
 
-/**
- * The owner subquery is the one place a channel write learns who the owner is;
- * it reads `member.kind`, never a display name.
- */
-const OWNER_ID = "(SELECT id FROM member WHERE kind = 'owner')";
-
 export function listChannels(db: Database.Database): ChannelView[] {
   const rows = db
     .prepare(`${CHANNEL_SELECT} WHERE deleted_at IS NULL ORDER BY created_at, rowid`)
@@ -82,11 +78,13 @@ export function createChannel(db: Database.Database, body: unknown): ChannelView
     );
     db.prepare("INSERT INTO target (id, kind) VALUES (?, 'channel')").run(id);
     db.prepare(
-      `INSERT INTO target_member (target_id, member_id) VALUES (?, ${OWNER_ID})`,
+      `INSERT INTO target_member (target_id, member_id) VALUES (?, ${OWNER_ID_SUBQUERY})`,
     ).run(id);
     return id;
   });
   const id = create();
+  // After the transaction returned: a rolled-back create announces nothing.
+  publishWorkspaceChanged({ source: 'channel' });
   return readLiveChannel(db, id);
 }
 
@@ -114,6 +112,7 @@ export function updateChannel(db: Database.Database, id: string, body: unknown):
   if (!update()) {
     throw notFound(id);
   }
+  publishWorkspaceChanged({ source: 'channel' });
   return readLiveChannel(db, id);
 }
 
@@ -137,6 +136,7 @@ export function archiveChannel(db: Database.Database, id: string): ChannelView {
   if (!archive()) {
     throw notFound(id);
   }
+  publishWorkspaceChanged({ source: 'channel' });
   return readLiveChannel(db, id);
 }
 
@@ -156,6 +156,38 @@ export function deleteChannel(db: Database.Database, id: string): void {
   if (result.changes !== 1) {
     throw notFound(id);
   }
+  publishWorkspaceChanged({ source: 'channel' });
+}
+
+/** The two lifecycle stamps every reader of a channel row asks about. */
+export interface ChannelLiveness {
+  archived_at: string | null;
+  deleted_at: string | null;
+}
+
+/** The channel lifecycle row, or undefined when the channel does not exist. */
+export function readChannelLiveness(
+  db: Database.Database,
+  channelId: string,
+): ChannelLiveness | undefined {
+  return db
+    .prepare('SELECT archived_at, deleted_at FROM channel WHERE id = ?')
+    .get(channelId) as ChannelLiveness | undefined;
+}
+
+export type ChannelReadState = 'live' | 'archived' | 'deleted';
+
+/**
+ * The one reading of the lifecycle stamps: deleted wins over archived, and a
+ * missing row is deleted. Reminders (skip a deleted channel, deliver on an
+ * archived one) and the workspace unread reading (count archived channels but
+ * not deleted ones) share this instead of each spelling out the comparison.
+ */
+export function channelReadState(channel: ChannelLiveness | undefined): ChannelReadState {
+  if (channel === undefined || channel.deleted_at !== null) {
+    return 'deleted';
+  }
+  return channel.archived_at === null ? 'live' : 'archived';
 }
 
 /**

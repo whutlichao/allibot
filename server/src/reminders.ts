@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ReminderListView, ReminderView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
-import { assertChannelReadable } from './channels.js';
+import { assertChannelReadable, channelReadState, readChannelLiveness } from './channels.js';
 import { tFromDb } from './copy.js';
 import { publishMessageCreated, publishReminderDue } from './events.js';
 import { insertMessageRow } from './message-store.js';
@@ -145,10 +145,7 @@ function processDueReminder(db: Database.Database, row: ReminderRow, now: Date):
     }
     // A deleted channel can no longer receive history. An archived one can:
     // D1.13 频道归档 keeps "提醒到点仍落 system 消息" true.
-    const channel = db
-      .prepare('SELECT deleted_at FROM channel WHERE id = ?')
-      .get(channelId) as { deleted_at: string | null } | undefined;
-    if (channel === undefined || channel.deleted_at !== null) {
+    if (channelReadState(readChannelLiveness(db, channelId)) === 'deleted') {
       return { message: null, claimed: true };
     }
     const message = insertMessageRow(db, {

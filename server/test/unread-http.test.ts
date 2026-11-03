@@ -299,6 +299,23 @@ class SseConnection {
   }
 }
 
+/** Read frames until one of `type` arrives (workspace writes publish their own). */
+async function nextOfType(
+  stream: SseConnection,
+  type: string,
+  timeoutMs = 5_000,
+): Promise<SseFrame> {
+  for (;;) {
+    const frame = await stream.next(timeoutMs);
+    if (frame === null) {
+      throw new Error(`the connection closed while waiting for ${type}`);
+    }
+    if (frame.event === type) {
+      return frame;
+    }
+  }
+}
+
 function queryDatabase<T>(
   dataDir: string,
   sql: string,
@@ -464,14 +481,13 @@ test('unread.changed follows the reading, and a system-only write publishes none
     // unread change.
     await postMessage(fixture, channelId, '有人吗');
 
-    const first = await stream.next();
-    assert.equal(first.event, 'message.created');
-    const reply = await stream.next();
-    assert.equal(reply.event, 'message.created');
-    const outcome = await stream.next();
-    assert.equal(outcome.event, 'round.outcome');
-    const raised = await stream.next();
-    assert.equal(raised.event, 'unread.changed');
+    const first = await nextOfType(stream, 'message.created');
+    const reply = await nextOfType(stream, 'message.created');
+    const outcome = await nextOfType(stream, 'round.outcome');
+    const raised = await nextOfType(stream, 'unread.changed');
+    assert.equal((JSON.parse(first.data) as Record<string, unknown>)['seq'], 1);
+    assert.equal((JSON.parse(reply.data) as Record<string, unknown>)['seq'], 2);
+    assert.equal((JSON.parse(outcome.data) as Record<string, unknown>)['status'], 'replied');
     assert.deepEqual(JSON.parse(raised.data), {
       target_id: channelId,
       unread_count: 1,
@@ -480,8 +496,7 @@ test('unread.changed follows the reading, and a system-only write publishes none
     // Reading to the newest seq lowers the badge and announces it.
     const read = await markRead(fixture, channelId, { last_read_seq: 999 });
     assert.equal(read.status, 200, await read.clone().text());
-    const lowered = await stream.next();
-    assert.equal(lowered.event, 'unread.changed');
+    const lowered = await nextOfType(stream, 'unread.changed');
     assert.deepEqual(JSON.parse(lowered.data), {
       target_id: channelId,
       unread_count: 0,
@@ -493,17 +508,27 @@ test('unread.changed follows the reading, and a system-only write publishes none
     await assert.rejects(stream.next(300), /no SSE frame within/);
 
     // Task creation writes two system messages (thread opening + channel
-    // pointer). They stream as message.created rows but never as unread.
+    // pointer). They stream as message.created rows but never as unread; the
+    // task row itself publishes task.changed.
     await createTask(fixture, channelId, '系统消息');
-    const taskThread = await stream.next();
+    const taskThread = await nextOfType(stream, 'message.created');
+    const channelPointer = await nextOfType(stream, 'message.created');
     assert.equal(taskThread.event, 'message.created');
-    const channelPointer = await stream.next();
     assert.equal(channelPointer.event, 'message.created');
-    await assert.rejects(
-      stream.next(300),
-      /no SSE frame within/,
-      'a system-only write must not publish unread.changed',
-    );
+    let extra: SseFrame | null = null;
+    try {
+      extra = await stream.next(300);
+    } catch {
+      extra = null;
+    }
+    while (extra !== null) {
+      assert.notEqual(extra.event, 'unread.changed', 'a system-only write publishes no unread');
+      try {
+        extra = await stream.next(300);
+      } catch {
+        extra = null;
+      }
+    }
   } finally {
     await stream.close();
     await fixture.stop();

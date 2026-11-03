@@ -25,6 +25,8 @@ import type { InFlightRounds } from './rounds.js';
 export interface StatusAgent {
   id: string;
   model: string | null;
+  /** `agent_config.enabled`: 0 means the owner switched the Agent off. */
+  enabled: number;
 }
 
 export function readStatusPoint(
@@ -33,6 +35,12 @@ export function readStatusPoint(
   env: NodeJS.ProcessEnv,
   inFlight: InFlightRounds,
 ): StatusPointView {
+  // The enabled switch is the first fact: a switched-off Agent is offline even
+  // if its model, consent and credential are all in place, and it never runs a
+  // round (the wake surface and the claim surface read the same column).
+  if (agent.enabled === 0) {
+    return { status: 'offline', offline_reason: 'disabled' };
+  }
   const availability = checkProviderAvailability(db, agent.model, env);
   if (!availability.ok) {
     return { status: 'offline', offline_reason: availability.reason };

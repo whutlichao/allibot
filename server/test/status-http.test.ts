@@ -377,3 +377,48 @@ test('working is process state and does not survive a crash', async () => {
     await removeTempDir(dataDir);
   }
 });
+
+test('an Agent with enabled=0 is offline, is never woken and never claims a task', async () => {
+  const fixture = await startStatusFixture('allibot-status-disabled-', {
+    env: { OPENAI_API_KEY: 'sk-disabled-test' },
+  });
+  try {
+    const created = await createAgent(fixture, {
+      display_name: '已停用的 Agent',
+      model: 'openai:gpt-5',
+      enabled: 0,
+    });
+    const agentId = String(created['id']);
+    await confirmConsent(fixture, 'openai');
+    const channelId = await createChannel(fixture);
+    await joinChannel(fixture, channelId, agentId);
+
+    const read = await getAgent(fixture, agentId);
+    assert.equal(read['status'], 'offline', 'the enabled switch is the first status fact');
+    assert.equal(read['offline_reason'], 'disabled', 'the reason is readable and stable');
+
+    // The wake surface excludes the switched-off Agent: the message lands but
+    // no round runs for it.
+    await postMessage(fixture, channelId, '叫一下已停用的 Agent');
+    assert.equal(latestOutcomeStatus(fixture.dataDir, agentId), null);
+    const messages = await fetch(`${fixture.base}/api/targets/${channelId}/messages`);
+    const body = (await readJson(messages))['messages'] as Record<string, unknown>[];
+    assert.deepEqual(
+      body.map((message) => message['kind']),
+      ['human'],
+      'no Agent reply was produced by a switched-off member',
+    );
+
+    // The claim surface reads the same column.
+    const taskResponse = await postJson(fixture, '/api/tasks', {
+      channel_id: channelId,
+      title: '不应被认领',
+    });
+    assert.equal(taskResponse.status, 201, await taskResponse.clone().text());
+    const task = await readJson(taskResponse);
+    assert.equal(task['status'], 'todo');
+    assert.equal(task['assignee_member_id'], null);
+  } finally {
+    await close(fixture);
+  }
+});

@@ -10,8 +10,9 @@ import { listAttachmentsForMessages } from './attachments.js';
 import { openEpoch } from './budget.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { assertDmWritable } from './dms.js';
-import { insertMessageRow } from './message-store.js';
-import { liveMemberClause, readOwnerId } from './members.js';
+import { insertMessageRow, readAuthorIdentity } from './message-store.js';
+import { readOwnerId } from './members.js';
+import { readTargetKind } from './sql.js';
 import {
   collectWakes,
   dispatchWakes,
@@ -50,6 +51,11 @@ export interface AppendMessageInput {
    * channel that owns the task, and the human-face parser has no such field.
    */
   taskPointer?: string | null;
+  /**
+   * The task this message is talking about. It is only writable inside that
+   * task's thread (the write path refuses a cross-target reference).
+   */
+  taskRef?: string | null;
 }
 
 interface MessageRow {
@@ -141,7 +147,7 @@ export function appendMessage(
     // they publish no unread frame.
     if (input.kind === 'human' || input.kind === 'agent') {
       const ownerId = readOwnerId(db);
-      const authorId = readAuthorId(db, input.authorMemberId ?? null);
+      const authorId = readAuthorIdentity(db, input.authorMemberId ?? null).id;
       if (authorId !== ownerId) {
         publishUnreadChanged({
           targetId: input.targetId,
@@ -173,7 +179,7 @@ export async function appendMessageAndDispatch(
   if (appended.created) {
     const wakes = collectWakes(db, {
       targetId: input.targetId,
-      authorMemberId: readAuthorId(db, input.authorMemberId ?? null),
+      authorMemberId: readAuthorIdentity(db, input.authorMemberId ?? null).id,
       kind: input.kind,
       seq: appended.seq,
     });
@@ -183,27 +189,6 @@ export async function appendMessageAndDispatch(
     });
   }
   return appended;
-}
-
-/**
- * The author identity the wake surface excludes. It is read after the write so
- * it is the same row the message snapshot came from.
- */
-function readAuthorId(db: Database.Database, memberId: string | null): string {
-  const row =
-    memberId === null
-      ? (db
-          .prepare(
-            `SELECT id FROM member WHERE kind = 'owner' AND ${liveMemberClause()}`,
-          )
-          .get() as { id: string } | undefined)
-      : (db
-          .prepare(`SELECT id FROM member WHERE id = ? AND ${liveMemberClause()}`)
-          .get(memberId) as { id: string } | undefined);
-  if (row === undefined) {
-    throw new Error(`message author not found: ${memberId ?? 'owner'}`);
-  }
-  return row.id;
 }
 
 function hydrate(db: Database.Database, rows: readonly MessageRow[]): MessageView[] {
@@ -251,13 +236,11 @@ function hydrate(db: Database.Database, rows: readonly MessageRow[]): MessageVie
  * through the same two wrappers.
  */
 function readTarget(db: Database.Database, targetId: string): { kind: string } {
-  const target = db.prepare('SELECT kind FROM target WHERE id = ?').get(targetId) as
-    | { kind: string }
-    | undefined;
-  if (target === undefined) {
+  const kind = readTargetKind(db, targetId);
+  if (kind === null) {
     throw ApiFailure.notFound(`target not found: ${targetId}`);
   }
-  return target;
+  return { kind };
 }
 
 /** History stays readable on an archived channel; a deleted channel is 404. */
@@ -312,12 +295,17 @@ function parseQueryInteger(
 }
 
 /**
- * The human-face request fields. `task_ref` and `task_pointer` are deliberately
- * absent: both are backend facts (a task reference belongs to the task thread,
- * and the channel pointer message is written by the backend when a task is
- * created), so the human face asking for one is an unknown field.
+ * The human-face request fields. `task_ref` is accepted only as a reference
+ * inside the task's own thread; `task_pointer` stays absent because the
+ * channel pointer message is written by the backend when a task is created.
  */
-const FIELD_KEYS = new Set(['body', 'kind', 'client_message_id', 'attachment_ids']);
+const FIELD_KEYS = new Set([
+  'body',
+  'kind',
+  'client_message_id',
+  'attachment_ids',
+  'task_ref',
+]);
 
 /**
  * The human-face request body. `kind` is accepted as a known field so that
@@ -350,6 +338,7 @@ export function parseMessageRequest(targetId: string, body: unknown): AppendMess
     body: text.trim(),
     clientMessageId: optionalIdentifier(record, 'client_message_id'),
     attachmentIds: parseAttachmentIds(record['attachment_ids']),
+    taskRef: optionalIdentifier(record, 'task_ref'),
   };
 }
 

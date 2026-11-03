@@ -9,6 +9,7 @@ import {
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
+import { publishWorkspaceChanged } from './events.js';
 
 /** The three workspace settings, in the order the human face reads them. */
 export const DEFAULT_SETTINGS: WorkspaceSettingsView = {
@@ -65,6 +66,7 @@ export function updateSettings(db: Database.Database, body: unknown): WorkspaceS
     }
   });
   update();
+  publishWorkspaceChanged({ source: 'settings' });
   return getSettings(db);
 }
 

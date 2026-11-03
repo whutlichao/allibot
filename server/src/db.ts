@@ -1,3 +1,4 @@
+import { t } from '@allibot/shared';
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
@@ -385,7 +386,7 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
       db.exec(`
         -- Long-term memory is a member-level collection of memory cards
         -- (ADR 0005): one logical set per member, not split by target, project
-        -- or session, so cross-target recall is a construction fact. A card is
+        -- or round, so cross-target recall is a construction fact. A card is
         -- a deterministic digest of one round — the triggering message excerpt,
         -- this member's reply excerpt and the task context when there is one —
         -- so its content and keywords are written by the orchestrator, never by
@@ -560,10 +561,26 @@ export function runMigrations(
     return { status: 'already-current', version: currentVersion };
   }
   if (currentVersion !== null && currentVersion > targetVersion) {
-    throw new Error(
-      `version_mismatch: database schema version ${currentVersion} is newer than this build's ` +
-        `schema version ${targetVersion}; refusing to migrate, there is no downgrade path`,
+    // The gate refuses before touching the database file, but the attempt is
+    // still a migration attempt: the audit ledger records it as failed with the
+    // reason, exactly like a step that threw (D1.7 "失败也记").
+    const startedAt = new Date().toISOString();
+    const refusal = new Error(
+      t('zh-CN', 'cli.schema.tooNew', {
+        found: currentVersion,
+        expected: targetVersion,
+      }),
     );
+    appendMigrationRecord(dataDir, {
+      from: currentVersion,
+      to: targetVersion,
+      result: 'failed',
+      reason: refusal.message,
+      backup_path: null,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+    });
+    throw refusal;
   }
 
   const startedAt = new Date().toISOString();
@@ -630,16 +647,20 @@ export function openDatabase(dataDir: string): Database.Database {
 export function assertServeableSchemaVersion(dataDir: string): void {
   const version = readSchemaVersion(databasePath(dataDir));
   if (version === null || version < SCHEMA_VERSION) {
-    const found = version === null ? 'has no schema version' : `is at schema version ${version}`;
     throw new Error(
-      `version_mismatch: database ${found} but this build expects schema version ${SCHEMA_VERSION}; ` +
-        `run \`allibot --migrate --data-dir ${dataDir}\` before starting the server`,
+      t('zh-CN', 'cli.schema.tooOld', {
+        found: version === null ? '没有 Schema 版本' : `处于 Schema 版本 ${version}`,
+        expected: SCHEMA_VERSION,
+        data_dir: dataDir,
+      }),
     );
   }
   if (version > SCHEMA_VERSION) {
     throw new Error(
-      `version_mismatch: database schema version ${version} is newer than this build's ` +
-        `schema version ${SCHEMA_VERSION}; refusing to start, there is no downgrade path`,
+      t('zh-CN', 'cli.schema.tooNew', {
+        found: version,
+        expected: SCHEMA_VERSION,
+      }),
     );
   }
 }

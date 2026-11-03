@@ -5,12 +5,13 @@ import { createScriptedProvider } from '../../dist/scripted-provider.js';
 
 /**
  * Test-only member-face fixture: an Agent-authored message and the wakes it
- * delivers. The human face can only write `human` messages, and no ticket has
- * landed an Agent message that wakes others yet (the relay path is #16's), so
- * this process is just another caller of the production entry point
- * `appendMessageAndDispatch` — the same one the human face uses. It selects
- * the same scripted double through its arguments and never branches inside
- * production code on a test environment.
+ * delivers. M1's human face can only write `human` messages: a real Agent
+ * message is produced inside a round, and the wait needed to observe a
+ * non-definite Agent-to-Agent wake cannot be produced on demand through the
+ * HTTP face. This process is the narrow R2 exception: it calls the same
+ * production entry point `appendMessageAndDispatch` the human face uses, with
+ * the same scripted double selected through its arguments, and never adds a
+ * branch inside production code for a test environment.
  *
  * usage: agent-message.mjs '{"dataDir": "...", "targetId": "...",
  *                            "authorMemberId": "...", "body": "...",

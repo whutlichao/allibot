@@ -5,6 +5,7 @@ coverage/
 .vite/
 .DS_Store
 .scratch/
+.codegraph/
 *.log
 .env
 .env.*

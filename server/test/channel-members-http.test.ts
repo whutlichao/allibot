@@ -188,20 +188,33 @@ test('soft-deleting an Agent removes it from channel members and every target_me
     });
     const agentId = (await readJson(agent))['id'] as string;
 
-    // A second channel and a task-type target prove the cleanup spans every
-    // target kind, not just the channel under test.
+    // A second channel and a task thread prove the cleanup spans every target
+    // kind, not just the channel under test. The task thread's Agent membership
+    // is written by the ordinary assignment path.
     const other = await postJson(fixture, '/api/channels', { ...CHANNEL_BODY, name: '另一个频道' });
     const otherChannelId = (await readJson(other))['id'] as string;
-    const taskTargetId = 'task-thread-1';
-    const direct = new Database(path.join(fixture.dataDir, 'allibot.db'));
-    try {
-      direct.prepare("INSERT INTO target (id, kind) VALUES (?, 'task')").run(taskTargetId);
-      direct
-        .prepare('INSERT INTO target_member (target_id, member_id) VALUES (?, ?)')
-        .run(taskTargetId, agentId);
-    } finally {
-      direct.close();
-    }
+    const task = await postJson(fixture, '/api/tasks', {
+      channel_id: otherChannelId,
+      title: '清理用的任务',
+    });
+    assert.equal(task.status, 201, await task.clone().text());
+    const taskBody = await readJson(task);
+    const taskTargetId = taskBody['target_id'] as string;
+    const assigned = await fetch(`${fixture.base}/api/tasks/${String(taskBody['id'])}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ assignee_member_id: agentId }),
+    });
+    assert.equal(assigned.status, 200, await assigned.clone().text());
+    assert.equal(
+      queryDatabase<{ total: number }>(
+        fixture.dataDir,
+        'SELECT count(*) AS total FROM target_member WHERE target_id = ? AND member_id = ?',
+        [taskTargetId, agentId],
+      )?.total,
+      1,
+      'the assignment put the Agent on the task thread',
+    );
     const joined = await postJson(fixture, `/api/channels/${channelId}/members`, {
       member_id: agentId,
     });

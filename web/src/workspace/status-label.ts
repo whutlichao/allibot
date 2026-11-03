@@ -27,6 +27,8 @@ export function statusLabel(locale: Locale, status: AgentStatus): string {
  */
 export function offlineReasonLabel(locale: Locale, reason: OfflineReason): string {
   switch (reason) {
+    case 'disabled':
+      return t(locale, 'workspace.member.reason.disabled');
     case 'model-missing':
       return t(locale, 'workspace.member.reason.modelMissing');
     case 'consent-missing':

@@ -3,12 +3,15 @@ import { createInFlightRounds, dispatchWakes } from '../../dist/rounds.js';
 import { createScriptedProvider } from '../../dist/scripted-provider.js';
 
 /**
- * Test-only member-face fixture: deliver wakes that no landed ticket produces
- * yet. #12 delivers `channel-message` / `mention` wakes from a message write;
- * the claim (#24) and auto-continue (#24) producers are follow-up tickets, so
- * this process calls the same orchestration entry point they will call —
- * `dispatchWakes` — with the signal those producers will pass. It is a caller
- * of production code, not a second orchestration path.
+ * Test-only member-face fixture: deliver an explicit wake. The claim (#24),
+ * auto-continue (#24) and human-message paths are reachable through the HTTP
+ * face; this fixture covers the remaining signals a test must pin down (a
+ * `mention` / `channel-message` wake pointed at a chosen seq, and the DM round
+ * that no human message woke). The server's in-flight registry is process
+ * state, so the exact combination cannot be constructed from an external
+ * request. It calls the same orchestration entry point the HTTP paths call —
+ * `dispatchWakes` — and is therefore a caller of production code, not a second
+ * orchestration path.
  *
  * usage: wake-round.mjs '{"dataDir": "...", "targetId": "...",
  *                         "memberId": "...", "fromSeq": 1,
