@@ -22,6 +22,12 @@ export interface CliOptions {
    * message, which this option lets a test observe.
    */
   scriptedReplies: readonly string[];
+  /**
+   * Have the scripted reply carry the system prompt the round was handed. The
+   * double is where a test observes the prompt; it is an adapter capability,
+   * not a production branch.
+   */
+  scriptedEchoPrompt: boolean;
 }
 
 const DEFAULT_PORT = 3000;
@@ -35,8 +41,8 @@ const DEFAULT_SCRIPTED_PROVIDER: ScriptedBehavior = 'ignore';
 const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
   'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay>] [--scripted-delay-ms <ms>] ' +
-  '[--scripted-reply <body>]...';
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body>] [--scripted-delay-ms <ms>] ' +
+  '[--scripted-reply <body>] [--scripted-echo-prompt]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -51,6 +57,7 @@ export function parseCliArgs(
       'scripted-provider': { type: 'string' },
       'scripted-delay-ms': { type: 'string' },
       'scripted-reply': { type: 'string', multiple: true },
+      'scripted-echo-prompt': { type: 'boolean' },
     },
     strict: true,
     allowPositionals: true,
@@ -67,6 +74,7 @@ export function parseCliArgs(
     scriptedProvider: parseScriptedProvider(values['scripted-provider']),
     scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
     scriptedReplies: parseScriptedReplies(values['scripted-reply']),
+    scriptedEchoPrompt: values['scripted-echo-prompt'] === true,
   };
 }
 
