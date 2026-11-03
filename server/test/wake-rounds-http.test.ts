@@ -449,3 +449,40 @@ test('the round_outcome row reads back through the sqlite3 CLI with readable rea
     await fixture.stop();
   }
 });
+
+test('round replies and the join system event wake nobody in this ticket', async () => {
+  const fixture = await startWakeFixture('allibot-wake-no-chain-', 'reply');
+  try {
+    const insider = await createAgent(fixture, '甲');
+    const outsider = await createAgent(fixture, '局外人');
+    const channelId = await createChannel(fixture);
+    await joinChannel(fixture, channelId, insider);
+
+    await postMessage(fixture, channelId, { body: '@局外人 你来一句' });
+
+    // Two wakes came from the human message (insider + pierced outsider). The
+    // insider's reply and the join system event are both messages, and neither
+    // produces a wake here: relay delivery of Agent messages is the jump /
+    // budget ticket's (#16), where a hop is counted and bounded.
+    const outcomes = roundOutcomes(fixture);
+    assert.deepEqual(
+      outcomes.map((row) => [row.member_id, row.status, row.base_seq]),
+      [
+        [insider, 'replied', 1],
+        [outsider, 'replied', 1],
+      ],
+      'exactly one round outcome per wake of the one human message',
+    );
+    const systemMessages = (await listMessages(fixture, channelId)).filter(
+      (message) => message['kind'] === 'system',
+    );
+    assert.equal(systemMessages.length, 1, 'the join event is the only system message');
+    assert.equal(
+      systemMessages[0]?.['author_member_id'],
+      ownerId(fixture),
+      'the join event is authored by the owner, not by the agent',
+    );
+  } finally {
+    await fixture.stop();
+  }
+});

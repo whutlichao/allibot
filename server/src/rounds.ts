@@ -416,6 +416,13 @@ function commitJoin(db: Database.Database, wake: Wake, result: RoundResult): num
   if (!wake.pierced || result.verdict !== 'replied' || !hasBody(result)) {
     return null;
   }
+  // Only a channel-shaped target gains a member on a pierced reply. A DM's
+  // membership is fixed to its two rows, so a pierced reply there is one-shot
+  // delivery with no membership change — that rule belongs to the DM ticket;
+  // this guard keeps this ticket from writing a DM membership it cannot own.
+  if (readTargetKind(db, wake.targetId) !== 'channel') {
+    return null;
+  }
   const already = db
     .prepare('SELECT 1 FROM target_member WHERE target_id = ? AND member_id = ?')
     .get(wake.targetId, wake.memberId);
@@ -440,6 +447,13 @@ function commitJoin(db: Database.Database, wake: Wake, result: RoundResult): num
     ownerId(db),
     roundText('join.event', { name: member.display_name }),
   );
+}
+
+function readTargetKind(db: Database.Database, targetId: string): string {
+  const row = db.prepare('SELECT kind FROM target WHERE id = ?').get(targetId) as
+    | { kind: string }
+    | undefined;
+  return row?.kind ?? '';
 }
 
 function commitReply(db: Database.Database, wake: Wake, result: RoundResult): number | null {

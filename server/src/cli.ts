@@ -11,7 +11,7 @@ import {
   migrateDataDir,
   openDatabase,
 } from './db.js';
-import { HOST, startHttpServer } from './http.js';
+import { HOST, startHttpServer, type OrchestrationRuntime } from './http.js';
 import { acquireDataDirLock } from './lock.js';
 import { createInFlightRounds } from './rounds.js';
 import { createScriptedProvider } from './scripted-provider.js';
@@ -63,9 +63,12 @@ async function run(argv: readonly string[]): Promise<number> {
   const db = openDatabase(resolution.dataDir);
   try {
     const orchestration = createOrchestration(options);
-    const { server, port: boundPort } = await startHttpServer(port, db, resolution.dataDir, {
+    const { server, port: boundPort } = await startHttpServer(
+      port,
+      db,
+      resolution.dataDir,
       orchestration,
-    });
+    );
     console.log(`allibot server listening on http://${HOST}:${boundPort}`);
     console.log(`allibot member-face adapter: ${orchestration.provider.name}`);
 
@@ -81,10 +84,7 @@ async function run(argv: readonly string[]): Promise<number> {
  * the HTTP layer. A later ticket adds the real provider adapter here; nothing
  * downstream branches on which one is live.
  */
-function createOrchestration(options: CliOptions): {
-  provider: ReturnType<typeof createScriptedProvider>;
-  inFlight: ReturnType<typeof createInFlightRounds>;
-} {
+function createOrchestration(options: CliOptions): OrchestrationRuntime {
   return {
     provider: createScriptedProvider({
       behavior: options.scriptedProvider,

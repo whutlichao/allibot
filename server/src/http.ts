@@ -29,8 +29,7 @@ import {
   updateAgent,
 } from './members.js';
 import { appendMessageAndDispatch, listMessages, parseMessageRequest, parsePageQuery } from './messages.js';
-import { createInFlightRounds, type InFlightRounds } from './rounds.js';
-import { createScriptedProvider } from './scripted-provider.js';
+import type { InFlightRounds } from './rounds.js';
 import {
   joinChannel,
   listChannelMembers,
@@ -81,21 +80,13 @@ export async function startHttpServer(
   port: number,
   db: Database.Database,
   dataDir: string,
-  options: {
-    orchestration?: OrchestrationRuntime;
-    writeError?: (message: string, error: unknown) => void;
-  } = {},
+  orchestration: OrchestrationRuntime,
+  options: { writeError?: (message: string, error: unknown) => void } = {},
 ): Promise<StartedServer> {
-  const context: HttpContext = {
-    db,
-    dataDir,
-    orchestration: options.orchestration ?? {
-      // The HTTP layer never selects an adapter itself; this default only
-      // keeps a bare startHttpServer (tests of unrelated routes) constructible.
-      provider: createScriptedProvider({ behavior: 'ignore', delayMs: 0 }),
-      inFlight: createInFlightRounds(),
-    },
-  };
+  // The HTTP layer never selects a member-face adapter itself: the CLI resolves
+  // one from startup arguments and passes it in, so there is no silent default
+  // adapter in a production path.
+  const context: HttpContext = { db, dataDir, orchestration };
   const writeError = options.writeError ?? defaultWriteError;
   const server = createServer((request, response) => {
     handleRequest(request, response, context).catch((error: unknown) => {
