@@ -9,9 +9,10 @@
     "typecheck": "tsc -p tsconfig.test.json",
     "test:visual-contract": "node --test test/visual-contract.test.ts",
     "preview": "vite preview",
-    "test:strings": "node --test test/strings.test.ts",
+    "test:strings": "node --import ./test/support/register-css.mjs --test test/strings.test.ts",
     "test:web-render": "node --test test/web-render.test.ts",
-    "test:agui-contract": "node --import ./test/support/register-css.mjs --test test/copilotkit-contract.test.ts"
+    "test:agui-contract": "node --import ./test/support/register-css.mjs --test test/copilotkit-contract.test.ts",
+    "test:workspace-shell": "node --import ./test/support/register-css.mjs --test test/workspace-shell.test.ts"
   },
   "dependencies": {
     "@allibot/shared": "*",

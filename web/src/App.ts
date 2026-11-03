@@ -1,24 +1,53 @@
-import { t, type WorkspaceSettingsView } from '@allibot/shared';
+import { t, type WorkspaceSettingsView, type WorkspaceView } from '@allibot/shared';
 import { createElement } from 'react';
 import { Avatar } from './components/Avatar.ts';
 import { SettingsPanel } from './components/SettingsPanel.ts';
+import { WorkspaceShell } from './workspace/WorkspaceShell.ts';
+import type { LiveEvent } from './workspace/message-sync.ts';
 
 export interface AppProps {
   settings: WorkspaceSettingsView;
   onSettingsChange?: (patch: Partial<WorkspaceSettingsView>) => void;
   saveFailed?: boolean;
+  /** The one backend reading; when present the full workspace shell renders. */
+  workspace?: WorkspaceView;
+  activeTargetId?: string | null;
+  viewportWidth?: number;
+  onSelectTarget?: (targetId: string) => void;
+  onLiveEvent?: (event: LiveEvent) => void;
 }
 
 /**
- * 工作台壳：density 与 theme 作为壳上的状态呈现，设置面板改的就是这两档。
- *
- * 文案从词条表按语言偏好渲染（与后端同一份取值）；示例消息用来观察
- * 消息密度在壳里的呈现差异。
+ * 工作台壳：有 `GET /api/workspace` 读数时渲染单一 React 工作台（主区
+ * `CopilotChat`、左侧 target 导航、右侧上下文 / 抽屉）；读数不可达时退回
+ * 设置面，仍然显示可读文案，而不是静默空白。
  *
  * 这里用 createElement 而不是 JSX：Node 的类型剥离不处理 JSX，
  * 组件级 SSR 契约测试需要直接 import 本文件。
  */
-export function App({ settings, onSettingsChange, saveFailed = false }: AppProps) {
+export function App({
+  settings,
+  onSettingsChange,
+  saveFailed = false,
+  workspace,
+  activeTargetId,
+  viewportWidth,
+  onSelectTarget,
+  onLiveEvent,
+}: AppProps) {
+  if (workspace !== undefined) {
+    return createElement(WorkspaceShell, {
+      workspace,
+      settings,
+      activeTargetId,
+      viewportWidth,
+      onSelectTarget,
+      onSettingsChange,
+      saveFailed,
+      onLiveEvent,
+    });
+  }
+
   const locale = settings.locale;
   const author = t(locale, 'message.sample.author');
 
