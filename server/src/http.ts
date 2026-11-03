@@ -8,6 +8,11 @@ import {
 } from 'node:http';
 import { ApiFailure } from './api-error.js';
 import {
+  maxUploadEnvelopeBytes,
+  readAttachment,
+  uploadAttachment,
+} from './attachments.js';
+import {
   archiveChannel,
   createChannel,
   deleteChannel,
@@ -41,6 +46,7 @@ export interface StartedServer {
 
 interface HttpContext {
   db: Database.Database;
+  dataDir: string;
 }
 
 type Handler = (
@@ -59,9 +65,10 @@ interface Route {
 export async function startHttpServer(
   port: number,
   db: Database.Database,
+  dataDir: string,
   options: { writeError?: (message: string, error: unknown) => void } = {},
 ): Promise<StartedServer> {
-  const context: HttpContext = { db };
+  const context: HttpContext = { db, dataDir };
   const writeError = options.writeError ?? defaultWriteError;
   const server = createServer((request, response) => {
     handleRequest(request, response, context).catch((error: unknown) => {
@@ -91,8 +98,30 @@ export async function startHttpServer(
 
 const AGENT_ID = '([^/]+)';
 const CHANNEL_ID = '([^/]+)';
+const ATTACHMENT_ID = '([^/]+)';
 
 const ROUTES: readonly Route[] = [
+  {
+    method: 'POST',
+    pattern: /^\/api\/attachments$/,
+    handle: async (request, response, { db, dataDir }) => {
+      const uploaded = await uploadAttachment(
+        dataDir,
+        db,
+        request.headers['content-type'],
+        await readBody(request, maxUploadEnvelopeBytes(), 'attachment'),
+      );
+      sendJson(response, 201, { id: uploaded.id });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/attachments/${ATTACHMENT_ID}$`),
+    handle: async (_request, response, { db, dataDir }, ...params) => {
+      const attachment = readAttachment(dataDir, db, decodeId(params[0]));
+      sendAttachment(response, attachment);
+    },
+  },
   {
     method: 'GET',
     pattern: /^\/api\/channels$/,
@@ -256,19 +285,7 @@ async function handleRequest(
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
-    total += buffer.length;
-    if (total > MAX_BODY_BYTES) {
-      throw ApiFailure.validation(`request body exceeds ${MAX_BODY_BYTES} bytes`);
-    }
-    chunks.push(buffer);
-  }
-
-  const raw = Buffer.concat(chunks).toString('utf8');
+  const raw = (await readBody(request, MAX_BODY_BYTES, 'request')).toString('utf8');
   if (raw.trim().length === 0) {
     throw ApiFailure.validation('request body must be JSON');
   }
@@ -277,6 +294,32 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   } catch {
     throw ApiFailure.validation('request body is not valid JSON');
   }
+}
+
+/**
+ * Read a request body up to `limit` bytes. Crossing the limit is a client
+ * error, and the rest of the stream is drained rather than left half-read, so
+ * the client reads the envelope instead of a reset connection.
+ */
+async function readBody(
+  request: IncomingMessage,
+  limit: number,
+  what: string,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+    total += buffer.length;
+    if (total > limit) {
+      request.resume();
+      throw ApiFailure.validation(`${what} body exceeds ${limit} bytes`, { limit });
+    }
+    chunks.push(buffer);
+  }
+
+  return Buffer.concat(chunks);
 }
 
 /**
@@ -333,4 +376,26 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
     'content-length': Buffer.byteLength(payload),
   });
   response.end(payload);
+}
+
+/**
+ * Attachment bytes are served with the stored media type and an
+ * `attachment` disposition. The filename is carried twice — the RFC 5987
+ * `filename*` form for non-ASCII names and a quoted ASCII fallback — and both
+ * are quoted/escaped so the header cannot be split.
+ */
+function sendAttachment(
+  response: ServerResponse,
+  attachment: { filename: string; mime: string; bytes: Buffer },
+): void {
+  const fallback = attachment.filename.replace(/[^\x20-\x7e]|["\\]/g, '_');
+  response.writeHead(200, {
+    'content-type': attachment.mime,
+    'content-length': attachment.bytes.length,
+    'content-disposition':
+      `attachment; filename="${fallback}"; ` +
+      `filename*=UTF-8''${encodeURIComponent(attachment.filename)}`,
+    'x-content-type-options': 'nosniff',
+  });
+  response.end(attachment.bytes);
 }

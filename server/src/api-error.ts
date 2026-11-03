@@ -23,4 +23,8 @@ export class ApiFailure extends Error {
   static notFound(message: string): ApiFailure {
     return new ApiFailure(404, 'not_found', message);
   }
+
+  static conflict(message: string, details?: unknown): ApiFailure {
+    return new ApiFailure(409, 'conflict', message, details);
+  }
 }
