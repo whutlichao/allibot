@@ -15,6 +15,12 @@ import {
 } from './attachments.js';
 import { createCopilotKitHandler, isCopilotKitPath } from './copilotkit.js';
 import {
+  DEFAULT_SSE_LIFETIME_MS,
+  formatSseFrame,
+  SSE_ROTATE_EVENT,
+  eventHub,
+} from './events.js';
+import {
   archiveChannel,
   createChannel,
   deleteChannel,
@@ -70,6 +76,8 @@ interface HttpContext {
   db: Database.Database;
   dataDir: string;
   orchestration: OrchestrationRuntime;
+  /** How long one subscription connection lives before the rotate frame. */
+  sseLifetimeMs: number;
 }
 
 type Handler = (
@@ -90,12 +98,21 @@ export async function startHttpServer(
   db: Database.Database,
   dataDir: string,
   orchestration: OrchestrationRuntime,
-  options: { writeError?: (message: string, error: unknown) => void } = {},
+  options: {
+    writeError?: (message: string, error: unknown) => void;
+    /** The subscription connection lifetime; a test injects a short one. */
+    sseLifetimeMs?: number;
+  } = {},
 ): Promise<StartedServer> {
   // The HTTP layer never selects a member-face adapter itself: the CLI resolves
   // one from startup arguments and passes it in, so there is no silent default
   // adapter in a production path.
-  const context: HttpContext = { db, dataDir, orchestration };
+  const context: HttpContext = {
+    db,
+    dataDir,
+    orchestration,
+    sseLifetimeMs: options.sseLifetimeMs ?? DEFAULT_SSE_LIFETIME_MS,
+  };
   const writeError = options.writeError ?? defaultWriteError;
   // The CopilotKit multi-route handler owns everything under its base path;
   // its routes are not part of the human-face REST table below.
@@ -143,6 +160,26 @@ const ATTACHMENT_ID = '([^/]+)';
 const TASK_ID = '([^/]+)';
 
 const ROUTES: readonly Route[] = [
+  {
+    // The one global subscription stream (D1.9). It is live-only: it carries no
+    // backlog, no `id:` line and no Last-Event-ID handling, and the rotate
+    // frame is the frontend's signal that the close was routine.
+    method: 'GET',
+    pattern: /^\/api\/events$/,
+    handle: async (_request, response, { sseLifetimeMs }) => {
+      openEventStream(response, sseLifetimeMs);
+    },
+  },
+  {
+    // The per-target SSE is not part of M1 (R4): the route exists only so the
+    // answer is an explicit 404 instead of the channel routes swallowing the
+    // path into a different shape.
+    method: 'GET',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}/events$`),
+    handle: async (_request, _response, _context, ...params) => {
+      throw ApiFailure.notFound(`per-target subscription is not part of M1: ${params[0] ?? ''}`);
+    },
+  },
   {
     method: 'POST',
     pattern: /^\/api\/attachments$/,
@@ -387,6 +424,67 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   } catch {
     throw ApiFailure.validation('request body is not valid JSON');
   }
+}
+
+/**
+ * The one global subscription (D1.9). The connection is live-only: it
+ * subscribes to the process's hub and writes each published frame as is. No
+ * `id:` line is written and `Last-Event-ID` is never read, so nothing is
+ * replayed — a reconnect is a fresh subscription, and the frontend refetches
+ * the workspace snapshot and the message pages to catch up.
+ *
+ * When the connection's lifetime ends the server sends the rotate frame and
+ * closes; the frontend reads that as a routine rotation rather than an
+ * unreachable backend. The lifetime is a startup option so a test can inject a
+ * short one.
+ */
+function openEventStream(response: ServerResponse, lifetimeMs: number): void {
+  response.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+  });
+  // Flush the headers now: a subscriber that reads the response before its
+  // first frame must not wait for one.
+  response.flushHeaders();
+
+  let closed = false;
+  let unsubscribe = (): void => {};
+  let rotateTimer: NodeJS.Timeout | undefined;
+
+  const teardown = (): void => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    if (rotateTimer !== undefined) {
+      clearTimeout(rotateTimer);
+    }
+    unsubscribe();
+    response.end();
+  };
+
+  unsubscribe = eventHub.subscribe((event) => {
+    if (!closed) {
+      response.write(formatSseFrame(event));
+    }
+  });
+
+  rotateTimer = setTimeout(() => {
+    if (closed) {
+      return;
+    }
+    response.write(formatSseFrame({ event: SSE_ROTATE_EVENT, data: {} }));
+    teardown();
+  }, lifetimeMs);
+  // A rotation must not keep the process alive on its own; the server's own
+  // handle does that.
+  rotateTimer.unref();
+
+  // A client that goes away ends the subscription; the response's own close
+  // event covers both a finished response and a dropped connection, while the
+  // request's close fires as soon as its (empty) body is read.
+  response.once('close', teardown);
+  response.once('error', teardown);
 }
 
 /**

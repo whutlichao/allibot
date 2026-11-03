@@ -10,6 +10,7 @@ import type {
   WakeReason,
 } from './agent-seam.js';
 import { tFromDb } from './copy.js';
+import { publishMessageCreated, publishRoundOutcome } from './events.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
@@ -291,18 +292,26 @@ export async function runRound(
     result = { verdict: 'failed', replies: [], detail: errorMessage(error) };
   }
 
-  let committed: RoundOutcomeRow;
+  let committed: RoundCommit;
   try {
     committed = commitRound(db, wake, turn, startedAt, result, roundInput);
   } finally {
     inFlight.delete(wake.memberId);
+  }
+  // The subscription relays what the round committed, after its transaction
+  // returned; a rolled-back round announces nothing.
+  for (const message of committed.messages) {
+    publishMessageCreated({ targetId: wake.targetId, id: message.id, seq: message.seq });
+  }
+  for (const outcome of committed.outcomes) {
+    publishRoundOutcome(outcome);
   }
   // The other-target wakes wait here rather than running in parallel: one
   // member still has at most one round in flight.
   for (const deferred of turn.deferred) {
     await runRound(db, provider, deferred, inFlight);
   }
-  return committed;
+  return committed.outcome;
 }
 
 export interface RoundOutcomeRow {
@@ -401,10 +410,12 @@ function commitRound(
   startedAt: string,
   result: RoundResult,
   roundInput: RoundInput | null,
-): RoundOutcomeRow {
+): RoundCommit {
+  const messages: WrittenMessage[] = [];
+  const outcomes: RoundOutcomeRow[] = [];
   const write = db.transaction((): RoundOutcomeRow => {
-    const joinedSeq = commitJoin(db, wake, result);
-    const reply = commitReply(db, wake, result);
+    const joinedSeq = commitJoin(db, wake, result, messages);
+    const reply = commitReply(db, wake, result, messages);
     const finishedAt = new Date().toISOString();
 
     // Long-term memory is written back deterministically at round close
@@ -422,22 +433,24 @@ function commitRound(
     }
 
     if (turn.repeats.length > 0) {
-      insertOutcome(db, {
-        wake,
-        baseSeq: Math.max(...turn.repeats),
-        status: 'merged',
-        reason: tFromDb(db, 'round.merged', {
-          count: turn.repeats.length,
-          largest: Math.max(...turn.repeats),
+      outcomes.push(
+        insertOutcome(db, {
+          wake,
+          baseSeq: Math.max(...turn.repeats),
+          status: 'merged',
+          reason: tFromDb(db, 'round.merged', {
+            count: turn.repeats.length,
+            largest: Math.max(...turn.repeats),
+          }),
+          merged: 1,
+          startedAt,
+          finishedAt,
         }),
-        merged: 1,
-        startedAt,
-        finishedAt,
-      });
+      );
     }
 
     const finishedReason: FinishedReason = result.verdict === 'failed' ? 'error' : 'completed';
-    return insertOutcome(db, {
+    const outcome = insertOutcome(db, {
       wake,
       baseSeq: wake.fromSeq,
       status: result.verdict,
@@ -447,8 +460,25 @@ function commitRound(
       finishedAt,
       finishedReason,
     });
+    outcomes.push(outcome);
+    return outcome;
   });
-  return write();
+  const outcome = write();
+  return { outcome, messages, outcomes };
+}
+
+/** One target message a round committed, as the subscription relays it. */
+interface WrittenMessage {
+  id: string;
+  seq: number;
+}
+
+interface RoundCommit {
+  /** The row this wake produced; the merged rows are in `outcomes`. */
+  outcome: RoundOutcomeRow;
+  messages: WrittenMessage[];
+  /** Every outcome row written by this round, in write order. */
+  outcomes: RoundOutcomeRow[];
 }
 
 /**
@@ -463,7 +493,12 @@ function commitRound(
  * membership change — that rule belongs to the DM ticket; this guard keeps
  * this ticket from writing a DM membership it cannot own.
  */
-function commitJoin(db: Database.Database, wake: Wake, result: RoundResult): number | null {
+function commitJoin(
+  db: Database.Database,
+  wake: Wake,
+  result: RoundResult,
+  written: WrittenMessage[],
+): number | null {
   if (result.verdict !== 'replied' || !hasBody(result)) {
     return null;
   }
@@ -487,13 +522,15 @@ function commitJoin(db: Database.Database, wake: Wake, result: RoundResult): num
     wake.targetId,
     wake.memberId,
   );
-  return insertMessage(
+  const join = insertMessage(
     db,
     wake.targetId,
     'system',
     ownerId(db),
     tFromDb(db, 'system.member.piercedJoin', { name: member.display_name }),
-  ).seq;
+  );
+  written.push(join);
+  return join.seq;
 }
 
 function readTargetKind(db: Database.Database, targetId: string): string {
@@ -507,6 +544,7 @@ function commitReply(
   db: Database.Database,
   wake: Wake,
   result: RoundResult,
+  written: WrittenMessage[],
 ): { id: string; seq: number; body: string } | null {
   if (result.verdict !== 'replied' || !hasBody(result)) {
     return null;
@@ -515,7 +553,9 @@ function commitReply(
   // replies, and this write path lands the first one. Streaming the rest is
   // the AG-UI ticket's shape, not a second message per round here.
   const body = result.replies[0]!.trim();
-  return { ...insertMessage(db, wake.targetId, 'agent', wake.memberId, body), body };
+  const reply = { ...insertMessage(db, wake.targetId, 'agent', wake.memberId, body), body };
+  written.push(reply);
+  return reply;
 }
 
 function hasBody(result: RoundResult): boolean {
