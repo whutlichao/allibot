@@ -137,6 +137,12 @@ interface AgentMemberRow {
  * Agent member of the target except the author — human and Agent authors
  * alike — plus any mentioned Agent that is not a member (穿透).
  *
+ * A DM narrows the member surface on an Agent-authored message: its two rows
+ * are the owner and its Agent, and an Agent reply there wakes nobody (私信:
+ * "owner 发言唤醒对方，agent 的回复不再唤醒任何人"), so a DM has no
+ * agent-to-agent loop by construction. The mention surface is untouched — a
+ * mentioned third Agent is still delivered once (穿透), membership unchanged.
+ *
  * `system` messages wake nobody: they are records, not turns. Archived and
  * deleted channels never reach this point because their write path refuses the
  * message first, so they never produce a wake.
@@ -158,23 +164,32 @@ export function collectWakes(
   const wakes: Wake[] = [];
   const woken = new Set<string>();
 
-  for (const member of listTargetAgentMembers(db, message.targetId)) {
-    if (member.id === message.authorMemberId) {
-      continue;
+  const isDm = readTargetKind(db, message.targetId) === 'dm';
+  const wakesTargetMembers = !(message.kind === 'agent' && isDm);
+  if (wakesTargetMembers) {
+    for (const member of listTargetAgentMembers(db, message.targetId)) {
+      if (member.id === message.authorMemberId) {
+        continue;
+      }
+      wakes.push({
+        memberId: member.id,
+        targetId: message.targetId,
+        fromSeq: message.seq,
+        // The reason is readable diagnostics only; a mention is the more
+        // specific of the two, and the wake set is the same either way.
+        reason: mentioned.has(member.id) ? 'mention' : 'channel-message',
+      });
+      woken.add(member.id);
     }
-    wakes.push({
-      memberId: member.id,
-      targetId: message.targetId,
-      fromSeq: message.seq,
-      // The reason is readable diagnostics only; a mention is the more
-      // specific of the two, and the wake set is the same either way.
-      reason: mentioned.has(member.id) ? 'mention' : 'channel-message',
-    });
-    woken.add(member.id);
   }
 
   for (const member of mentions) {
     if (member.id === message.authorMemberId || woken.has(member.id)) {
+      continue;
+    }
+    // A mention of a member is still the member surface, so a DM Agent reply
+    // does not wake it either; only a non-member (穿透) is delivered.
+    if (!wakesTargetMembers && isTargetMember(db, message.targetId, member.id)) {
       continue;
     }
     wakes.push({
@@ -187,6 +202,14 @@ export function collectWakes(
   }
 
   return wakes;
+}
+
+/** Whether the member holds a target_member row on this target (any kind). */
+function isTargetMember(db: Database.Database, targetId: string, memberId: string): boolean {
+  const row = db
+    .prepare('SELECT 1 FROM target_member WHERE target_id = ? AND member_id = ?')
+    .get(targetId, memberId);
+  return row !== undefined;
 }
 
 /** The target's live Agent members, in join order. */
