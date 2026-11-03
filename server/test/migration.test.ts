@@ -91,7 +91,7 @@ test('migrate is idempotent: a second run reports the current version and append
     const second = runCli(['--migrate', '--data-dir', dataDir]);
 
     assert.equal(second.exitCode, 0, `second migrate should exit 0; output: ${second.output}`);
-    assert.match(second.output, /already at schema version 5/);
+    assert.match(second.output, /已是 Schema 版本 5/);
     assert.equal(readSchemaVersion(dataDir), 5);
     assert.deepEqual(
       readLedger(dataDir),

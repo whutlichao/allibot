@@ -1,10 +1,8 @@
+import { t } from '@allibot/shared';
 import type { Server } from 'node:http';
 import { parseCliArgs } from './args.js';
-import {
-  databasePath,
-  legacyDataDirWarning,
-  resolveDataDir,
-} from './data-dir.js';
+import { databasePath, resolveDataDir } from './data-dir.js';
+import { tFromDb } from './copy.js';
 import {
   assertServeableSchemaVersion,
   databaseExists,
@@ -29,17 +27,30 @@ async function run(argv: readonly string[]): Promise<number> {
   const { command, dataDir: explicitDataDir, port } = parseCliArgs(argv);
   const resolution = resolveDataDir(explicitDataDir);
   if (resolution.origin === 'legacy') {
-    console.error(legacyDataDirWarning(resolution.dataDir));
+    // 数据目录解析发生在库打开之前，所以这条兼容读取提示用源文案的默认
+    // 语言偏好渲染；库内 locale 只在库可用之后才读得到。
+    console.error(t('zh-CN', 'cli.data_dir.legacy_warning', { data_dir: resolution.dataDir }));
   }
 
   if (command === 'migrate') {
     const lock = await acquireDataDirLock(resolution.dataDir);
     try {
       const outcome = migrateDataDir(resolution.dataDir);
-      if (outcome.status === 'already-current') {
-        console.log(`already at schema version ${outcome.version}`);
-      } else {
-        console.log(`migrated ${resolution.dataDir} to schema version ${outcome.to}`);
+      // 迁移已提交，库可直接打开；回执按库内语言偏好渲染。
+      const db = openDatabase(resolution.dataDir);
+      try {
+        const version = outcome.status === 'already-current' ? outcome.version : outcome.to;
+        console.log(
+          tFromDb(
+            db,
+            outcome.status === 'already-current'
+              ? 'cli.migrate.already_current'
+              : 'cli.migrate.migrated',
+            { data_dir: resolution.dataDir, schema_version: version },
+          ),
+        );
+      } finally {
+        db.close();
       }
       return 0;
     } finally {
@@ -60,7 +71,9 @@ async function run(argv: readonly string[]): Promise<number> {
   const db = openDatabase(resolution.dataDir);
   try {
     const { server, port: boundPort } = await startHttpServer(port, db);
-    console.log(`allibot server listening on http://${HOST}:${boundPort}`);
+    console.log(
+      tFromDb(db, 'cli.serve.listening', { url: `http://${HOST}:${boundPort}` }),
+    );
 
     return await waitForShutdown(server);
   } finally {

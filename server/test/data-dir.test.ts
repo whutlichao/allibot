@@ -76,6 +76,7 @@ test('an existing new default directory wins over an existing legacy directory',
     assert.equal(existsSync(path.join(defaultDir, DB_FILENAME)), true);
     assert.equal(existsSync(path.join(legacyDir, DB_FILENAME)), false);
     assert.doesNotMatch(result.output, /legacy data directory/);
+    assert.doesNotMatch(result.output, /旧数据目录/);
   } finally {
     await removeTempDir(root);
   }
@@ -92,8 +93,8 @@ test('a legacy ~/allibot directory is used read-in-place with a visible warning 
     const result = runCli(['serve'], { env: { HOME: home }, timeoutMs: 2_000 });
 
     assert.notEqual(result.exitCode, 0, `serve without a database must fail; output: ${result.output}`);
-    assert.match(result.stderr, /legacy data directory/);
-    assert.match(result.stderr, /not moved/);
+    assert.match(result.stderr, /旧数据目录/);
+    assert.match(result.stderr, /既有数据不会被移动/);
     assert.ok(
       result.output.includes(path.join(legacyDir, DB_FILENAME)),
       `resolution should point at the legacy directory; output: ${result.output}`,
