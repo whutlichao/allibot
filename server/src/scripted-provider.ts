@@ -1,5 +1,11 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import type { RoundInput, RoundProvider, RoundResult } from './agent-seam.js';
+import type {
+  RoundInput,
+  RoundProvider,
+  RoundResult,
+  TeamAssignToolResult,
+} from './agent-seam.js';
+import { codepointLength } from './team-assignments.js';
 
 /**
  * The scripted provider double (D4.3): a fixed behaviour injected through the
@@ -45,7 +51,9 @@ export type ScriptedBehavior =
   | 'no-body'
   | 'iteration-limit'
   | 'continue-task'
-  | 'transfer-task';
+  | 'transfer-task'
+  | 'team-assign'
+  | 'team-budget';
 
 export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'reply',
@@ -57,6 +65,8 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'iteration-limit',
   'continue-task',
   'transfer-task',
+  'team-assign',
+  'team-budget',
 ];
 
 export interface ScriptedProviderOptions {
@@ -95,6 +105,12 @@ export interface ScriptedProviderOptions {
    * a production branch.
    */
   reportTeam?: boolean;
+  /** The members the leader double assigns, in call order. */
+  teamAssignMemberIds?: readonly string[];
+  /** The instruction the double puts into every TeamAssign call. */
+  teamAssignInstruction?: string;
+  /** Make the doubled member sub-round fail instead of answering. */
+  teamMemberFail?: boolean;
 }
 
 /** The default scripted reply: deterministic, readable and free of model calls. */
@@ -163,6 +179,10 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
             taskAction: 'transfer_task',
             taskTransferMemberId: options.transferMemberId,
           };
+        case 'team-assign':
+          return await teamAssignResult(input, options, callReport, false);
+        case 'team-budget':
+          return await teamAssignResult(input, options, callReport, true);
         case 'reply':
           return replyResult(input, options, callReport);
       }
@@ -233,5 +253,76 @@ function contextReport(input: RoundInput, options: ScriptedProviderOptions): str
   return (
     `\nthread:${input.contextScope}` +
     `\nctx:${input.messages.length}\nctxfirst:${first}\nctxlast:${last}\nreread:${String(reread)}`
+  );
+}
+
+/**
+ * The double's TeamAssign behaviour (#39 / D3.4). A member sub-round is the
+ * ordinary reply path (or the injected failure); a leader call walks the
+ * injected member ids and reports each tool result back in its final reply.
+ *
+ * `team-budget` keeps assigning the first member until the tool refuses: the
+ * completed calls advance the target budget, so the last call naturally lands
+ * on `budget-exhausted`. It never mutates the ledger itself — the production
+ * tool face is what spends the jumps.
+ */
+async function teamAssignResult(
+  input: RoundInput,
+  options: ScriptedProviderOptions,
+  callReport: string,
+  untilExhausted: boolean,
+): Promise<RoundResult> {
+  if (input.team?.assignment !== null && input.team?.assignment !== undefined) {
+    if (options.teamMemberFail === true) {
+      return {
+        verdict: 'failed',
+        replies: [],
+        detail: '脚本化 provider：成员子轮次被设定为失败',
+      };
+    }
+    return replyResult(input, options, callReport);
+  }
+
+  const assign = input.team?.assign ?? null;
+  if (!input.team?.is_leader || assign === null) {
+    return {
+      verdict: 'replied',
+      replies: [`[team-assign] unavailable${callReport}${teamReport(input, options)}`],
+    };
+  }
+
+  const memberIds = options.teamAssignMemberIds ?? [];
+  const instruction = options.teamAssignInstruction ?? '请完成这个子任务。';
+  const reports: string[] = [];
+  const limit = untilExhausted ? 10 : memberIds.length;
+  for (let index = 0; index < limit; index += 1) {
+    const memberId = memberIds[untilExhausted ? 0 : index];
+    if (memberId === undefined) {
+      break;
+    }
+    const result = await assign({ member_id: memberId, instruction });
+    reports.push(toolReport(result));
+    if (!result.ok) {
+      break;
+    }
+  }
+  return {
+    verdict: 'replied',
+    replies: [
+      `[team-assign] ${reports.length === 0 ? 'no-members' : reports.join(' | ')}` +
+        `${callReport}${teamReport(input, options)}`,
+    ],
+  };
+}
+
+/** The double's readable line for one tool result (never production copy). */
+function toolReport(result: TeamAssignToolResult): string {
+  const state = result.state ?? 'none';
+  return (
+    `${result.member_id}=${state}` +
+    `:jump=${result.jump_consumed}` +
+    `:excerpt=${codepointLength(result.reply_excerpt ?? '')}` +
+    `:output=${codepointLength(result.output ?? '')}` +
+    (result.ok ? '' : `:error=${result.code ?? 'unknown'}`)
   );
 }

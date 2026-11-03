@@ -11,6 +11,8 @@ import type {
   RoundResult,
   RoundTargetKind,
   RoundTeamContext,
+  TeamAssignRequest,
+  TeamAssignToolResult,
   WakeReason,
 } from './agent-seam.js';
 import { budgetExhaustedReason, tryConsumeJump, type BudgetRow } from './budget.js';
@@ -31,13 +33,22 @@ import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './mem
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
-import { readTeamTargetState, readTeamWakeState } from './team.js';
 import {
+  readTeamMemberAvailability,
+  readTeamTargetState,
+  readTeamWakeState,
+  type TeamTargetState,
+} from './team.js';
+import {
+  closeTeamAssignment,
   closeTeamRun,
+  insertFinalTeamAssignment,
   recordInvalidLeaderRun,
+  startTeamAssignment,
   startTeamRun,
   type StartedTeamRun,
 } from './team-runs.js';
+import { truncateTeamAssignmentExcerpt } from './team-assignments.js';
 import { countUnread } from './unread.js';
 import { transferTaskAsMember } from './tasks.js';
 
@@ -626,6 +637,22 @@ export async function runRound(
   // target state is the same reading the wake surface used, so the run names
   // the same leader, channel and task the delivery did.
   const teamRun = openTeamRunForWake(db, wake, startedAt);
+  // The TeamAssign tool face (#39 / D3.4): only a leader round opens it, and it
+  // is bound to this run so the assignment rows and the sub-round belong to the
+  // same leader round.
+  const assign: TeamAssignExecutor | null =
+    teamRun === null
+      ? null
+      : (request) =>
+          executeTeamAssignment(db, provider, inFlight, {
+            run: teamRun,
+            targetId: wake.targetId,
+            leaderMemberId: wake.memberId,
+            baseSeq: wake.fromSeq,
+            wakeReason: wake.reason,
+            request,
+            signal,
+          });
   // The status point's `working` state is process state; the frame announces
   // the transition now, and the reading that carries reasons stays the
   // workspace snapshot.
@@ -638,7 +665,7 @@ export async function runRound(
   let result: RoundResult;
   let interrupted = false;
   try {
-    input = readRoundInput(db, wake, { teamRun });
+    input = readRoundInput(db, wake, { teamRun, assign });
     const settled = await runProviderRound(provider, input, signal);
     interrupted = settled.interrupted;
     result = settled.result;
@@ -770,6 +797,303 @@ function closeRoundTeamRun(
   );
 }
 
+/** The TeamAssign tool face a leader round hands to the adapter. */
+type TeamAssignExecutor = (request: TeamAssignRequest) => Promise<TeamAssignToolResult>;
+
+interface TeamAssignExecution {
+  run: StartedTeamRun;
+  targetId: string;
+  leaderMemberId: string;
+  /** The leader round's trigger, used by the sub-round's prompt context. */
+  baseSeq: number;
+  wakeReason: WakeReason;
+  request: TeamAssignRequest;
+  signal?: AbortSignal;
+}
+
+/**
+ * One TeamAssign call (D3.4). The fixed decision order is:
+ *
+ * 1. the caller is this target's leader; the target is another live Agent
+ *    member of the channel (or the task's channel), with a ready model provider.
+ *    A target that fails this is a `failed` assignment with `jump_consumed=0`
+ *    and an error tool result — no jump was spent and no member ran;
+ * 2. the budget target is the target itself: the channel's own `target_budget`
+ *    for a channel target, the task's own `target_budget` for a task target.
+ *    There is no borrowing across targets and no second jump ledger;
+ * 3. `tryConsumeJump` checks and decrements atomically. Exhausted means
+ *    `budget-exhausted`, `jump_consumed=0`, no member run, error tool result;
+ * 4. otherwise one `running` assignment with `jump_consumed=1` is inserted, the
+ *    member sub-round runs inside this leader round, and the full output is the
+ *    tool result. A member failure closes the assignment `failed` and never
+ *    refunds the jump.
+ *
+ * The member sub-round writes no target message, no `round_outcome`, no unread,
+ * no search hit and no second budget fact; only the truncated excerpt is stored
+ * on the assignment (D3.4 step 6).
+ */
+async function executeTeamAssignment(
+  db: Database.Database,
+  provider: RoundProvider,
+  inFlight: InFlightRounds,
+  context: TeamAssignExecution,
+): Promise<TeamAssignToolResult> {
+  const { run, targetId, leaderMemberId, request } = context;
+  const team = readTeamTargetState(db, targetId, process.env);
+  if (team === null || team.leaderMemberId !== leaderMemberId) {
+    return {
+      ok: false,
+      assignment_id: null,
+      member_id: request.member_id,
+      state: null,
+      jump_consumed: 0,
+      reply_excerpt: null,
+      reason: tFromDb(db, 'team.assignment.reason.notLeader'),
+      code: 'not_leader',
+      output: null,
+    };
+  }
+
+  if (request.member_id === leaderMemberId) {
+    const reason = tFromDb(db, 'team.assignment.reason.self');
+    const assignment = insertFinalTeamAssignment(db, {
+      teamRunId: run.id,
+      targetId: team.targetId,
+      taskId: team.taskId,
+      memberId: request.member_id,
+      jumpConsumed: 0,
+      state: 'failed',
+      reason,
+    });
+    return {
+      ok: false,
+      assignment_id: assignment.id,
+      member_id: request.member_id,
+      state: 'failed',
+      jump_consumed: 0,
+      reply_excerpt: null,
+      reason,
+      code: 'target_self',
+      output: null,
+    };
+  }
+
+  const availability = readTeamMemberAvailability(
+    db,
+    team.channelId,
+    request.member_id,
+    process.env,
+  );
+  if (!availability.ok) {
+    const assignment = insertFinalTeamAssignment(db, {
+      teamRunId: run.id,
+      targetId: team.targetId,
+      taskId: team.taskId,
+      memberId: request.member_id,
+      jumpConsumed: 0,
+      state: 'failed',
+      reason: availability.reason,
+    });
+    return {
+      ok: false,
+      assignment_id: assignment.id,
+      member_id: request.member_id,
+      state: 'failed',
+      jump_consumed: 0,
+      reply_excerpt: null,
+      reason: availability.reason,
+      code: 'target_unavailable',
+      output: null,
+    };
+  }
+
+  // The budget target is the assignment's target: channel target uses the
+  // channel budget, task target uses the task target's budget (D3.4 step 2).
+  const attempt = tryConsumeJump(db, team.targetId);
+  if (!attempt.consumed) {
+    const reason = tFromDb(db, 'team.assignment.budgetExhausted', {
+      used: attempt.budget.used,
+      limit: attempt.budget.limit_value,
+    });
+    const assignment = insertFinalTeamAssignment(db, {
+      teamRunId: run.id,
+      targetId: team.targetId,
+      taskId: team.taskId,
+      memberId: request.member_id,
+      jumpConsumed: 0,
+      state: 'budget-exhausted',
+      reason,
+    });
+    return {
+      ok: false,
+      assignment_id: assignment.id,
+      member_id: request.member_id,
+      state: 'budget-exhausted',
+      jump_consumed: 0,
+      reply_excerpt: null,
+      reason,
+      code: 'budget_exhausted',
+      output: null,
+    };
+  }
+
+  const assignment = startTeamAssignment(db, {
+    teamRunId: run.id,
+    targetId: team.targetId,
+    taskId: team.taskId,
+    memberId: request.member_id,
+    jumpConsumed: 1,
+  });
+
+  const subInput = readAssignmentRoundInput(db, {
+    team,
+    run,
+    memberId: request.member_id,
+    assignmentId: assignment.id,
+    instruction: request.instruction,
+    baseSeq: context.baseSeq,
+    reason: context.wakeReason,
+  });
+  const turn: Turn = { targetId: team.targetId, repeats: [], deferred: [] };
+  const ownsTurn = inFlight.get(request.member_id) === undefined;
+  if (ownsTurn) {
+    inFlight.set(request.member_id, turn);
+  }
+  let result: RoundResult;
+  let interrupted = false;
+  try {
+    const settled = await runProviderRound(provider, subInput, context.signal);
+    result = settled.result;
+    interrupted = settled.interrupted;
+  } catch (error) {
+    result = { verdict: 'failed', replies: [], detail: errorMessage(error) };
+  } finally {
+    if (ownsTurn) {
+      inFlight.delete(request.member_id);
+    }
+  }
+
+  const output = result.replies.join('\n\n').trim();
+  if (!interrupted && result.verdict === 'replied' && output.length > 0) {
+    const excerpt = truncateTeamAssignmentExcerpt(db, output);
+    closeTeamAssignment(db, assignment.id, 'completed', {
+      replyExcerpt: excerpt,
+      reason: null,
+    });
+    return {
+      ok: true,
+      assignment_id: assignment.id,
+      member_id: request.member_id,
+      state: 'completed',
+      jump_consumed: 1,
+      reply_excerpt: excerpt,
+      reason: null,
+      code: null,
+      output,
+    };
+  }
+
+  const reason = tFromDb(db, 'team.assignment.memberFailed', {
+    reason: assignmentFailureReason(db, result, interrupted),
+  });
+  closeTeamAssignment(db, assignment.id, 'failed', { replyExcerpt: null, reason });
+  return {
+    ok: false,
+    assignment_id: assignment.id,
+    member_id: request.member_id,
+    state: 'failed',
+    jump_consumed: 1,
+    reply_excerpt: null,
+    reason,
+    code: 'member_failed',
+    output: null,
+  };
+}
+
+/**
+ * The readable reason of a failed member sub-round: the adapter's own detail
+ * when it gave one, the structured verdict copy otherwise. A replied round
+ * without a committable body is its own failure, not a silent success.
+ */
+function assignmentFailureReason(
+  db: Database.Database,
+  result: RoundResult,
+  interrupted: boolean,
+): string {
+  if (interrupted) {
+    return tFromDb(db, 'round.interrupted');
+  }
+  if (result.detail !== undefined && result.detail.length > 0) {
+    return result.detail;
+  }
+  if (result.verdict === 'replied') {
+    return tFromDb(db, 'team.assignment.memberNoOutput');
+  }
+  return verdictText(db, result.verdict);
+}
+
+/**
+ * The member sub-round's input: the same member-face seam as an ordinary
+ * round, with the assignment context stated instead of a wake. It reads the
+ * target window and recalls memory (understanding only), but it is not a
+ * target round: the caller writes no message and no round outcome.
+ */
+function readAssignmentRoundInput(
+  db: Database.Database,
+  params: {
+    team: TeamTargetState;
+    run: StartedTeamRun;
+    memberId: string;
+    assignmentId: string;
+    instruction: string;
+    baseSeq: number;
+    reason: WakeReason;
+  },
+): RoundInput {
+  const member = db
+    .prepare(
+      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
+         FROM member m JOIN agent_config c ON c.member_id = m.id
+        WHERE m.id = ? AND m.kind = 'agent' AND ${liveMemberClause('m')}`,
+    )
+    .get(params.memberId) as RoundMember | undefined;
+  if (member === undefined) {
+    throw new Error(`assignment member not found: ${params.memberId}`);
+  }
+  const targetKind: RoundTargetKind = params.team.targetKind;
+  const messages = readContextWindow(db, params.team.targetId, 'window');
+  const memories = recallForRound(db, member.id, params.team.targetId, messages);
+  const prompt = composeSystemPrompt(db, member, targetKind, false, params.reason, memories, {
+    isLeader: false,
+    assignmentInstruction: params.instruction,
+  });
+  return {
+    member,
+    targetId: params.team.targetId,
+    targetKind,
+    channelMode: 'team',
+    tools: readRoundTools(db, member.id, params.team.targetId, targetKind, false),
+    team: {
+      leader_member_id:
+        params.team.leaderMemberId.length === 0 ? null : params.team.leaderMemberId,
+      is_leader: false,
+      task_id: params.team.taskId,
+      team_run_id: params.run.id,
+      assignment: { assignment_id: params.assignmentId, instruction: params.instruction },
+      assign: null,
+    },
+    baseSeq: params.baseSeq,
+    reason: params.reason,
+    discipline: { definite: true, signal: null },
+    contextScope: 'window',
+    messages,
+    consumedSeq: readConsumedSeq(db, member.id, params.team.targetId),
+    memories,
+    systemPrompt: prompt.systemPrompt,
+    promptSections: prompt.sections,
+  };
+}
+
 /**
  * The commit of one round. The reply seq travels back with the outcome so the
  * caller can relay that message under the response budget; `null` means the
@@ -794,7 +1118,7 @@ export interface RoundOutcomeRow {
 function readRoundInput(
   db: Database.Database,
   wake: Wake,
-  context: { teamRun: StartedTeamRun | null } = { teamRun: null },
+  context: { teamRun: StartedTeamRun | null; assign: TeamAssignExecutor | null },
 ): RoundInput {
   const member = db
     .prepare(
@@ -840,7 +1164,7 @@ function readRoundInput(
           task_id: teamState.taskId,
           team_run_id: context.teamRun?.id ?? null,
           assignment: null,
-          assign: null,
+          assign: isLeader ? context.assign : null,
         };
   const prompt = composeSystemPrompt(
     db,

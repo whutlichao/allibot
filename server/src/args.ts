@@ -71,6 +71,15 @@ export interface CliOptions {
    */
   scriptedTransferMemberId: string | undefined;
   /**
+   * The members a scripted `team-assign` leader call assigns, in call order.
+   * Like every `--scripted-*` value it only configures the test double.
+   */
+  scriptedTeamAssignMemberIds: readonly string[];
+  /** The instruction a scripted TeamAssign call sends. */
+  scriptedTeamAssignInstruction: string | undefined;
+  /** Make the doubled member sub-round fail (a TeamAssign failure case). */
+  scriptedTeamMemberFail: boolean;
+  /**
    * How long one `/api/events` connection lives before the server sends the
    * rotate frame and closes it. Production keeps the 30-minute default; a test
    * injects a short value instead of waiting.
@@ -101,6 +110,8 @@ const USAGE =
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
   '[--scripted-report-calls] [--scripted-report-team] [--scripted-transfer-member <member-id>] ' +
+  '[--scripted-team-assign-member <member-id>] [--scripted-team-assign-instruction <text>] ' +
+  '[--scripted-team-member-fail] ' +
   '[--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
 
 export function parseCliArgs(
@@ -122,6 +133,9 @@ export function parseCliArgs(
       'scripted-report-calls': { type: 'boolean' },
       'scripted-report-team': { type: 'boolean' },
       'scripted-transfer-member': { type: 'string' },
+      'scripted-team-assign-member': { type: 'string', multiple: true },
+      'scripted-team-assign-instruction': { type: 'string' },
+      'scripted-team-member-fail': { type: 'boolean' },
       'sse-lifetime-ms': { type: 'string' },
       'reminder-tick-ms': { type: 'string' },
     },
@@ -146,7 +160,10 @@ export function parseCliArgs(
         values['scripted-report-context'] === true ||
         values['scripted-report-calls'] === true ||
         values['scripted-report-team'] === true ||
-        values['scripted-transfer-member'] !== undefined,
+        values['scripted-transfer-member'] !== undefined ||
+        values['scripted-team-assign-member'] !== undefined ||
+        values['scripted-team-assign-instruction'] !== undefined ||
+        values['scripted-team-member-fail'] === true,
     ),
     scriptedProvider: parseScriptedProvider(values['scripted-provider']),
     scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
@@ -156,6 +173,13 @@ export function parseCliArgs(
     scriptedReportCalls: values['scripted-report-calls'] === true,
     scriptedReportTeam: values['scripted-report-team'] === true,
     scriptedTransferMemberId: parseScriptedTransferMember(values['scripted-transfer-member']),
+    scriptedTeamAssignMemberIds: parseScriptedTeamAssignMembers(
+      values['scripted-team-assign-member'],
+    ),
+    scriptedTeamAssignInstruction: parseScriptedTeamAssignInstruction(
+      values['scripted-team-assign-instruction'],
+    ),
+    scriptedTeamMemberFail: values['scripted-team-member-fail'] === true,
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
     reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),
   };
@@ -237,6 +261,28 @@ function parseScriptedTransferMember(raw: string | undefined): string | undefine
     throw new Error('invalid --scripted-transfer-member value: a member id must not be empty');
   }
   return raw.trim();
+}
+
+function parseScriptedTeamAssignMembers(
+  raw: readonly string[] | undefined,
+): readonly string[] {
+  if (raw === undefined) {
+    return [];
+  }
+  if (raw.some((memberId) => memberId.trim().length === 0)) {
+    throw new Error('invalid --scripted-team-assign-member value: a member id must not be empty');
+  }
+  return raw.map((memberId) => memberId.trim());
+}
+
+function parseScriptedTeamAssignInstruction(raw: string | undefined): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw.trim().length === 0) {
+    throw new Error('invalid --scripted-team-assign-instruction value: an instruction must not be empty');
+  }
+  return raw;
 }
 
 function parseDelayMs(raw: string | undefined): number {

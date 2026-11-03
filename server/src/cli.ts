@@ -142,6 +142,9 @@ function createOrchestration(
           reportContext: options.scriptedReportContext,
           reportCalls: options.scriptedReportCalls,
           reportTeam: options.scriptedReportTeam,
+          teamAssignMemberIds: options.scriptedTeamAssignMemberIds,
+          teamAssignInstruction: options.scriptedTeamAssignInstruction,
+          teamMemberFail: options.scriptedTeamMemberFail,
           transferMemberId: options.scriptedTransferMemberId,
         });
   return { provider, inFlight: createInFlightRounds() };

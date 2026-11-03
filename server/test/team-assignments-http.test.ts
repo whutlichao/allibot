@@ -76,6 +76,13 @@ async function patchJson(
   return text.length === 0 ? {} : (JSON.parse(text) as Record<string, unknown>);
 }
 
+async function getJson(base: string, route: string): Promise<Record<string, unknown>> {
+  const response = await fetch(`${base}${route}`);
+  const text = await response.text();
+  assert.equal(response.status, 200, `${route} -> ${response.status}: ${text}`);
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
 /**
  * One fixture: a first (setup) process creates the channel / agents / team
  * configuration through the HTTP face, then stops; the second process runs the
@@ -300,4 +307,117 @@ test('a leader round carries the three-part rule order, the leader duties and on
     prompt.includes('你的名字是 队长。'),
     `the identity sentence is derived from member.display_name: ${prompt}`,
   );
+});
+
+interface AssignmentRow {
+  id: string;
+  team_run_id: string;
+  target_id: string;
+  task_id: string | null;
+  member_id: string;
+  state: string;
+  jump_consumed: number;
+  reply_excerpt: string | null;
+  reason: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+function assignmentRows(fixture: TeamFixture): AssignmentRow[] {
+  return readDatabase<AssignmentRow>(
+    fixture,
+    `SELECT id, team_run_id, target_id, task_id, member_id, state, jump_consumed,
+            reply_excerpt, reason, started_at, finished_at
+       FROM team_assignment ORDER BY rowid`,
+  );
+}
+
+interface BudgetRow {
+  target_id: string;
+  epoch_seq: number;
+  used: number;
+  limit_value: number;
+}
+
+function budgetRows(fixture: TeamFixture): BudgetRow[] {
+  return readDatabase<BudgetRow>(
+    fixture,
+    'SELECT target_id, epoch_seq, used, limit_value FROM target_budget ORDER BY target_id',
+  );
+}
+
+function outcomeRows(fixture: TeamFixture): { member_id: string; status: string }[] {
+  return readDatabase<{ member_id: string; status: string }>(
+    fixture,
+    'SELECT member_id, status FROM round_outcome ORDER BY rowid',
+  );
+}
+
+test('a TeamAssign call runs the member inside the leader round and records one completed assignment', async (t) => {
+  const fixture = await startTeamFixture('allibot-team-assign-success-', {
+    behavior: 'team-assign',
+    assign: ['a'],
+    extraArgs: [
+      '--scripted-reply',
+      'MEMBER-OUTPUT-ONLY-IN-THE-TOOL-RESULT',
+      '--scripted-report-calls',
+    ],
+  });
+  t.after(async () => fixture.stop());
+
+  await postChannelMessage(fixture, '请把资料整理一下');
+
+  const messages = channelMessages(fixture);
+  assert.equal(messages.length, 2, 'only the human message and the leader final reply land');
+  assert.equal(messages[0]?.kind, 'human');
+  assert.equal(messages[1]?.kind, 'agent');
+  assert.equal(messages[1]?.author_member_id, fixture.leaderId, 'the final reply is the leader');
+  assert.ok(
+    messages.every((message) => !message.body.includes('MEMBER-OUTPUT-ONLY-IN-THE-TOOL-RESULT')),
+    'the member body never becomes a target message',
+  );
+
+  const assignments = assignmentRows(fixture);
+  assert.equal(assignments.length, 1);
+  const assignment = assignments[0];
+  assert.ok(assignment !== undefined);
+  assert.equal(assignment.state, 'completed');
+  assert.equal(assignment.jump_consumed, 1, 'one call costs one jump');
+  assert.equal(assignment.target_id, fixture.channelId);
+  assert.equal(assignment.task_id, null);
+  assert.equal(assignment.member_id, fixture.memberIds[0]);
+  assert.ok((assignment.reply_excerpt ?? '').length > 0, 'the excerpt is readable');
+  assert.match(assignment.reply_excerpt ?? '', /MEMBER-OUTPUT-ONLY-IN-THE-TOOL-RESULT/);
+  assert.match(assignment.reply_excerpt ?? '', /calls:2/, 'the member sub-round was a real round');
+  assert.equal(assignment.reason, null);
+  assert.ok(assignment.started_at.length > 0);
+  assert.ok(assignment.finished_at !== null, 'the assignment is closed');
+
+  const channelBudget = budgetRows(fixture).find((row) => row.target_id === fixture.channelId);
+  assert.ok(channelBudget !== undefined, 'the human message opened the channel epoch');
+  assert.equal(channelBudget.used, 1, 'the assignment advances the channel budget by one jump');
+
+  const outcomes = outcomeRows(fixture);
+  assert.deepEqual(
+    outcomes.map((row) => row.member_id),
+    [fixture.leaderId],
+    'the member sub-round writes no round_outcome',
+  );
+
+  const unread = (await getJson(fixture.base, '/api/workspace'))['unread_by_target'] as Record<
+    string,
+    number
+  >;
+  assert.equal(unread[fixture.channelId], 1, 'only the leader final reply is unread');
+
+  const search = await getJson(
+    fixture.base,
+    `/api/search?q=${encodeURIComponent('MEMBER-OUTPUT-ONLY-IN-THE-TOOL-RESULT')}`,
+  );
+  assert.deepEqual(search['hits'], [], 'the member body is not a search hit');
+
+  const leaderReply = messages[1]?.body ?? '';
+  assert.match(leaderReply, /calls:1/, 'only the leader provider call happened before the reply');
+  assert.match(leaderReply, /jump=1/, 'the tool result reports the consumed jump');
+  assert.match(leaderReply, /output=[1-9]\d*/, 'the full member output is returned in the tool result');
 });

@@ -173,8 +173,161 @@ export function prepareTeamChangeWake(
   };
 }
 
+/** One `team_assignment` row, exactly as the snapshot read and SSE frame shape it. */
+export interface TeamAssignmentRecord {
+  id: string;
+  team_run_id: string;
+  target_id: string;
+  task_id: string | null;
+  member_id: string;
+  state: TeamAssignmentState;
+  jump_consumed: 0 | 1;
+  reply_excerpt: string | null;
+  reason: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/** What a TeamAssign call writes on its first row: a running assignment or a final refusal. */
+interface AssignmentInsert {
+  teamRunId: string;
+  targetId: string;
+  taskId: string | null;
+  memberId: string;
+  jumpConsumed: 0 | 1;
+}
+
 /**
- * The startup closure (D3.3): every residual `running` run / assignment is a
+ * Open one assignment as `running` after its jump was consumed (D3.3 / D3.4
+ * step 4). The jump is frozen at insert: a member failure never refunds it.
+ */
+export function startTeamAssignment(
+  db: Database.Database,
+  input: AssignmentInsert,
+  startedAt = new Date().toISOString(),
+): TeamAssignmentRecord {
+  return insertTeamAssignment(db, {
+    ...input,
+    state: 'running',
+    replyExcerpt: null,
+    reason: null,
+    startedAt,
+    finishedAt: null,
+  });
+}
+
+/**
+ * Write a final assignment that never became a running round: an unavailable
+ * target or an exhausted budget. `jump_consumed=0` is frozen with it; the
+ * readable reason is the tool result the leader receives.
+ */
+export function insertFinalTeamAssignment(
+  db: Database.Database,
+  input: AssignmentInsert & {
+    state: Extract<TeamAssignmentState, 'failed' | 'budget-exhausted'>;
+    reason: string;
+  },
+  now = new Date().toISOString(),
+): TeamAssignmentRecord {
+  return insertTeamAssignment(db, {
+    ...input,
+    state: input.state,
+    replyExcerpt: null,
+    reason: input.reason,
+    startedAt: now,
+    finishedAt: now,
+  });
+}
+
+/**
+ * Close one running assignment exactly once. The state, excerpt and readable
+ * reason are the only mutable fields; the jump stays as inserted.
+ */
+export function closeTeamAssignment(
+  db: Database.Database,
+  assignmentId: string,
+  state: Extract<TeamAssignmentState, 'completed' | 'failed'>,
+  fields: { replyExcerpt: string | null; reason: string | null },
+  finishedAt = new Date().toISOString(),
+): TeamAssignmentRecord {
+  const updated = db
+    .prepare(
+      `UPDATE team_assignment
+          SET state = ?, reply_excerpt = ?, reason = ?, finished_at = ?
+        WHERE id = ? AND state = 'running'`,
+    )
+    .run(state, fields.replyExcerpt, fields.reason, finishedAt, assignmentId).changes;
+  if (updated !== 1) {
+    throw new Error(`team assignment is not running: ${assignmentId}`);
+  }
+  return readTeamAssignment(db, assignmentId);
+}
+
+function readTeamAssignment(db: Database.Database, assignmentId: string): TeamAssignmentRecord {
+  const row = db
+    .prepare(
+      `SELECT id, team_run_id, target_id, task_id, member_id, state, jump_consumed,
+              reply_excerpt, reason, started_at, finished_at
+         FROM team_assignment WHERE id = ?`,
+    )
+    .get(assignmentId) as AssignmentRow | undefined;
+  if (row === undefined) {
+    throw new Error(`team assignment not found: ${assignmentId}`);
+  }
+  return assignmentRecord(row);
+}
+
+interface AssignmentInsertRow extends AssignmentInsert {
+  state: TeamAssignmentState;
+  replyExcerpt: string | null;
+  reason: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+function insertTeamAssignment(
+  db: Database.Database,
+  input: AssignmentInsertRow,
+): TeamAssignmentRecord {
+  const id = randomUUID();
+  db.prepare(
+    `INSERT INTO team_assignment
+       (id, team_run_id, target_id, task_id, member_id, state, jump_consumed, reply_excerpt,
+        reason, started_at, finished_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    input.teamRunId,
+    input.targetId,
+    input.taskId,
+    input.memberId,
+    input.state,
+    input.jumpConsumed,
+    input.replyExcerpt,
+    input.reason,
+    input.startedAt,
+    input.finishedAt,
+  );
+  return readTeamAssignment(db, id);
+}
+
+function assignmentRecord(row: AssignmentRow): TeamAssignmentRecord {
+  return {
+    id: row.id,
+    team_run_id: row.team_run_id,
+    target_id: row.target_id,
+    task_id: row.task_id,
+    member_id: row.member_id,
+    state: parseAssignmentState(row.state),
+    jump_consumed: row.jump_consumed === 1 ? 1 : 0,
+    reply_excerpt: row.reply_excerpt,
+    reason: row.reason,
+    started_at: row.started_at,
+    finished_at: row.finished_at,
+  };
+}
+
+/** The startup closure (D3.3): every residual `running` run / assignment is a
  * round the previous process never concluded. They close as `failed` with the
  * readable `interrupted` reason; `started_at` and `jump_consumed` are frozen,
  * and nothing is refunded, replayed or written as a message.
