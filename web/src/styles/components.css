@@ -101,6 +101,175 @@
   line-height: 1.35;
 }
 
+/* 正文渲染：Markdown 结构在对话正文里的呈现（段落 / 标题 / 强调 / 代码 / 列表 / 引用 / 链接 / 表格）。 */
+.message-body {
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.message-body > :first-child {
+  margin-block-start: 0;
+}
+
+.message-body > :last-child {
+  margin-block-end: 0;
+}
+
+.message-body p {
+  margin: 0 0 8px;
+}
+
+.message-body h1,
+.message-body h2,
+.message-body h3,
+.message-body h4,
+.message-body h5,
+.message-body h6 {
+  margin: 12px 0 6px;
+  line-height: 1.3;
+}
+
+.message-body h1 {
+  font-size: 20px;
+}
+
+.message-body h2 {
+  font-size: 17px;
+}
+
+.message-body h3 {
+  font-size: 15px;
+}
+
+.message-body ul,
+.message-body ol {
+  margin: 0 0 8px;
+  padding-inline-start: 22px;
+}
+
+.message-body blockquote {
+  margin: 0 0 8px;
+  padding-inline-start: 10px;
+  border-inline-start: 3px solid var(--border-strong);
+  color: var(--muted);
+}
+
+.message-body code {
+  padding-inline: 4px;
+  background: var(--panel);
+  border-radius: 4px;
+  font-size: 0.92em;
+}
+
+.message-body pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.message-body pre code {
+  padding: 0;
+  background: none;
+}
+
+.message-body table {
+  margin-block-end: 8px;
+  border-collapse: collapse;
+}
+
+.message-body th,
+.message-body td {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  text-align: start;
+}
+
+.message-body th {
+  background: var(--panel);
+}
+
+.message-body a {
+  color: var(--accent-deep);
+  text-decoration: underline;
+}
+
+/*
+ * 提及（Mention）：后端给出的区间包成的标签。加粗里保留粗体、行内代码里
+ * 保留代码样式——呈现只叠加不覆盖。
+ */
+.mention {
+  padding-inline: 2px;
+  background: var(--accent);
+  border-radius: 4px;
+  color: var(--accent-deep);
+}
+
+.message-body code .mention {
+  padding-inline: 0;
+  background: none;
+  color: inherit;
+}
+
+/* 系统事件消息：事件行，不是对话正文。 */
+.message-event {
+  display: flex;
+  gap: 6px;
+  padding: 4px 12px;
+  background: var(--surface);
+  border-inline-start: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.message-event__text {
+  overflow-wrap: anywhere;
+}
+
+/* 补全（Mention Completion）：Composer 输入 @ 后弹出的候选列表。 */
+.mention-completion {
+  max-inline-size: 280px;
+  margin: 0;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  list-style: none;
+}
+
+.mention-completion__option {
+  margin: 0;
+}
+
+.mention-completion__button {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  inline-size: 100%;
+  padding: 4px 6px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.mention-completion__button:hover,
+.mention-completion__button:focus-visible {
+  background: var(--selected);
+}
+
+.mention-completion__name {
+  font-size: 13px;
+}
+
 /*
  * 主题：壳上的 data-theme 是唯一开关。它只声明浏览器外观偏好（color-scheme：
  * 原生控件、滚动条与画布），不改视觉契约 token 的取值——token 名与取值是设计
