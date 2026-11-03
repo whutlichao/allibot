@@ -71,12 +71,6 @@ export function createEventHub(): EventHub {
  */
 export const eventHub: EventHub = createEventHub();
 
-/**
- * The publish helpers are the write paths' entry points: a ticket that adds an
- * event type adds its helper next to the name constant above, so every name
- * has exactly one spelling.
- */
-
 /** The frame a stored message produces; `target_id` is the ownership fact. */
 export function publishMessageCreated(message: {
   targetId: string;

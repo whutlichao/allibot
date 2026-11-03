@@ -16,9 +16,9 @@ import {
 import { createCopilotKitHandler, isCopilotKitPath } from './copilotkit.js';
 import {
   DEFAULT_SSE_LIFETIME_MS,
+  eventHub,
   formatSseFrame,
   SSE_ROTATE_EVENT,
-  eventHub,
 } from './events.js';
 import {
   archiveChannel,

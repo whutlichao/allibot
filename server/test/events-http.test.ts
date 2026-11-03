@@ -348,3 +348,239 @@ test('a replayed write (same client message id) announces nothing', async () => 
     await fixture.stop();
   }
 });
+
+test('a round streams its reply as message.created and its outcome as round.outcome', async () => {
+  const fixture = await startEventsFixture('allibot-events-round-', { provider: 'reply' });
+  const stream = await SseConnection.open(`${fixture.base}/api/events`);
+  try {
+    const agent = await createAgent(fixture, '甲');
+    const channelId = await createChannel(fixture);
+    await joinChannel(fixture, channelId, agent);
+
+    const human = await postMessage(fixture, channelId, { body: '大家怎么看' });
+
+    const first = await stream.next();
+    assert.ok(first !== null);
+    assert.equal(first.event, 'message.created');
+    assert.deepEqual(JSON.parse(first.data), {
+      target_id: channelId,
+      message_id: human['id'],
+      seq: 1,
+    });
+
+    const reply = await stream.next();
+    assert.ok(reply !== null);
+    assert.equal(reply.event, 'message.created');
+    const replyData = JSON.parse(reply.data) as Record<string, unknown>;
+    assert.equal(replyData['target_id'], channelId);
+    assert.equal(replyData['seq'], 2, 'the round reply is the second message in the target');
+    assertNoEventId(reply);
+
+    const outcome = await stream.next();
+    assert.ok(outcome !== null);
+    assert.equal(outcome.event, 'round.outcome');
+    assert.deepEqual(JSON.parse(outcome.data), {
+      target_id: channelId,
+      member_id: agent,
+      status: 'replied',
+    });
+    assertNoEventId(outcome);
+
+    // The frame names the persisted row, not an invented id.
+    const messages = await listMessages(fixture, channelId);
+    assert.equal(replyData['message_id'], messages[1]?.['id']);
+  } finally {
+    await stream.close();
+    await fixture.stop();
+  }
+});
+
+test('two connections over two targets each receive both kinds of frames, told apart by target_id', async () => {
+  const fixture = await startEventsFixture('allibot-events-two-targets-', { provider: 'reply' });
+  const first = await SseConnection.open(`${fixture.base}/api/events`);
+  const second = await SseConnection.open(`${fixture.base}/api/events`);
+  try {
+    const agent = await createAgent(fixture, '甲');
+    const channelA = await createChannel(fixture, '频道甲');
+    const channelB = await createChannel(fixture, '频道乙');
+    await joinChannel(fixture, channelA, agent);
+    await joinChannel(fixture, channelB, agent);
+
+    await postMessage(fixture, channelA, { body: '甲这边' });
+    await postMessage(fixture, channelB, { body: '乙这边' });
+
+    for (const [name, stream] of [
+      ['first', first],
+      ['second', second],
+    ] as const) {
+      const frames: SseFrame[] = [];
+      for (let index = 0; index < 5; index += 1) {
+        const frame = await stream.next();
+        assert.ok(frame !== null, `${name} should stay open`);
+        frames.push(frame);
+      }
+      const created = frames
+        .filter((frame) => frame.event === 'message.created')
+        .map((frame) => {
+          const data = JSON.parse(frame.data) as Record<string, unknown>;
+          return `${String(data['target_id'])}|${String(data['seq'])}`;
+        })
+        .sort();
+      // Both targets' messages reach this one connection: the subscription is
+      // not per target, and each frame names its own owner.
+      assert.deepEqual(created, [`${channelA}|1`, `${channelA}|2`, `${channelB}|1`, `${channelB}|2`].sort());
+
+      const outcomes = frames.filter((frame) => frame.event === 'round.outcome');
+      assert.equal(outcomes.length, 1, `${name} sees one round outcome`);
+      const outcome = JSON.parse(outcomes[0]!.data) as Record<string, unknown>;
+      assert.ok([channelA, channelB].includes(outcome['target_id'] as string));
+      assert.equal(outcome['member_id'], agent);
+      assert.equal(outcome['status'], 'replied');
+    }
+  } finally {
+    await first.close();
+    await second.close();
+    await fixture.stop();
+  }
+});
+
+test('the per-target subscription is a 404, and it is not swallowed by the channel routes', async () => {
+  const fixture = await startEventsFixture('allibot-events-per-target-');
+  try {
+    const channelId = await createChannel(fixture);
+    const response = await fetch(`${fixture.base}/api/channels/${channelId}/events`, {
+      headers: { accept: 'text/event-stream' },
+    });
+    assert.equal(response.status, 404);
+    assert.match(response.headers.get('content-type') ?? '', /^application\/json/);
+    const body = await readJson(response);
+    assert.equal((body['error'] as Record<string, unknown>)['code'], 'not_found');
+
+    const unknown = await fetch(`${fixture.base}/api/channels/does-not-exist/events`);
+    assert.equal(unknown.status, 404, 'the route answers 404 before it reads the channel');
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('the lifetime ends with a rotate frame and a close; a reconnect starts live with no backlog', async () => {
+  const fixture = await startEventsFixture('allibot-events-rotate-', {
+    args: ['--sse-lifetime-ms', '3000'],
+  });
+  try {
+    const channelId = await createChannel(fixture);
+    // Written while no connection is open: a later connection must not replay it.
+    const offline = await postMessage(fixture, channelId, { body: '断开期间' });
+
+    const live = await SseConnection.open(`${fixture.base}/api/events`, {
+      'last-event-id': '99',
+    });
+    try {
+      const posted = await postMessage(fixture, channelId, { body: '重连后' });
+      const message = await live.next();
+      assert.ok(message !== null, 'the connection stays open until its lifetime ends');
+      assert.equal(message.event, 'message.created');
+      const data = JSON.parse(message.data) as Record<string, unknown>;
+      assert.equal(data['message_id'], posted['id'], 'the first frame is the live message');
+      assert.notEqual(
+        data['message_id'],
+        offline['id'],
+        'Last-Event-ID is ignored: the frame written while disconnected is not replayed',
+      );
+      assertNoEventId(message);
+
+      const rotate = await live.next();
+      assert.ok(rotate !== null, 'the server closes the connection itself rather than dropping it');
+      assert.equal(rotate.event, 'rotate');
+      assert.deepEqual(JSON.parse(rotate.data), {}, 'the rotate frame carries no business data');
+      assertNoEventId(rotate);
+      assert.equal(await live.next(), null, 'the connection is closed right after the rotate frame');
+    } finally {
+      await live.close();
+    }
+
+    // A reconnect succeeds and, like every fresh subscription, only sees what
+    // is published after it.
+    const reconnected = await SseConnection.open(`${fixture.base}/api/events`);
+    try {
+      const posted = await postMessage(fixture, channelId, { body: '再连一次' });
+      const frame = await reconnected.next();
+      assert.ok(frame !== null);
+      assert.equal(frame.event, 'message.created');
+      assert.equal(
+        (JSON.parse(frame.data) as Record<string, unknown>)['message_id'],
+        posted['id'],
+      );
+    } finally {
+      await reconnected.close();
+    }
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('AG-UI events are a different endpoint and never appear on /api/events', async () => {
+  const fixture = await startEventsFixture('allibot-events-agui-');
+  const stream = await SseConnection.open(`${fixture.base}/api/events`);
+  try {
+    const agent = await createAgent(fixture, '甲');
+    const channelId = await createChannel(fixture);
+    await joinChannel(fixture, channelId, agent);
+
+    const run = await fetch(`${fixture.base}/api/copilotkit/agent/allibot/run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+      body: JSON.stringify({
+        threadId: channelId,
+        runId: 'run-events-1',
+        messages: [{ id: 'run-events-1-user', role: 'user', content: '你好' }],
+      }),
+    });
+    assert.equal(run.status, 200, await run.clone().text());
+    const aguiText = await run.text();
+    assert.match(aguiText, /"type":"RUN_STARTED"/, 'the AG-UI stream is the run endpoint');
+
+    const posted = await postMessage(fixture, channelId, { body: '订阅只看落库' });
+    // The run's own persisted reply is a stored row, so it is relayed like any
+    // other; what must never cross over is the AG-UI event vocabulary.
+    let frame = await stream.next();
+    let sawPosted = false;
+    for (let index = 0; index < 10 && frame !== null; index += 1) {
+      assert.ok(
+        !frame.raw.includes('RUN_STARTED') &&
+          !frame.raw.includes('TEXT_MESSAGE') &&
+          !frame.raw.includes('STATE_SNAPSHOT') &&
+          !frame.raw.includes('RUN_FINISHED'),
+        `AG-UI frames do not cross over: ${frame.raw}`,
+      );
+      const data = JSON.parse(frame.data) as Record<string, unknown>;
+      if (data['message_id'] === posted['id']) {
+        sawPosted = true;
+        break;
+      }
+      frame = await stream.next();
+    }
+    assert.ok(sawPosted, 'the ordinary stored message arrives on the subscription');
+  } finally {
+    await stream.close();
+    await fixture.stop();
+  }
+});
+
+test('an open subscription does not hold the server open: SIGTERM still shuts it down', async () => {
+  const fixture = await startEventsFixture('allibot-events-shutdown-');
+  const stream = await SseConnection.open(`${fixture.base}/api/events`);
+  try {
+    await createChannel(fixture);
+    const startedAt = Date.now();
+    await fixture.running.stop();
+    const elapsed = Date.now() - startedAt;
+    assert.ok(
+      elapsed < 4_000,
+      `the server should shut down without waiting for the stream timeout; took ${elapsed}ms`,
+    );
+  } finally {
+    await stream.close();
+    await removeTempDir(fixture.dataDir);
+  }
+});
