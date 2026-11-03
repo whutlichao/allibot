@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type {
@@ -5,6 +6,7 @@ import type {
   RoundInput,
   RoundProvider,
   RoundResult,
+  RoundShellResult,
   TeamAssignToolResult,
 } from './agent-seam.js';
 import { stableJson } from './permissions.js';
@@ -67,7 +69,8 @@ export type ScriptedBehavior =
   | 'workspace'
   | 'permission'
   | 'mcp-approval'
-  | 'team-approval';
+  | 'team-approval'
+  | 'shell';
 
 export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'reply',
@@ -91,6 +94,7 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'permission',
   'mcp-approval',
   'team-approval',
+  'shell',
 ];
 
 export interface ScriptedProviderOptions {
@@ -135,6 +139,13 @@ export interface ScriptedProviderOptions {
   teamAssignInstruction?: string;
   /** Make the doubled member sub-round fail instead of answering. */
   teamMemberFail?: boolean;
+  /**
+   * The commands a `shell` round asks the production local-shell face to run,
+   * in call order. It is a test injection like `--scripted-reply`: each command
+   * is what a model would have asked for, and every gate / environment /
+   * approval fact is the production face's answer.
+   */
+  shellCommands?: readonly string[];
 }
 
 /** The default scripted reply: deterministic, readable and free of model calls. */
@@ -217,6 +228,8 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
           return await mcpApprovalResult(input, options, callReport);
         case 'team-approval':
           return await teamApprovalResult(input, options, callReport);
+        case 'shell':
+          return await shellResult(input, options, callReport);
         case 'sop-create':
         case 'sop-start':
           // The member face has no SOP write tool (D4.2): the double states
@@ -797,6 +810,74 @@ async function sopApprovalResult(
     verdict: 'replied',
     replies: [`[sop-approval] write:${outcome}${callReport}`],
   };
+}
+
+/**
+ * The double's local-shell behaviour (#46 / D5.4). It asks the round's
+ * production shell face to run the injected commands in order, after two hard
+ * boundary probes (`..` and a root-outside absolute cwd) that must never reach
+ * an approval. The reply reports the tool name, exit code, cwd and a SHA-256 of
+ * stdout — never the output itself — so a test can prove the process ran with
+ * the right cwd / environment while the round persists no shell output.
+ *
+ * A round with no project root has no shell face; a round with the switch off
+ * still has the face (so a call is observably DENIED) but no `Bash` tool.
+ */
+async function shellResult(
+  input: RoundInput,
+  options: ScriptedProviderOptions,
+  callReport: string,
+): Promise<RoundResult> {
+  const toolsLine = `[shell-tools] ${input.tools.length === 0 ? '-' : input.tools.join(',')}`;
+  const workspace = input.workspace;
+  if (workspace === null) {
+    return {
+      verdict: 'replied',
+      replies: [
+        `[shell] available:false${callReport}\n${toolsLine}` + teamReport(input, options),
+      ],
+    };
+  }
+  const shell = workspace.shell;
+  const outside = path.join(path.dirname(workspace.root), 'outside-cwd');
+  const lines: string[] = [
+    `[shell] enabled:${workspace.allow_local_shell === 1} root:${workspace.root}`,
+    reportShellCall('shell-cwd-dotdot', await shell.run({ command: 'pwd -P', cwd: '..' })),
+    reportShellCall(
+      'shell-cwd-absolute',
+      await shell.run({ command: 'pwd -P', cwd: outside }),
+    ),
+  ];
+  const commands = options.shellCommands ?? ['pwd -P'];
+  for (let index = 0; index < commands.length; index += 1) {
+    lines.push(
+      reportShellCall(
+        `shell-run-${index + 1}`,
+        await shell.run({
+          command: commands[index]!,
+          tool_call_id: `shell-call-${index + 1}`,
+        }),
+      ),
+    );
+  }
+  lines.push(toolsLine);
+  return {
+    verdict: 'replied',
+    replies: [`${lines.join('\n')}${callReport}${teamReport(input, options)}`],
+  };
+}
+
+/** The double's shell report: cwd and stdout digest, never stdout / env values. */
+function reportShellCall(label: string, result: RoundShellResult): string {
+  if (!result.ok) {
+    return `[${label}] error:${result.error ?? 'unknown'}`;
+  }
+  const stdout = result.stdout ?? '';
+  return (
+    `[${label}] ok exit:${String(result.exit_code)} cwd:${result.cwd ?? '-'}` +
+    ` stdout-bytes:${Buffer.byteLength(stdout, 'utf8')}` +
+    ` stdout-sha256:${createHash('sha256').update(stdout).digest('hex')}`
+  );
 }
 
 /** The double's readable line for one file-tool result (never production copy). */

@@ -43,9 +43,9 @@ const DEFINITION_ID = 'sop-def-1';
 const RUN_ID = 'sop-run-1';
 
 const MEMBERS: readonly TargetMemberView[] = [
-  { id: OWNER_ID, kind: 'owner', display_name: '我', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
-  { id: AGENT_A, kind: 'agent', display_name: '执行者甲', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
-  { id: AGENT_B, kind: 'agent', display_name: '校验者乙', avatar_slot: 2, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
+  { id: OWNER_ID, kind: 'owner', display_name: '我', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, allow_local_shell: 0, permission_mode: 'ask-writes' },
+  { id: AGENT_A, kind: 'agent', display_name: '执行者甲', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, allow_local_shell: 0, permission_mode: 'ask-writes' },
+  { id: AGENT_B, kind: 'agent', display_name: '校验者乙', avatar_slot: 2, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, allow_local_shell: 0, permission_mode: 'ask-writes' },
 ];
 
 function channel(overrides: Partial<ChannelView> = {}): ChannelView {

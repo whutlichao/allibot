@@ -13,6 +13,7 @@ import {
 } from './db.js';
 import { HOST, startHttpServer, type OrchestrationRuntime } from './http.js';
 import { acquireDataDirLock } from './lock.js';
+import { setShellEnvNames } from './local-shell.js';
 import { createModelProvider } from './model-provider.js';
 import { startReminderScheduler } from './reminders.js';
 import { createInFlightRounds } from './rounds.js';
@@ -54,6 +55,10 @@ async function run(argv: readonly string[]): Promise<number> {
     setClock(() => new Date(instant));
   }
   setApprovalTimeoutMs(options.approvalTimeoutMs);
+  // 本地 shell 环境 (#46 / D5.4): the declared `env_names` merge point. #47
+  // sources these from the member's mcp.json; the startup injection is the
+  // documented stand-in until then. Names only, never values.
+  setShellEnvNames(options.shellEnvNames);
   const { command, port } = options;
   const resolution = resolveDataDir(options.dataDir);
   if (resolution.origin === 'legacy') {
@@ -170,6 +175,7 @@ function createOrchestration(
           teamAssignInstruction: options.scriptedTeamAssignInstruction,
           teamMemberFail: options.scriptedTeamMemberFail,
           transferMemberId: options.scriptedTransferMemberId,
+          shellCommands: options.scriptedShellCommands,
         });
   return { provider, inFlight: createInFlightRounds() };
 }

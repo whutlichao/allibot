@@ -162,6 +162,8 @@ export function applyJoinResult(
           available: false,
           reason: 'workspace-root-missing',
         },
+        // The shell switch is channel-only; reuse the table's reading.
+        allow_local_shell: members[0]?.allow_local_shell ?? 0,
         // The channel's default is the owner row's effective mode; the new
         // Agent follows it unless it already carries an override.
         permission_mode:

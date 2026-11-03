@@ -40,6 +40,7 @@ const MEMBERS: readonly TargetMemberView[] = [
     display_name: '执行者甲',
     avatar_slot: 1,
     workspace_status: { backend: 'local', available: true, reason: null },
+    allow_local_shell: 0,
     permission_mode: 'ask-writes',
   },
 ];
