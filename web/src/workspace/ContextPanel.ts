@@ -2,12 +2,14 @@ import {
   t,
   type ChannelConfigPatch,
   type Locale,
+  type PlanRunView,
   type TargetMemberView,
   type TeamRunView,
   type WorkspaceView,
 } from '@allibot/shared';
 import { createElement, type ReactNode } from 'react';
 import { ChannelConfigPanel } from './ChannelConfigPanel.ts';
+import { PlanPanel } from './PlanPanel.ts';
 import { TeamRunsPanel } from './TeamRunsPanel.ts';
 import { readChannel, readTargetContext, type TargetKind } from './model.ts';
 import type { WorkspacePanel } from './shell-state.ts';
@@ -23,6 +25,8 @@ export interface ContextPanelProps {
   onChannelConfigChange?: (patch: ChannelConfigPatch) => void | Promise<void>;
   /** The selected target's run snapshot, when the shell has read it. */
   teamRuns?: readonly TeamRunView[];
+  /** The selected target's Plan reading, when the shell has read it. */
+  plans?: readonly PlanRunView[];
   onOpenPanel?: (panel: WorkspacePanel) => void;
 }
 
@@ -52,6 +56,7 @@ export function ContextPanel({
   channelMembers,
   onChannelConfigChange,
   teamRuns,
+  plans,
   onOpenPanel,
 }: ContextPanelProps) {
   const context = readTargetContext(workspace, targetId);
@@ -61,6 +66,9 @@ export function ContextPanel({
       ? workspace.tasks.find((task) => task.target_id === context.targetId)
       : undefined;
   const showsTeamRuns = channel?.mode === 'team' || selectedTask?.channel_mode === 'team';
+  // Plan tools are available on every task target and on a team target; a DM
+  // and an autonomous channel round have none (D4.1).
+  const showsPlan = context?.kind === 'task' || channel?.mode === 'team';
 
   function panelButton(panel: WorkspacePanel, label: string): ReactNode {
     return createElement(
@@ -132,6 +140,13 @@ export function ContextPanel({
                 locale,
                 tasks: workspace.tasks,
                 channels: workspace.channels,
+              })
+            : null,
+          showsPlan
+            ? createElement(PlanPanel, {
+                plans: plans ?? [],
+                locale,
+                agents: workspace.agents,
               })
             : null,
           createElement(

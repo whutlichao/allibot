@@ -1,6 +1,7 @@
 import {
   t,
   type ChannelConfigPatch,
+  type PlanRunView,
   type TargetMemberView,
   type TaskStatus,
   type TaskView,
@@ -27,6 +28,8 @@ export interface AppProps {
   channelMembers?: Record<string, readonly TargetMemberView[]>;
   /** Team run snapshots the shell may render, keyed by target id. */
   teamRuns?: Record<string, readonly TeamRunView[]>;
+  /** Plan snapshots the shell may render, keyed by target id. */
+  plans?: Record<string, readonly PlanRunView[]>;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
   onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
@@ -54,6 +57,7 @@ export function App({
   viewportWidth,
   channelMembers,
   teamRuns,
+  plans,
   onSelectTarget,
   onTaskTransition,
   onJoinMember,
@@ -70,6 +74,7 @@ export function App({
       viewportWidth,
       channelMembers,
       teamRuns,
+      plans,
       onSelectTarget,
       onTaskTransition,
       onSettingsChange,

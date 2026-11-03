@@ -515,4 +515,13 @@ export const ZH_CN = {
   'workspace.teamRuns.assignments.state.completed': { text: '已完成', params: [] },
   'workspace.teamRuns.assignments.state.failed': { text: '失败', params: [] },
   'workspace.teamRuns.assignments.state.budgetExhausted': { text: '预算耗尽', params: [] },
+  // 运行面板的 Plan 区块（#40）：plan_task 是自己的三词状态，不是任务五态。
+  'workspace.plan.title': { text: '计划', params: [] },
+  'workspace.plan.empty': { text: '暂无计划', params: [] },
+  'workspace.plan.member': { text: '成员', params: [] },
+  'workspace.plan.tasks': { text: '清单', params: [] },
+  'workspace.plan.updatedAt': { text: '更新于', params: [] },
+  'workspace.plan.status.pending': { text: '待开始', params: [] },
+  'workspace.plan.status.inProgress': { text: '进行中', params: [] },
+  'workspace.plan.status.completed': { text: '已完成', params: [] },
 } as const satisfies Record<string, CatalogEntry>;

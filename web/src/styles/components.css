@@ -1206,3 +1206,92 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* Plan 区块（#40）：成员轮次内的工作清单，三词状态不是任务五态，也不是消息。 */
+.plan-panel {
+  margin-block-start: 8px;
+  border-block-start: 1px solid var(--border);
+  padding-block-start: 8px;
+}
+
+.plan-panel__title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.plan-panel__empty {
+  margin: 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+.plan-panel__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.plan-panel__run {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+}
+
+.plan-panel__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.plan-panel__list-title {
+  margin: 0;
+  font-size: 12px;
+  color: var(--faint);
+  font-weight: 500;
+}
+
+.plan-panel__tasks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+}
+
+.plan-panel__task {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.plan-panel__position {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-panel__task-title {
+  flex: 1;
+}
+
+.plan-panel__task-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.plan-panel__task[data-plan-task-status='in_progress'] .plan-panel__task-status {
+  color: var(--accent);
+}
+
+.plan-panel__task[data-plan-task-status='completed'] .plan-panel__task-status {
+  color: var(--online);
+}

@@ -1,6 +1,7 @@
 import {
   t,
   type ChannelConfigPatch,
+  type PlanRunView,
   type TargetMemberView,
   type TeamRunView,
   type WorkspaceSettingsView,
@@ -24,6 +25,12 @@ import {
   readTeamRuns,
 } from './workspace/team-runs.ts';
 import { shouldRefreshWorkspace } from './workspace/message-sync.ts';
+import {
+  applyPlanUpdateFrame,
+  isPlanTarget,
+  readPlanUpdateFrame,
+  readPlans,
+} from './workspace/plans.ts';
 import {
   deleteAgent,
   joinChannelMember,
@@ -56,6 +63,8 @@ let refreshGeneration = 0;
 let currentChannelMembers: Record<string, TargetMemberView[]> = {};
 /** 当前 team target 的运行记录；run 是独立读数，不进消息流。 */
 let currentTeamRuns: Record<string, readonly TeamRunView[]> = {};
+/** 当前 target 的 Plan 读数；plan 是独立读数，不进消息流。 */
+let currentPlans: Record<string, readonly PlanRunView[]> = {};
 
 async function loadChannelMembers(channelId: string): Promise<void> {
   currentChannelMembers = {
@@ -68,6 +77,13 @@ async function loadTeamRuns(targetId: string): Promise<void> {
   currentTeamRuns = {
     ...currentTeamRuns,
     [targetId]: await readTeamRuns(fetch, targetId),
+  };
+}
+
+async function loadPlans(targetId: string): Promise<void> {
+  currentPlans = {
+    ...currentPlans,
+    [targetId]: await readPlans(fetch, targetId),
   };
 }
 
@@ -143,6 +159,7 @@ function render(saveFailed = false): void {
         viewportWidth={currentViewportWidth}
         channelMembers={currentChannelMembers}
         teamRuns={currentTeamRuns}
+        plans={currentPlans}
         saveFailed={saveFailed}
         onSelectTarget={(targetId) => {
           currentTargetId = targetId;
@@ -160,6 +177,13 @@ function render(saveFailed = false): void {
               .then(() => render())
               .catch((error: unknown) => {
                 console.error('team runs read failed', error);
+              });
+          }
+          if (reading !== null && isPlanTarget(reading, targetId)) {
+            void loadPlans(targetId)
+              .then(() => render())
+              .catch((error: unknown) => {
+                console.error('plan read failed', error);
               });
           }
         }}
@@ -192,6 +216,20 @@ function render(saveFailed = false): void {
             .catch(() => render(true));
         }}
         onLiveEvent={(event) => {
+          if (event.event === 'plan_update') {
+            const frame = readPlanUpdateFrame(event.data);
+            if (frame === null) {
+              return;
+            }
+            currentPlans = applyPlanUpdateFrame(currentPlans, frame);
+            render();
+            void loadPlans(frame.target_id)
+              .then(() => render())
+              .catch((error: unknown) => {
+                console.error('plan read failed', error);
+              });
+            return;
+          }
           if (event.event === 'team_assignment') {
             const frame = readTeamAssignmentFrame(event.data);
             if (frame === null) {
@@ -256,6 +294,13 @@ async function refreshWorkspace(): Promise<void> {
       await loadTeamRuns(currentTargetId);
     } catch (error: unknown) {
       console.error('team runs read failed', error);
+    }
+  }
+  if (currentTargetId !== null && isPlanTarget(reading, currentTargetId)) {
+    try {
+      await loadPlans(currentTargetId);
+    } catch (error: unknown) {
+      console.error('plan read failed', error);
     }
   }
   render();
