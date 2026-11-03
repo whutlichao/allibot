@@ -7,6 +7,7 @@ import {
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
+import { bindAttachments, listAttachmentsForMessages } from './attachments.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { liveMemberClause } from './members.js';
 import { parseMentions, type MentionCandidate } from './mentions.js';
@@ -32,6 +33,8 @@ export interface AppendMessageInput {
   /** Defaults to the owner; a system event names the member it is about. */
   authorMemberId?: string | null;
   clientMessageId?: string | null;
+  /** Upload drafts to bind to this message in the same transaction. */
+  attachmentIds?: readonly string[];
 }
 
 interface MessageRow {
@@ -135,6 +138,11 @@ export function appendMessage(
         insertMention.run(id, mention.member_id, mention.start, mention.end);
       }
     }
+
+    // Binding is part of the same transaction as the message row: an unknown or
+    // already-bound attachment aborts the whole write, so no message is left
+    // holding a partial attachment set.
+    bindAttachments(db, id, input.attachmentIds ?? []);
     return { id, seq };
   });
   return write();
@@ -207,6 +215,7 @@ function hydrate(db: Database.Database, rows: readonly MessageRow[]): MessageVie
     bucket.push({ member_id: mention.member_id, start: mention.start, end: mention.end });
     mentions.set(mention.message_id, bucket);
   }
+  const attachments = listAttachmentsForMessages(db, rows.map((row) => row.id));
   return rows.map((row) => ({
     id: row.id,
     target_id: row.target_id,
@@ -221,9 +230,9 @@ function hydrate(db: Database.Database, rows: readonly MessageRow[]): MessageVie
     task_pointer: row.task_pointer,
     client_message_id: row.client_message_id,
     mentions: mentions.get(row.id) ?? [],
-    // The attachment ticket binds drafts on this write path; until then the
-    // metadata is empty. `storage_path` is never part of a message read.
-    attachments: [],
+    // The metadata of what this message bound; `storage_path` is never part of
+    // a message read.
+    attachments: attachments.get(row.id) ?? [],
   }));
 }
 
@@ -292,7 +301,7 @@ function parseQueryInteger(
  * and the channel pointer message is written by the backend when a task is
  * created), so the human face asking for one is an unknown field.
  */
-const FIELD_KEYS = new Set(['body', 'kind', 'client_message_id']);
+const FIELD_KEYS = new Set(['body', 'kind', 'client_message_id', 'attachment_ids']);
 
 /**
  * The human-face request body. `kind` is accepted as a known field so that
@@ -324,7 +333,41 @@ export function parseMessageRequest(targetId: string, body: unknown): AppendMess
     // are relative to it, so trimming happens once, before both.
     body: text.trim(),
     clientMessageId: optionalIdentifier(record, 'client_message_id'),
+    attachmentIds: parseAttachmentIds(record['attachment_ids']),
   };
+}
+
+/**
+ * The upload drafts this message binds. A repeated id is a client mistake, not
+ * two attachments; the read path lists what was bound in upload order.
+ */
+function parseAttachmentIds(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw ApiFailure.validation('attachment_ids must be an array of strings', {
+      field: 'attachment_ids',
+      value,
+    });
+  }
+  const ids: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string' || entry.trim().length === 0) {
+      throw ApiFailure.validation('attachment_ids must be an array of non-empty strings', {
+        field: 'attachment_ids',
+        value: entry,
+      });
+    }
+    if (ids.includes(entry)) {
+      throw ApiFailure.validation(`duplicate attachment id: ${entry}`, {
+        field: 'attachment_ids',
+        value: entry,
+      });
+    }
+    ids.push(entry);
+  }
+  return ids;
 }
 
 function parseHumanKind(value: unknown): MessageKind {

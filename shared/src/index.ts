@@ -92,10 +92,22 @@ export interface MessageMentionView {
 }
 
 /**
+ * One attachment as a message read returns it. The bytes live in the data
+ * directory; the storage path that names them inside it never reaches the
+ * human face, so this view carries metadata only.
+ */
+export interface AttachmentView {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+}
+
+/**
  * A message as the human face returns it. `author_display_name` and
  * `author_avatar_slot` are write-time snapshots, so a renamed or soft-deleted
- * author still renders. `attachments` is always empty until the attachments
- * ticket binds drafts; the storage path of an attachment never reaches here.
+ * author still renders. `attachments` lists what the message write bound; an
+ * unbound upload draft never appears here.
  */
 export interface MessageView {
   id: string;
@@ -111,5 +123,5 @@ export interface MessageView {
   task_pointer: string | null;
   client_message_id: string | null;
   mentions: MessageMentionView[];
-  attachments: unknown[];
+  attachments: AttachmentView[];
 }

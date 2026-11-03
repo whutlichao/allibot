@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export interface MigrationStep {
   readonly to: number;
@@ -159,6 +159,57 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
         BEFORE DELETE ON message
         BEGIN
           SELECT RAISE(ABORT, 'message is append-only: DELETE is not allowed');
+        END;
+      `);
+    },
+  },
+  {
+    to: 5,
+    apply(db) {
+      db.exec(`
+        -- An attachment is the metadata of one object that rides with a
+        -- message. The bytes live in the data directory under attachments/,
+        -- never in this file. message_id is the binding: NULL is an upload
+        -- draft that no read path exposes, and the message write path sets it
+        -- inside its own transaction. storage_path is an opaque name chosen by
+        -- the server, so a user filename never decides where bytes land.
+        CREATE TABLE attachment (
+          id TEXT PRIMARY KEY,
+          message_id TEXT REFERENCES message (id),
+          filename TEXT NOT NULL,
+          mime TEXT NOT NULL,
+          size INTEGER NOT NULL CHECK (size >= 0),
+          storage_path TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL
+        );
+
+        -- One message may carry several attachments; the binding lookup is by
+        -- message, so it gets its own index.
+        CREATE INDEX attachment_message ON attachment (message_id);
+
+        -- Attachments are immutable like messages: binding is the one allowed
+        -- state change, so the triggers allow exactly the NULL -> message_id
+        -- transition and refuse everything else. There is no delete path.
+        CREATE TRIGGER attachment_immutable_update
+        BEFORE UPDATE ON attachment
+        WHEN NOT (
+          OLD.message_id IS NULL
+          AND NEW.message_id IS NOT NULL
+          AND NEW.id IS OLD.id
+          AND NEW.filename IS OLD.filename
+          AND NEW.mime IS OLD.mime
+          AND NEW.size IS OLD.size
+          AND NEW.storage_path IS OLD.storage_path
+          AND NEW.created_at IS OLD.created_at
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'attachment is immutable: only binding to a message is allowed');
+        END;
+
+        CREATE TRIGGER attachment_immutable_delete
+        BEFORE DELETE ON attachment
+        BEGIN
+          SELECT RAISE(ABORT, 'attachment is immutable: DELETE is not allowed');
         END;
       `);
     },
