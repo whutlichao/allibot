@@ -114,6 +114,48 @@ export function readProviderConsent(
 }
 
 /**
+ * The first availability fact that stops a provider call. This one function is
+ * read by both the real adapter (which refuses the round) and the status point
+ * (which reads offline), so "the Agent is offline because X" and "the round was
+ * refused because X" can never name different facts. The order is the order the
+ * adapter refuses in: no model, then no consent, then no credential.
+ */
+export type ProviderAvailability =
+  | { ok: true; provider: AgentProvider; model: string }
+  | { ok: false; reason: 'model-missing' }
+  | { ok: false; reason: 'consent-missing'; provider: AgentProvider }
+  | {
+      ok: false;
+      reason: 'credential-missing';
+      provider: AgentProvider;
+      credentialEnv: string;
+    };
+
+/** Whether this model may call its provider right now (D1.10 / D1.12). */
+export function checkProviderAvailability(
+  db: Database.Database,
+  model: string | null,
+  env: NodeJS.ProcessEnv,
+): ProviderAvailability {
+  const parsed = parseModelIdentifier(model);
+  if (parsed === null) {
+    return { ok: false, reason: 'model-missing' };
+  }
+  if (readProviderConsent(db, parsed.provider) === null) {
+    return { ok: false, reason: 'consent-missing', provider: parsed.provider };
+  }
+  if (credentialStatus(parsed.provider, env) === 'missing') {
+    return {
+      ok: false,
+      reason: 'credential-missing',
+      provider: parsed.provider,
+      credentialEnv: PROVIDER_CREDENTIAL_ENV[parsed.provider],
+    };
+  }
+  return { ok: true, provider: parsed.provider, model: parsed.model };
+}
+
+/**
  * 一次性确认：同一 provider 再确认不刷新时间戳，也不写第二行。确认记录只
  * 含「何时确认过」，不含端点、密钥或任何连接参数。
  */
