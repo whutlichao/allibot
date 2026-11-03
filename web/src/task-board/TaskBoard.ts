@@ -80,6 +80,9 @@ export function TaskBoard({
         className: 'task-card',
         'data-task-id': task.id,
         'data-task-status': task.status,
+        style: {
+          borderInlineStartColor: `var(${taskStatusColorToken(task.status)})`,
+        },
         draggable: true,
         onDragStart: (event: DragEvent<HTMLElement>) => {
           event.dataTransfer.setData('text/plain', task.id);

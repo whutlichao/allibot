@@ -310,9 +310,11 @@ test('the five task statuses map to the existing role-family tokens, never a new
       (VISUAL_CONTRACT_TOKENS as readonly string[]).includes(token),
       `${token} is a fixed visual-contract token`,
     );
+    const card = cardHtml(html, `task-${status}`);
+    assert.ok(card.includes(`background-color:var(${token})`), `the ${status} card dot paints ${token}`);
     assert.ok(
-      cardHtml(html, `task-${status}`).includes(`background-color:var(${token})`),
-      `the ${status} card paints ${token}`,
+      card.includes(`border-inline-start-color:var(${token})`),
+      `the ${status} card itself is edged with ${token}`,
     );
   }
   assert.doesNotMatch(html, /hsl\(|#[0-9a-fA-F]{3,8}\b/, 'the board introduces no literal color value');

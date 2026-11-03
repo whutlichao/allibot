@@ -628,6 +628,7 @@
   padding: 6px 8px;
   background: var(--surface);
   border: 1px solid var(--border);
+  border-inline-start-width: 3px;
   border-radius: 6px;
 }
 
