@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -16,7 +15,6 @@ import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import {
   MIGRATION_FIXTURE,
-  makeTempDir,
   removeTempDir,
   runCli,
   startServer,
@@ -199,6 +197,7 @@ test('PATCH validates the workspace root and stores its canonical path', async (
       ['an Agent home', agentHome],
       ['a symlink into the data directory', path.join(fixture.tmp, 'data-link')],
       ['a non-string', 42],
+      ['an empty string', ''],
     ];
     symlinkSync(fixture.dataDir, path.join(fixture.tmp, 'data-link'));
 

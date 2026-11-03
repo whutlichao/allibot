@@ -56,13 +56,15 @@ function tableSql(dataDir: string, table: string): string | undefined {
   }
 }
 
-function columns(dataDir: string, table: string): { name: string; notnull: number; dflt_value: unknown }[] {
+function columns(dataDir: string, table: string): { cid: number; name: string; notnull: number; dflt_value: unknown; pk: number }[] {
   const db = openReadOnly(dataDir);
   try {
     return db.pragma(`table_info(${table})`) as {
+      cid: number;
       name: string;
       notnull: number;
       dflt_value: unknown;
+      pk: number;
     }[];
   } finally {
     db.close();

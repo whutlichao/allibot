@@ -40,7 +40,7 @@ import {
   createSopDefinition,
   joinChannelMember,
   patchChannelConfig,
-  readChannelMembers,
+  readTargetMembers,
   saveAgentConfig,
   startSopRun,
 } from './workspace-actions.ts';
@@ -65,7 +65,10 @@ let currentSettings: WorkspaceSettingsView = DEFAULT_SETTINGS;
 let currentTargetId: string | null = null;
 let currentViewportWidth = window.innerWidth;
 let refreshGeneration = 0;
-/** 当前频道成员表：成员面板 / 名册按需读，不把「未加入」当猜测。 */
+/**
+ * 当前 target 的成员表（成员面板 / 名册 / workspace_status）：按需读，
+ * 不把「未加入」或工作区可用性当猜测。
+ */
 let currentChannelMembers: Record<string, TargetMemberView[]> = {};
 /** 当前 team target 的运行记录；run 是独立读数，不进消息流。 */
 let currentTeamRuns: Record<string, readonly TeamRunView[]> = {};
@@ -76,10 +79,10 @@ let currentSopDefinitions: Record<string, readonly SopDefinitionView[]> = {};
 /** SOP run 读数，按 definition id 归档；pending run 由启动响应带回。 */
 let currentSopRuns: Record<string, readonly SopRunView[]> = {};
 
-async function loadChannelMembers(channelId: string): Promise<void> {
+async function loadTargetMembers(targetId: string): Promise<void> {
   currentChannelMembers = {
     ...currentChannelMembers,
-    [channelId]: await readChannelMembers(fetch, channelId),
+    [targetId]: await readTargetMembers(fetch, targetId),
   };
 }
 
@@ -161,7 +164,7 @@ async function joinChannelMemberAction(
       ).members,
     };
   } else {
-    await loadChannelMembers(channelId);
+    await loadTargetMembers(channelId);
   }
   render();
 }
@@ -224,11 +227,13 @@ function render(saveFailed = false): void {
           currentTargetId = targetId;
           render();
           const reading = currentWorkspace;
-          if (reading !== null && targetKind(reading, targetId) === 'channel') {
-            void loadChannelMembers(targetId)
+          if (reading !== null) {
+            // Workspace status is a target fact: read the selected target's
+            // member table for every target kind, not only a channel.
+            void loadTargetMembers(targetId)
               .then(() => render())
               .catch((error: unknown) => {
-                console.error('channel members read failed', error);
+                console.error('target members read failed', error);
               });
           }
           if (reading !== null && isTeamTarget(reading, targetId)) {
@@ -345,16 +350,13 @@ async function refreshWorkspace(): Promise<void> {
   if (currentTargetId === null || !targets.has(currentTargetId)) {
     currentTargetId = initialTargetId(reading);
   }
-  // 成员面板 / 名册是频道范围读数；SSE 的成员 / 状态事实会走到这里，
-  // 因此跟随工作台读数一起刷新当前频道的成员表。
-  if (
-    currentTargetId !== null &&
-    targetKind(reading, currentTargetId) === 'channel'
-  ) {
+  // 成员表也承载目标上下文的 workspace_status；SSE 的成员 / 状态事实会
+  // 走到这里，因此跟随工作台读数一起刷新当前 target 的成员表。
+  if (currentTargetId !== null) {
     try {
-      await loadChannelMembers(currentTargetId);
+      await loadTargetMembers(currentTargetId);
     } catch (error: unknown) {
-      console.error('channel members read failed', error);
+      console.error('target members read failed', error);
     }
   }
   if (currentTargetId !== null && isTeamTarget(reading, currentTargetId)) {

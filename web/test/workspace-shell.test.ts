@@ -110,6 +110,7 @@ function agent(id: string, displayName: string): AgentView {
     compression_threshold: 30,
     max_iterations: 8,
     auto_claim: 1,
+    workspace_backend: null,
     status: 'online',
     offline_reason: null,
   };
@@ -120,6 +121,7 @@ function channel(overrides: Partial<ChannelView> & Pick<ChannelView, 'id' | 'nam
     description: '',
     mode: 'autonomous',
     team: { leader_member_id: null, status: 'valid', reason: null },
+    workspace: { root: null, backend: 'local', allow_local_shell: 0 },
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,

@@ -11,6 +11,7 @@ import {
   type WorkspaceView,
 } from '@allibot/shared';
 import { createElement, type ReactNode } from 'react';
+import { workspaceStatusCopy } from './channel-config.ts';
 import { ChannelConfigPanel } from './ChannelConfigPanel.ts';
 import { PlanPanel } from './PlanPanel.ts';
 import { SopPanel } from './SopPanel.ts';
@@ -23,7 +24,10 @@ export interface ContextPanelProps {
   workspace: WorkspaceView;
   targetId: string | null;
   locale: Locale;
-  /** The selected channel's member table; the leader control reads it. */
+  /**
+   * The selected target's member table (any target kind); the leader control
+   * and the target-context workspace_status read it.
+   */
   channelMembers?: readonly TargetMemberView[];
   /** The team-config write; mode and leader both use the one channel PATCH. */
   onChannelConfigChange?: (patch: ChannelConfigPatch) => void | Promise<void>;
@@ -84,6 +88,16 @@ export function ContextPanel({
   // Plan tools are available on every task target and on a team target; a DM
   // and an autonomous channel round have none (D4.1).
   const showsPlan = context?.kind === 'task' || channel?.mode === 'team';
+  // The channel's own workspace is the owner's effective reading; a target
+  // context is unavailable when any member's effective backend/root is. Show
+  // the first unavailable member so an Agent's docker override is visible,
+  // while the channel config area keeps the channel-level (owner) status.
+  const ownerWorkspaceStatus =
+    channelMembers?.find((member) => member.kind === 'owner')?.workspace_status ??
+    channelMembers?.[0]?.workspace_status;
+  const targetWorkspaceStatus =
+    channelMembers?.find((member) => !member.workspace_status.available)?.workspace_status ??
+    ownerWorkspaceStatus;
 
   function panelButton(panel: WorkspacePanel, label: string): ReactNode {
     return createElement(
@@ -123,6 +137,24 @@ export function ContextPanel({
               kindLabel(locale, context.kind),
             ),
           ),
+          createElement(
+            'p',
+            {
+              className: 'context-panel__workspace',
+              'data-workspace-status':
+                targetWorkspaceStatus === undefined
+                  ? 'loading'
+                  : targetWorkspaceStatus.available
+                    ? 'available'
+                    : 'unavailable',
+              'data-workspace-reason': targetWorkspaceStatus?.reason ?? '',
+            },
+            targetWorkspaceStatus === undefined
+              ? t(locale, 'workspace.status.loading')
+              : t(locale, 'workspace.status.line', {
+                  status: workspaceStatusCopy(locale, targetWorkspaceStatus),
+                }),
+          ),
           context.unread > 0
             ? createElement(
                 'p',
@@ -139,6 +171,7 @@ export function ContextPanel({
             : createElement(ChannelConfigPanel, {
                 channel,
                 members: channelMembers,
+                workspaceStatus: ownerWorkspaceStatus,
                 locale,
                 onTeamConfigChange: onChannelConfigChange,
               }),

@@ -518,11 +518,16 @@
 
 .context-panel__kind,
 .context-panel__unread,
+.context-panel__workspace,
 .context-panel__description,
 .context-panel__status {
   margin: 0;
   font-size: 13px;
   color: var(--muted);
+}
+
+.context-panel__workspace[data-workspace-status='unavailable'] {
+  color: var(--error);
 }
 
 .context-panel__entries {
@@ -574,6 +579,59 @@
   border: 1px solid var(--border);
   border-radius: 7px;
   padding: 4px 8px;
+}
+
+.channel-config__workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.channel-config__workspace-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  inline-size: 100%;
+}
+
+.channel-config__input {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 8px;
+}
+
+.channel-config__button {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.channel-config__button:disabled {
+  cursor: default;
+  color: var(--faint);
+}
+
+.channel-config__workspace-status {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.channel-config__workspace-status[data-workspace-status='unavailable'] {
+  color: var(--error);
 }
 
 .channel-config__invalid {

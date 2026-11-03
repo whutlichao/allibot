@@ -14,7 +14,6 @@ import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import {
-  makeTempDir,
   removeTempDir,
   runCli,
   startServer,
@@ -226,9 +225,16 @@ test('a local round with a project root reads, writes and edits inside the root 
       fixture.dataDir,
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'approval_request'",
     );
+    const approvalRows =
+      approvalTable === undefined
+        ? 0
+        : (queryDatabase<{ total: number }>(
+            fixture.dataDir,
+            'SELECT count(*) AS total FROM approval_request',
+          )?.total ?? 0);
     assert.equal(
-      approvalTable,
-      undefined,
+      approvalRows,
+      0,
       'no approval request exists for a root escape (approvals arrive in #44)',
     );
     assert.equal(

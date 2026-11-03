@@ -52,6 +52,7 @@ function channel(id: string, name: string, archived = false): ChannelView {
     description: '',
     mode: 'autonomous',
     team: { leader_member_id: null, status: 'valid', reason: null },
+    workspace: { root: null, backend: 'local', allow_local_shell: 0 },
     response_budget_limit: 3,
     archived_at: archived ? '2026-11-02T00:00:00.000Z' : null,
     deleted_at: null,

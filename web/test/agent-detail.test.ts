@@ -61,6 +61,7 @@ function agent(overrides: Partial<AgentView> & Pick<AgentView, 'id' | 'display_n
     compression_threshold: 0.8,
     max_iterations: 8,
     auto_claim: 1,
+    workspace_backend: null,
     status: 'online',
     offline_reason: null,
     ...overrides,
@@ -96,6 +97,7 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
         description: '',
         mode: 'autonomous',
         team: { leader_member_id: null, status: 'valid', reason: null },
+    workspace: { root: null, backend: 'local', allow_local_shell: 0 },
         response_budget_limit: 3,
         archived_at: null,
         deleted_at: null,
@@ -124,9 +126,9 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
 
 function channelMembers(): TargetMemberView[] {
   return [
-    { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0 },
-    { id: AGENT_ID, kind: 'agent', display_name: '阿蓝', avatar_slot: 1 },
-    { id: OFFLINE_ID, kind: 'agent', display_name: '阿灰', avatar_slot: 3 },
+    { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
+    { id: AGENT_ID, kind: 'agent', display_name: '阿蓝', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
+    { id: OFFLINE_ID, kind: 'agent', display_name: '阿灰', avatar_slot: 3, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
   ];
 }
 

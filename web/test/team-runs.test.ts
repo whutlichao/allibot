@@ -26,6 +26,7 @@ function channel(overrides: Partial<ChannelView> & Pick<ChannelView, 'id' | 'nam
     description: '',
     mode: 'autonomous',
     team: { leader_member_id: null, status: 'valid', reason: null },
+    workspace: { root: null, backend: 'local', allow_local_shell: 0 },
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,
@@ -152,8 +153,8 @@ test('the run panel appears for a team channel and team task, and not for an aut
       targetId: TEAM_CHANNEL_ID,
       locale: 'zh-CN',
       channelMembers: [
-        { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0 },
-        { id: LEADER_ID, kind: 'agent', display_name: '队长', avatar_slot: 1 },
+        { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
+        { id: LEADER_ID, kind: 'agent', display_name: '队长', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
       ],
       teamRuns: RUNS,
     }),

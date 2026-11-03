@@ -889,12 +889,7 @@ async function executeTeamAssignment(
 
   const workspaceFailure = readRoundWorkspaceFailure(db, request.member_id, team.targetId);
   if (workspaceFailure !== null) {
-    const reason = tFromDb(
-      db,
-      workspaceFailure.backend === 'docker'
-        ? 'workspace.round.dockerUnavailable'
-        : 'workspace.round.rootMissing',
-    );
+    const reason = workspaceFailureReason(db, workspaceFailure.backend);
     const assignment = insertFinalTeamAssignment(db, {
       teamRunId: run.id,
       targetId: team.targetId,
@@ -1154,6 +1149,14 @@ function readAssignmentRoundInput(
   };
 }
 
+/** The readable copy for a zero-fallback workspace failure (D5.3 / D5.7). */
+function workspaceFailureReason(db: Database.Database, backend: string): string {
+  if (backend === 'docker') {
+    return tFromDb(db, 'workspace.round.dockerUnavailable');
+  }
+  return tFromDb(db, 'workspace.round.rootMissing');
+}
+
 /**
  * The round's local workspace face (D5.1 / D5.3). A configured root that has
  * disappeared and the docker backend are readable round failures before the
@@ -1167,14 +1170,7 @@ function readRoundWorkspace(
 ): RoundWorkspaceContext | null {
   const failure = readRoundWorkspaceFailure(db, memberId, targetId);
   if (failure !== null) {
-    throw new Error(
-      tFromDb(
-        db,
-        failure.backend === 'docker'
-          ? 'workspace.round.dockerUnavailable'
-          : 'workspace.round.rootMissing',
-      ),
-    );
+    throw new Error(workspaceFailureReason(db, failure.backend));
   }
   const binding = readRoundWorkspaceBinding(db, memberId, targetId);
   if (binding === null) {

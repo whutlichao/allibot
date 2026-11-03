@@ -27,7 +27,7 @@ export interface AppProps {
   workspace?: WorkspaceView;
   activeTargetId?: string | null;
   viewportWidth?: number;
-  /** Channel member tables the shell may render, keyed by channel id. */
+  /** Target member tables the shell may render, keyed by target id. */
   channelMembers?: Record<string, readonly TargetMemberView[]>;
   /** Team run snapshots the shell may render, keyed by target id. */
   teamRuns?: Record<string, readonly TeamRunView[]>;

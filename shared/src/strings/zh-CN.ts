@@ -439,8 +439,10 @@ export const ZH_CN = {
   'channel.config.workspace.backend.docker': { text: 'Docker', params: [] },
   'channel.config.workspace.status.label': { text: '工作区状态', params: [] },
   'workspace.status.available': { text: '可用', params: [] },
-  'workspace.status.reason.workspace-root-missing': { text: '项目根不存在或不可读', params: [] },
-  'workspace.status.reason.docker-unavailable': { text: 'Docker 后端不可用', params: [] },
+  'workspace.status.line': { text: '工作区状态：{status}', params: ['status'] },
+  'workspace.status.loading': { text: '正在读取工作区状态…', params: [] },
+  'workspace.status.reason.workspaceRootMissing': { text: '项目根不存在或不可读', params: [] },
+  'workspace.status.reason.dockerUnavailable': { text: 'Docker 后端不可用', params: [] },
   'workspace.round.rootMissing': {
     text: '工作区不可用：项目根不存在或不可读（workspace-root-missing）。',
     params: [],

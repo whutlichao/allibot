@@ -52,10 +52,10 @@ export interface WorkspaceShellProps {
   /** The Agent the detail drawer starts on; omitted means the first local Agent. */
   initialAgentId?: string | null;
   /**
-   * The channel member tables the shell may render, keyed by channel id. The
-   * member panel and roster are channel-scoped readings; when a channel's table
-   * is absent the panel states that it is still loading rather than guessing
-   * membership.
+   * The selected target's member tables, keyed by target id. The member panel
+   * and roster are channel-scoped; the context panel also reads the table's
+   * workspace_status for task / DM contexts. An absent table states that it is
+   * still loading rather than guessing membership or availability.
    */
   channelMembers?: Record<string, readonly TargetMemberView[]>;
   /** Team run snapshots, keyed by target id; the run panel reads them. */
@@ -159,10 +159,10 @@ export function WorkspaceShell({
       ? workspace.dms.find((dm) => dm.id === selectedTargetId)
       : undefined;
   const archivedDm = selectedDm !== undefined && selectedDm.peer.deleted_at !== null;
+  // The target's member table also carries workspace_status for a task / DM
+  // context; only the channel-scoped panels are gated by `channelSelected`.
   const selectedMembers =
-    channelSelected && selectedTargetId !== null
-      ? channelMembers?.[selectedTargetId]
-      : undefined;
+    selectedTargetId !== null ? channelMembers?.[selectedTargetId] : undefined;
   const selectedAgent =
     detailAgentId === null
       ? (workspace.agents[0] ?? null)
