@@ -8,6 +8,7 @@ import type {
   RoundResult,
   WakeReason,
 } from './agent-seam.js';
+import { budgetExhaustedReason, tryConsumeJump, type BudgetRow } from './budget.js';
 import { tFromDb } from './copy.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
@@ -221,12 +222,23 @@ export function createInFlightRounds(): InFlightRounds {
  * write request waits for them, which keeps the observable order stable). A
  * deferred adapter (the scripted `delay` behaviour today) is started and left
  * to settle on its own: the write request answers immediately.
+ *
+ * An Agent-authored message is relayed under the response budget: it either
+ * lands as one jump (at least one wake is delivered to another member) or the
+ * epoch is exhausted and no wake is delivered at all. A wake that folds into a
+ * running round on the same target is delivered to that round (the member gets
+ * the message) and does not start a second round; only the case where every
+ * wake folds — zero delivery — is not a jump.
+ *
+ * `messageKind` is the kind of the message the wakes belong to; `null` means the
+ * wakes did not come from a message write (nothing to charge a jump to).
  */
 export async function dispatchWakes(
   db: Database.Database,
   provider: RoundProvider,
   wakes: readonly Wake[],
   inFlight: InFlightRounds,
+  messageKind: string | null = null,
   onError: (error: unknown, wake: Wake) => void = (error, wake) => {
     // Failure isolation: one member's round must not fail the message write or
     // another member's round. The message is already committed; an adapter
@@ -235,17 +247,71 @@ export async function dispatchWakes(
     console.error(`allibot: round for member ${wake.memberId} failed:`, error);
   },
 ): Promise<void> {
+  if (wakes.length === 0) {
+    return;
+  }
+  const delivering = wakes.filter((wake) => !foldsIntoInFlight(inFlight, wake));
+  const relayed =
+    messageKind === 'agent' && delivering.length > 0
+      ? tryConsumeJump(db, wakes[0]!.targetId)
+      : null;
+  const delivered = relayed !== null && relayed.consumed;
+  if (relayed !== null && !delivered) {
+    await suppressWakes(db, wakes, relayed.budget);
+    return;
+  }
+  const jump = delivered ? 1 : 0;
   for (const wake of wakes) {
     if (provider.deferred) {
-      void runRound(db, provider, wake, inFlight).catch((error: unknown) => onError(error, wake));
+      void runRound(db, provider, wake, inFlight, jump).catch((error: unknown) => onError(error, wake));
       continue;
     }
     try {
-      await runRound(db, provider, wake, inFlight);
+      await runRound(db, provider, wake, inFlight, jump);
     } catch (error) {
       onError(error, wake);
     }
   }
+}
+
+/**
+ * A wake folds into a running round when the same member already runs one on
+ * the same target: it is delivered to that round (as a `merged` row) and never
+ * starts a second round. A wake for another target is deferred rather than
+ * folded and does reach the member once the running round closes, so it still
+ * counts as a delivery.
+ */
+function foldsIntoInFlight(inFlight: InFlightRounds, wake: Wake): boolean {
+  const active = inFlight.get(wake.memberId);
+  return active !== undefined && active.targetId === wake.targetId;
+}
+
+/**
+ * Suppress every wake of an exhausted message: the message stays in the
+ * target, no wake is delivered, and each member that would have been woken
+ * gets one `budget-exhausted` round outcome. It is not an error (the status
+ * point stays idle) and it is not a silent drop (the row is the evidence).
+ */
+async function suppressWakes(
+  db: Database.Database,
+  wakes: readonly Wake[],
+  budget: BudgetRow,
+): Promise<void> {
+  const now = new Date().toISOString();
+  const write = db.transaction((): void => {
+    for (const wake of wakes) {
+      insertOutcome(db, {
+        wake,
+        baseSeq: wake.fromSeq,
+        status: 'budget-exhausted',
+        reason: budgetExhaustedReason(db, budget),
+        merged: 0,
+        startedAt: now,
+        finishedAt: now,
+      });
+    }
+  });
+  write();
 }
 
 /**
@@ -256,12 +322,20 @@ export async function dispatchWakes(
  *
  * A penetrated member that replies joins the channel first (a system join
  * event, then the reply); one that does not reply never joins.
+ *
+ * A landed reply is itself an Agent message, so it relays to the other members
+ * under the same response budget: this call delivers that message's wakes, and
+ * the next members' rounds run inside it. The relay runs depth first (the
+ * next round closes before this call returns) so the chain is observable in
+ * seq order on the synchronous adapter, and the budget stops it at the epoch
+ * ceiling.
  */
 export async function runRound(
   db: Database.Database,
   provider: RoundProvider,
   wake: Wake,
   inFlight: InFlightRounds,
+  budgetConsumed = 0,
 ): Promise<RoundOutcomeRow | null> {
   const active = inFlight.get(wake.memberId);
   if (active !== undefined) {
@@ -287,19 +361,41 @@ export async function runRound(
     result = { verdict: 'failed', replies: [], detail: errorMessage(error) };
   }
 
-  let committed: RoundOutcomeRow;
+  let committed: CommittedRound;
   try {
-    committed = commitRound(db, wake, turn, startedAt, result);
+    committed = commitRound(db, wake, turn, startedAt, result, budgetConsumed);
   } finally {
     inFlight.delete(wake.memberId);
   }
   // The other-target wakes wait here rather than running in parallel: one
-  // member still has at most one round in flight.
+  // member still has at most one round in flight. They were deferred into this
+  // round's turn, not delivered to another member, so they carry no jump.
   for (const deferred of turn.deferred) {
     await runRound(db, provider, deferred, inFlight);
   }
-  return committed;
+  // The reply is itself an Agent message, so it relays to the other members
+  // under the same response budget: its wakes are charged as one more jump, or
+  // suppressed when the epoch is exhausted. Depth first, so the next members'
+  // rounds close before this one returns and the chain is observable in seq
+  // order on the synchronous adapter.
+  if (committed.replySeq !== null) {
+    const replyWakes = collectWakes(db, {
+      targetId: wake.targetId,
+      authorMemberId: wake.memberId,
+      kind: 'agent',
+      seq: committed.replySeq,
+    });
+    await dispatchWakes(db, provider, replyWakes, inFlight, 'agent');
+  }
+  return committed.outcome;
 }
+
+/**
+ * The commit of one round. The reply seq travels back with the outcome so the
+ * caller can relay that message under the response budget; `null` means the
+ * round landed no message (ignored, failed, or a reply with no committable
+ * body), so there is nothing to relay.
+ */
 
 export interface RoundOutcomeRow {
   id: string;
@@ -364,8 +460,9 @@ function commitRound(
   turn: Turn,
   startedAt: string,
   result: RoundResult,
-): RoundOutcomeRow {
-  const write = db.transaction((): RoundOutcomeRow => {
+  budgetConsumed: number,
+): CommittedRound {
+  const write = db.transaction((): CommittedRound => {
     const joinedSeq = commitJoin(db, wake, result);
     const replySeq = commitReply(db, wake, result);
     const finishedAt = new Date().toISOString();
@@ -386,7 +483,7 @@ function commitRound(
     }
 
     const finishedReason: FinishedReason = result.verdict === 'failed' ? 'error' : 'completed';
-    return insertOutcome(db, {
+    const outcome = insertOutcome(db, {
       wake,
       baseSeq: wake.fromSeq,
       status: result.verdict,
@@ -395,9 +492,20 @@ function commitRound(
       startedAt,
       finishedAt,
       finishedReason,
+      // The row-level marker of "this round was delivered by a counted jump".
+      // A folded reply lands here too, so the row count never decides the hop
+      // count (the ledger does); one jump marks every member it was delivered to.
+      budgetConsumed,
     });
+    return { outcome, replySeq };
   });
   return write();
+}
+
+/** The round's committed rows: its outcome and the seq of the reply it landed. */
+interface CommittedRound {
+  outcome: RoundOutcomeRow;
+  replySeq: number | null;
 }
 
 /**
@@ -528,17 +636,25 @@ interface InsertOutcomeInput {
   startedAt: string;
   finishedAt: string;
   finishedReason?: FinishedReason;
+  /**
+   * 1 when the row was delivered by a counted agent-to-agent jump, 0 otherwise.
+   * It is a row-level marker, not a hop counter: a suppressed wake is always 0
+   * (nothing was delivered) and a folded reply keeps the marker of the delivery
+   * it belonged to, so summing rows would over-count a fan-out jump.
+   */
+  budgetConsumed?: number;
 }
 
 function insertOutcome(db: Database.Database, input: InsertOutcomeInput): RoundOutcomeRow {
   const id = randomUUID();
+  const budgetConsumed = input.budgetConsumed ?? 0;
   const finishedReason =
     input.finishedReason === undefined ? null : finishedReasonText(db, input.finishedReason);
   db.prepare(
     `INSERT INTO round_outcome
        (id, member_id, target_id, base_seq, status, reason, finished_reason,
         started_at, finished_at, budget_consumed, merged)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.wake.memberId,
@@ -549,6 +665,7 @@ function insertOutcome(db: Database.Database, input: InsertOutcomeInput): RoundO
     finishedReason,
     input.startedAt,
     input.finishedAt,
+    budgetConsumed,
     input.merged,
   );
   return {
@@ -561,7 +678,7 @@ function insertOutcome(db: Database.Database, input: InsertOutcomeInput): RoundO
     finished_reason: finishedReason,
     started_at: input.startedAt,
     finished_at: input.finishedAt,
-    budget_consumed: 0,
+    budget_consumed: budgetConsumed,
     merged: input.merged,
   };
 }
