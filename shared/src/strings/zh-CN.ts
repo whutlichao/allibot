@@ -46,6 +46,9 @@ export const ZH_CN = {
   'settings.error.load': { text: '设置读取失败，请确认后端已启动。', params: [] },
   'settings.error.save': { text: '设置未保存，请重试。', params: [] },
 
+  // 提及补全（Mention Completion）的候选列表标签：候选只列当前 target 的 Agent。
+  'mention.completion.label': { text: '提及候选', params: [] },
+
   // 轮次结果（Round Outcome）与穿透加入事件的可读文案：后端在 HTTP 请求之外
   // 写这两类文本，按库内语言偏好经 tFromDb 渲染。键名用承重词（wake / round /
   // penetration / join），参数位只带标识（seq / count / name），从不携带正文。
