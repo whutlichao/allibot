@@ -1,5 +1,5 @@
 /*
- * 组件样式：只按 token 名消费视觉契约，不复制颜色值。
+ * 组件样式：按 token 名消费视觉契约；头像底色由 --av-* 内联设置。
  */
 .app-shell {
   min-block-size: 100dvh;
