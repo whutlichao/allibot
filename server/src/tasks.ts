@@ -5,8 +5,9 @@ import { ApiFailure } from './api-error.js';
 import { openEpoch } from './budget.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { tFromDb } from './copy.js';
-import { liveMemberClause } from './members.js';
+import { liveMemberClause, readOwnerId } from './members.js';
 import { appendMessage } from './messages.js';
+import { countUnread } from './unread.js';
 
 /**
  * The backend-fixed legal move set. `closed` is terminal. The table travels
@@ -46,27 +47,22 @@ interface TaskRow {
 
 interface CountedTaskRow extends TaskRow {
   message_count: number;
-  unread_count: number;
 }
 
 /**
  * The task payload adds the two board readings to the row. `message_count`
  * counts every message in the task thread; `unread_count` is the pointer
- * chip's N — the human and agent messages the owner did not read.
+ * chip's N — the thread's unread for the owner, read through the one unread
+ * module (已读位置之后、kind ∈ {human, agent}、作者非本人的消息).
  *
- * #25 (read positions) has not landed yet, so there is no `read_position` row
- * to compare against; the minimal correct reading is "everything after seq 0",
- * which is what the author filter below expresses. When #25 lands, the owner's
- * `last_read_seq` becomes the lower bound and the filter stays the same.
+ * The unread number is deliberately not a second SQL shape here: the task
+ * target is one more target kind served by `countUnread`, so the channel, dm
+ * and task readings cannot drift apart.
  */
 const TASK_SELECT = `
 SELECT t.id, t.channel_id, t.target_id, t.title, t.status, t.assignee_member_id,
        t.claimed_at, t.created_at, t.updated_at,
-       (SELECT count(*) FROM message m WHERE m.target_id = t.target_id) AS message_count,
-       (SELECT count(*) FROM message m
-         WHERE m.target_id = t.target_id
-           AND m.kind IN ('human', 'agent')
-           AND m.author_member_id <> (SELECT id FROM member WHERE kind = 'owner')) AS unread_count
+       (SELECT count(*) FROM message m WHERE m.target_id = t.target_id) AS message_count
 FROM task t`;
 
 /** The create body accepts the channel and the title; nothing else. */
@@ -91,12 +87,14 @@ export function listTasks(db: Database.Database, query: { channelId?: string }):
        ORDER BY t.created_at, t.rowid`,
     )
     .all(...params) as CountedTaskRow[];
-  return rows.map(toTaskView);
+  const ownerId = readOwnerId(db);
+  return rows.map((row) => toTaskView(row, countUnread(db, ownerId, row.target_id)));
 }
 
 /** A task by id stays readable after its channel is deleted. */
 export function getTask(db: Database.Database, id: string): TaskView {
-  return toTaskView(readTaskRow(db, id));
+  const row = readTaskRow(db, id);
+  return toTaskView(row, countUnread(db, readOwnerId(db), row.target_id));
 }
 
 /**
@@ -377,7 +375,7 @@ function readTaskRow(db: Database.Database, id: string): CountedTaskRow {
   return row;
 }
 
-function toTaskView(row: CountedTaskRow): TaskView {
+function toTaskView(row: CountedTaskRow, unreadCount: number): TaskView {
   const status = parseStoredStatus(row.status);
   return {
     id: row.id,
@@ -391,7 +389,7 @@ function toTaskView(row: CountedTaskRow): TaskView {
     updated_at: row.updated_at,
     allowed_transitions: [...TASK_STATUS_TRANSITIONS[status]],
     message_count: row.message_count,
-    unread_count: row.unread_count,
+    unread_count: unreadCount,
   };
 }
 
