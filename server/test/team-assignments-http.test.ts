@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { ZH_CN } from '../../shared/dist/index.js';
 import {
   makeTempDir,
   removeTempDir,
@@ -587,4 +588,255 @@ test('a failed member sub-round closes the assignment failed without a refund', 
   const leaderReply = channelMessages(fixture)[1]?.body ?? '';
   assert.match(leaderReply, /error=member_failed/);
   assert.match(leaderReply, /jump=1/);
+});
+
+interface TaskRow {
+  id: string;
+  target_id: string;
+  title: string;
+  status: string;
+  assignee_member_id: string | null;
+  claimed_at: string | null;
+  updated_at: string;
+}
+
+function taskRow(fixture: TeamFixture): TaskRow {
+  const row = readDatabase<TaskRow>(
+    fixture,
+    'SELECT id, target_id, title, status, assignee_member_id, claimed_at, updated_at FROM task',
+  )[0];
+  assert.ok(row !== undefined, 'the fixture created a task');
+  return row;
+}
+
+async function postTargetMessage(
+  fixture: TeamFixture,
+  targetId: string,
+  body: string,
+): Promise<void> {
+  await postJson(fixture.base, `/api/targets/${targetId}/messages`, { body });
+}
+
+test('a task-thread TeamAssign writes the task scope and leaves the task row and the channel budget alone', async (t) => {
+  const fixture = await startTeamFixture('allibot-team-assign-task-', {
+    behavior: 'team-assign',
+    assign: ['a'],
+    task: { assignee: 'a' },
+    extraArgs: ['--scripted-report-team'],
+  });
+  t.after(async () => fixture.stop());
+  const task = fixture.task;
+  assert.ok(task !== null);
+  const before = taskRow(fixture);
+
+  await postTargetMessage(fixture, task.targetId, '请在任务线程里分派');
+
+  const taskAssignments = assignmentRows(fixture);
+  assert.equal(taskAssignments.length, 1);
+  const assignment = taskAssignments[0];
+  assert.ok(assignment !== undefined);
+  assert.equal(assignment.state, 'completed');
+  assert.equal(assignment.jump_consumed, 1);
+  assert.equal(assignment.target_id, task.targetId);
+  assert.equal(assignment.task_id, task.id);
+  assert.equal(assignment.member_id, fixture.memberIds[0]);
+  assert.match(assignment.reply_excerpt ?? '', /\[tools\] transfer_task/, 'the assignee sub-round may transfer');
+  assert.match(assignment.reply_excerpt ?? '', /\[team\] leader:false/);
+
+  const after = taskRow(fixture);
+  assert.deepEqual(after, before, 'TeamAssign changes no task row, assignee or five-state');
+
+  const taskBudget = budgetRows(fixture).find((row) => row.target_id === task.targetId);
+  assert.equal(taskBudget?.used, 1, 'the task target budget moves');
+  const channelBudgetAfterTask = budgetRows(fixture).find(
+    (row) => row.target_id === fixture.channelId,
+  );
+  assert.equal(channelBudgetAfterTask, undefined, 'the channel budget is untouched');
+
+  const taskMessages = readDatabase<MessageRow>(
+    fixture,
+    'SELECT seq, kind, author_member_id, body FROM message WHERE target_id = ? ORDER BY seq',
+    [task.targetId],
+  );
+  const spoken = taskMessages.filter((message) => message.kind !== 'system');
+  assert.equal(spoken.length, 2, 'the task thread gets only the human message and the leader final reply');
+  const leaderReply = spoken.find((message) => message.kind === 'agent');
+  assert.match(leaderReply?.body ?? '', /\[tools\] TeamAssign/);
+  assert.doesNotMatch(leaderReply?.body ?? '', /\[tools\] TeamAssign,transfer_task/, 'the leader is not the assignee');
+
+  // A channel-target assignment moves the channel budget only.
+  await postChannelMessage(fixture, '请分派给成员甲');
+
+  const allAssignments = assignmentRows(fixture);
+  assert.equal(allAssignments.length, 2);
+  assert.equal(allAssignments[1]?.target_id, fixture.channelId);
+  assert.equal(allAssignments[1]?.task_id, null);
+  const taskBudgetFinal = budgetRows(fixture).find((row) => row.target_id === task.targetId);
+  const channelBudgetFinal = budgetRows(fixture).find(
+    (row) => row.target_id === fixture.channelId,
+  );
+  assert.equal(taskBudgetFinal?.used, 1, 'the channel assignment does not borrow from the task budget');
+  assert.equal(channelBudgetFinal?.used, 1, 'the channel assignment moves the channel budget');
+});
+
+interface SseFrame {
+  event: string;
+  data: Record<string, unknown>;
+  raw: string;
+}
+
+interface SseStream {
+  next(predicate: (frame: SseFrame) => boolean, timeoutMs: number): Promise<SseFrame | null>;
+  close(): void;
+}
+
+/** One live `/api/events` connection, read frame by frame (live-only, no replay). */
+async function connectEvents(base: string): Promise<SseStream> {
+  const controller = new AbortController();
+  const response = await fetch(`${base}/api/events`, {
+    headers: { accept: 'text/event-stream' },
+    signal: controller.signal,
+  });
+  assert.equal(response.status, 200);
+  const body = response.body;
+  assert.ok(body !== null);
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const frames: SseFrame[] = [];
+  let buffer = '';
+  let closed = false;
+  const pump = (async (): Promise<void> => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary !== -1) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          boundary = buffer.indexOf('\n\n');
+          const event = /^event:\s*(.+)$/m.exec(block)?.[1];
+          const data = /^data:\s*(.+)$/m.exec(block)?.[1];
+          if (event !== undefined && data !== undefined) {
+            frames.push({ event, data: JSON.parse(data) as Record<string, unknown>, raw: block });
+          }
+        }
+      }
+    } catch {
+      // The test closes the connection; that abort is not a failure.
+    } finally {
+      closed = true;
+    }
+  })();
+  return {
+    async next(predicate, timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const index = frames.findIndex(predicate);
+        if (index !== -1) {
+          return frames.splice(index, 1)[0] ?? null;
+        }
+        if (closed || Date.now() >= deadline) {
+          return null;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      }
+    },
+    close() {
+      controller.abort();
+      void pump;
+    },
+  };
+}
+
+test('the global stream carries one final team_assignment frame and never replays it', async (t) => {
+  const fixture = await startTeamFixture('allibot-team-assign-sse-', {
+    behavior: 'team-assign',
+    assign: ['a'],
+  });
+  t.after(async () => fixture.stop());
+
+  const stream = await connectEvents(fixture.base);
+  t.after(() => stream.close());
+
+  await postChannelMessage(fixture, '请分派并直播');
+
+  const frame = await stream.next((candidate) => candidate.event === 'team_assignment', 5000);
+  assert.ok(frame !== null, 'the stream carries a team_assignment frame');
+  const assignment = assignmentRows(fixture)[0];
+  assert.ok(assignment !== undefined);
+  assert.equal(frame.data['team_run_id'], assignment.team_run_id);
+  assert.equal(frame.data['assignment_id'], assignment.id);
+  assert.equal(frame.data['target_id'], fixture.channelId);
+  assert.equal(frame.data['task_id'], null);
+  assert.equal(frame.data['member_id'], fixture.memberIds[0]);
+  assert.equal(frame.data['state'], 'completed');
+  assert.equal(frame.data['jump_consumed'], 1);
+  assert.equal(frame.data['reply_excerpt'], assignment.reply_excerpt);
+  assert.equal(frame.data['reason'], null);
+  assert.equal(frame.data['occurred_at'], assignment.finished_at);
+  assert.equal(Object.keys(frame.data).length, 10, 'the payload carries exactly the D2.5 fields');
+  assert.doesNotMatch(frame.raw, /^id:/m, 'the stream never emits an id line');
+  assert.match(frame.raw, /^event: team_assignment$/m);
+
+  const second = await stream.next(
+    (candidate) => candidate.event === 'team_assignment',
+    250,
+  );
+  assert.equal(second, null, 'only the final state is sent, never the running row');
+
+  // A connection opened after the assignment completed gets no backlog.
+  const late = await connectEvents(fixture.base);
+  t.after(() => late.close());
+  const replayed = await late.next((candidate) => candidate.event === 'team_assignment', 300);
+  assert.equal(replayed, null, 'the stream is live-only and does not replay');
+});
+
+test('a member output over 2000 code points is stored as a marked excerpt, not the full body', async (t) => {
+  const longBody = '甲'.repeat(1999) + '🙂' + '乙'.repeat(200) + 'FULL-TAIL-MARKER';
+  const fixture = await startTeamFixture('allibot-team-assign-excerpt-', {
+    behavior: 'team-assign',
+    assign: ['a'],
+    extraArgs: ['--scripted-reply', longBody],
+  });
+  t.after(async () => fixture.stop());
+
+  await postChannelMessage(fixture, '请产出一段很长的结果');
+
+  const assignment = assignmentRows(fixture)[0];
+  assert.ok(assignment !== undefined);
+  assert.equal(assignment.state, 'completed');
+  const excerpt = assignment.reply_excerpt ?? '';
+  const marker = ZH_CN['team.assignment.truncated'].text;
+  const prefix = Array.from(longBody).slice(0, 2000).join('');
+  assert.equal(Array.from(excerpt).length, 2000 + Array.from(marker).length);
+  assert.equal(Array.from(excerpt).slice(0, 2000).join(''), prefix);
+  assert.ok(excerpt.endsWith(marker), 'the excerpt is marked as truncated');
+  assert.ok(!excerpt.includes('FULL-TAIL-MARKER'), 'the tail was cut');
+  assert.ok(excerpt.includes('🙂'), 'the cut counts code points, not UTF-16 units');
+
+  const leaked = readDatabase<{ id: string }>(
+    fixture,
+    `SELECT id FROM message WHERE body LIKE '%FULL-TAIL-MARKER%'
+     UNION ALL
+     SELECT id FROM team_assignment WHERE reply_excerpt LIKE '%FULL-TAIL-MARKER%'
+     UNION ALL
+     SELECT id FROM team_run WHERE reason LIKE '%FULL-TAIL-MARKER%'`,
+  );
+  assert.deepEqual(leaked, [], 'the full output is not persisted anywhere');
+  const search = await getJson(
+    fixture.base,
+    `/api/search?q=${encodeURIComponent('FULL-TAIL-MARKER')}`,
+  );
+  assert.deepEqual(search['hits'], [], 'the full output is not searchable');
+
+  const leaderReply = channelMessages(fixture)[1]?.body ?? '';
+  assert.match(
+    leaderReply,
+    new RegExp(`output=${Array.from(longBody).length}`),
+    'the leader tool result carried the full output length',
+  );
 });

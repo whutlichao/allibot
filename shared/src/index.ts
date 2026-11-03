@@ -331,6 +331,24 @@ export interface TeamAssignmentView {
 }
 
 /**
+ * The `team_assignment` SSE frame (#39 / D2.5): the final state of one
+ * assignment, live-only. `occurred_at` is the assignment's `finished_at`; the
+ * payload never carries the full member output, only the stored excerpt.
+ */
+export interface TeamAssignmentFrame {
+  team_run_id: string;
+  assignment_id: string;
+  target_id: string;
+  task_id: string | null;
+  member_id: string;
+  state: TeamAssignmentState;
+  jump_consumed: 0 | 1;
+  reply_excerpt: string | null;
+  reason: string | null;
+  occurred_at: string;
+}
+
+/**
  * One leader team round as `GET /api/targets/{id}/team-runs` returns it. A task
  * target's run carries `task_id`; a channel target's run carries NULL. The
  * nested assignments are the run's member work, never messages.

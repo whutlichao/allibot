@@ -27,6 +27,7 @@ import {
   publishMemberStatus,
   publishMessageCreated,
   publishRoundOutcome,
+  publishTeamAssignment,
   publishUnreadChanged,
 } from './events.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
@@ -865,6 +866,7 @@ async function executeTeamAssignment(
       state: 'failed',
       reason,
     });
+    publishTeamAssignment(assignment);
     return {
       ok: false,
       assignment_id: assignment.id,
@@ -894,6 +896,7 @@ async function executeTeamAssignment(
       state: 'failed',
       reason: availability.reason,
     });
+    publishTeamAssignment(assignment);
     return {
       ok: false,
       assignment_id: assignment.id,
@@ -924,6 +927,7 @@ async function executeTeamAssignment(
       state: 'budget-exhausted',
       reason,
     });
+    publishTeamAssignment(assignment);
     return {
       ok: false,
       assignment_id: assignment.id,
@@ -976,10 +980,11 @@ async function executeTeamAssignment(
   const output = result.replies.join('\n\n').trim();
   if (!interrupted && result.verdict === 'replied' && output.length > 0) {
     const excerpt = truncateTeamAssignmentExcerpt(db, output);
-    closeTeamAssignment(db, assignment.id, 'completed', {
+    const closed = closeTeamAssignment(db, assignment.id, 'completed', {
       replyExcerpt: excerpt,
       reason: null,
     });
+    publishTeamAssignment(closed);
     return {
       ok: true,
       assignment_id: assignment.id,
@@ -996,7 +1001,11 @@ async function executeTeamAssignment(
   const reason = tFromDb(db, 'team.assignment.memberFailed', {
     reason: assignmentFailureReason(db, result, interrupted),
   });
-  closeTeamAssignment(db, assignment.id, 'failed', { replyExcerpt: null, reason });
+  const closed = closeTeamAssignment(db, assignment.id, 'failed', {
+    replyExcerpt: null,
+    reason,
+  });
+  publishTeamAssignment(closed);
   return {
     ok: false,
     assignment_id: assignment.id,
