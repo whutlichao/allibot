@@ -5,7 +5,11 @@ import {
   legacyDataDirWarning,
   resolveDataDir,
 } from './data-dir.js';
-import { databaseExists, migrateDataDir } from './db.js';
+import {
+  assertServeableSchemaVersion,
+  databaseExists,
+  migrateDataDir,
+} from './db.js';
 import { HOST, startHttpServer } from './http.js';
 import { acquireDataDirLock } from './lock.js';
 
@@ -48,6 +52,8 @@ async function run(argv: readonly string[]): Promise<number> {
         `run \`allibot --migrate --data-dir ${resolution.dataDir}\` before starting the server`,
     );
   }
+
+  assertServeableSchemaVersion(resolution.dataDir);
 
   const lock = await acquireDataDirLock(resolution.dataDir);
   try {

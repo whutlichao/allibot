@@ -24,8 +24,8 @@ export function migrateDataDir(dataDir: string): MigrationOutcome {
       return { status: 'already-current', version: currentVersion };
     }
     throw new Error(
-      `schema version ${currentVersion} does not match this build's schema version ` +
-        `${SCHEMA_VERSION}; refusing to migrate`,
+      `version_mismatch: database schema version ${currentVersion} is newer than this build's ` +
+        `schema version ${SCHEMA_VERSION}; refusing to migrate, there is no downgrade path`,
     );
   }
 
@@ -50,6 +50,28 @@ export function migrateDataDir(dataDir: string): MigrationOutcome {
   });
 
   return { status: 'migrated', to: SCHEMA_VERSION };
+}
+
+/**
+ * The version gate for the serve path: a database older than the code has to
+ * be migrated explicitly, and a database newer than the code has no downgrade
+ * path. The check is read-only, so a refused database is left byte-identical.
+ */
+export function assertServeableSchemaVersion(dataDir: string): void {
+  const version = readSchemaVersion(databasePath(dataDir));
+  if (version === null || version < SCHEMA_VERSION) {
+    const found = version === null ? 'has no schema version' : `is at schema version ${version}`;
+    throw new Error(
+      `version_mismatch: database ${found} but this build expects schema version ${SCHEMA_VERSION}; ` +
+        `run \`allibot --migrate --data-dir ${dataDir}\` before starting the server`,
+    );
+  }
+  if (version > SCHEMA_VERSION) {
+    throw new Error(
+      `version_mismatch: database schema version ${version} is newer than this build's ` +
+        `schema version ${SCHEMA_VERSION}; refusing to start, there is no downgrade path`,
+    );
+  }
 }
 
 function readSchemaVersion(dbPath: string): number | null {
