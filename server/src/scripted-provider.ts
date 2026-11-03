@@ -64,6 +64,7 @@ export type ScriptedBehavior =
   | 'workspace'
   | 'permission'
   | 'mcp-approval'
+  | 'mcp'
   | 'team-approval';
 
 export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
@@ -84,6 +85,7 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'workspace',
   'permission',
   'mcp-approval',
+  'mcp',
   'team-approval',
 ];
 
@@ -209,6 +211,8 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
           return await permissionResult(input, options, callReport);
         case 'mcp-approval':
           return await mcpApprovalResult(input, options, callReport);
+        case 'mcp':
+          return await mcpResult(input, options, callReport);
         case 'team-approval':
           return await teamApprovalResult(input, options, callReport);
         case 'sop-create':
@@ -628,6 +632,63 @@ function checkLine(label: string, check: { decision: string; reason: string }): 
   return `[permission-check] ${label}=${check.decision}:${check.reason}`;
 }
 
+
+/**
+ * The double's MCP assembly face (#47 / D6.1): it reports the servers the host
+ * actually connected, every readable diagnostic, the assembled `mcp:` tool
+ * names and one real tool call per server. The call goes through the round's
+ * MCP face, which applies the #44 tool gate — so the double never decides a
+ * permission question itself.
+ */
+async function mcpResult(
+  input: RoundInput,
+  options: ScriptedProviderOptions,
+  callReport: string,
+): Promise<RoundResult> {
+  const mcp = input.mcp;
+  const toolsLine = `[mcp-tools] ${
+    input.tools.filter((tool) => tool.startsWith('mcp:')).join(',') || '-'
+  }`;
+  if (mcp === null) {
+    return {
+      verdict: 'replied',
+      replies: [`[mcp] absent\n${toolsLine}${callReport}${teamReport(input, options)}`],
+    };
+  }
+  const lines: string[] = [
+    `[mcp] servers:${mcp.servers.length}`,
+    `[tools] ${input.tools.length === 0 ? '-' : input.tools.join(',')}`,
+  ];
+  for (const diagnostic of mcp.diagnostics) {
+    lines.push(`[mcp] diagnostic:${diagnostic}`);
+  }
+  for (const server of mcp.servers) {
+    lines.push(
+      `[mcp-server] ${server.name}:${server.transport}:${server.tools
+        .map((tool) => tool.name)
+        .join(',')}`,
+    );
+  }
+  for (const server of mcp.servers) {
+    const tool = server.tools.find((candidate) => candidate.name === 'echo') ?? server.tools[0];
+    if (tool === undefined) {
+      lines.push(`[mcp-call] ${server.name}:-:no-tools`);
+      continue;
+    }
+    const result = await mcp.callTool(server.name, tool.name, { probe: 'ping' });
+    const payload = result.content ?? result.message ?? '';
+    lines.push(
+      `[mcp-call] ${server.name}/${tool.name}:${result.ok ? 'ok' : 'error'}:${
+        result.error ?? ''
+      }:${payload}`,
+    );
+  }
+  lines.push(toolsLine);
+  return {
+    verdict: 'replied',
+    replies: [`${lines.join('\n')}${callReport}${teamReport(input, options)}`],
+  };
+}
 
 /**
  * The double's MCP approval face (#44 / D5.5 / D5.6): MCP tools are execute

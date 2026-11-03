@@ -1,4 +1,5 @@
 import type {
+  McpTransport,
   PermissionMode,
   PlanTaskStatus,
   PlanTaskView,
@@ -342,6 +343,54 @@ export interface RoundDiscipline {
   signal: 'mention' | 'claim' | 'human-message' | 'continue' | 'team-change' | null;
 }
 
+/** One MCP tool the host listed from a connected server. */
+export interface RoundMcpTool {
+  name: string;
+  description: string | null;
+}
+
+/** One connected MCP server of this round. */
+export interface RoundMcpServer {
+  name: string;
+  transport: McpTransport;
+  tools: readonly RoundMcpTool[];
+}
+
+/** One MCP tool-call result. A denial is a result, never a round error. */
+export interface RoundMcpCallResult {
+  ok: boolean;
+  error?: 'denied' | 'unavailable' | 'unknown-server' | 'tool-error' | 'connection';
+  message?: string;
+  content?: string;
+}
+
+/**
+ * The round's MCP assembly (D6.1): the servers declared by the Agent-home
+ * `mcp.json` that the host actually connected for this round, the readable
+ * diagnostics (invalid file, unconfirmed remote, connection failure) and the
+ * one gated tool-call face a model tool loop would use. `null` means the file
+ * is missing — zero MCP, no error. An invalid file is a context with zero
+ * servers and one diagnostic, never a half set.
+ */
+export interface RoundMcpContext {
+  /** The project root or the disposable `<data_dir>/mcp-hosts/<id>/` host. */
+  host_root: string | null;
+  servers: readonly RoundMcpServer[];
+  /** Readable, whole-round diagnostics; also appended to RoundOutcome.reason. */
+  diagnostics: readonly string[];
+  /**
+   * Execute one tool through the #44 tool gate (`mcp:<server>/<tool>`,
+   * execution class, stable JSON arguments). A denied / failed call returns a
+   * result; it never throws to the round.
+   */
+  callTool(
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+  ): Promise<RoundMcpCallResult>;
+  close(): Promise<void>;
+}
+
 /** The round's input: the member, the context it reads, and its discipline. */
 export interface RoundInput {
   member: RoundMember;
@@ -374,6 +423,12 @@ export interface RoundInput {
    * fails the round before the adapter runs.
    */
   workspace: RoundWorkspaceContext | null;
+  /**
+   * The round's MCP assembly (D6.1): `null` when the Agent home has no
+   * mcp.json. Assembly is independent of the project workspace, so a DM / no
+   * root round can still use MCP; it never gains project file tools.
+   */
+  mcp: RoundMcpContext | null;
   /** The seq of the message that triggered this wake. */
   baseSeq: number;
   reason: WakeReason;

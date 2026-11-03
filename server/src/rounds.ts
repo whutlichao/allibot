@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 import type Database from 'better-sqlite3';
 import type {
   RoundDiscipline,
@@ -33,6 +34,7 @@ import {
 } from './events.js';
 import { readRoundRuleSections } from './agent-home.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
+import { buildRoundMcp, closeRoundMcp } from './mcp-runtime.js';
 import { createPlanFace } from './plans.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
@@ -681,7 +683,7 @@ export async function runRound(
   let result: RoundResult;
   let interrupted = false;
   try {
-    input = readRoundInput(db, wake, { teamRun, assign, replyId });
+    input = await readRoundInput(db, wake, { teamRun, assign, replyId });
     const settled = await runProviderRound(provider, input, signal);
     interrupted = settled.interrupted;
     result = settled.result;
@@ -703,6 +705,7 @@ export async function runRound(
       closeRoundTeamRun(db, teamRun, committed);
     }
   } finally {
+    await closeRoundMcp(input?.mcp);
     inFlight.delete(wake.memberId);
   }
   // The subscription relays what the round committed, after its transaction
@@ -993,7 +996,7 @@ async function executeTeamAssignment(
 
   // The sub-round gets its own stable reply identity; it never lands a message,
   // so this id only ever names its approval batches (D5.6).
-  const subInput = readAssignmentRoundInput(db, {
+  const subInput = await readAssignmentRoundInput(db, {
     team,
     run,
     memberId: request.member_id,
@@ -1017,6 +1020,7 @@ async function executeTeamAssignment(
   } catch (error) {
     result = { verdict: 'failed', replies: [], detail: errorMessage(error) };
   } finally {
+    await closeRoundMcp(subInput.mcp);
     if (ownsTurn) {
       inFlight.delete(request.member_id);
     }
@@ -1092,7 +1096,7 @@ function assignmentFailureReason(
  * target window and recalls memory (understanding only), but it is not a
  * target round: the caller writes no message and no round outcome.
  */
-function readAssignmentRoundInput(
+async function readAssignmentRoundInput(
   db: Database.Database,
   params: {
     team: TeamTargetState;
@@ -1104,7 +1108,7 @@ function readAssignmentRoundInput(
     reason: WakeReason;
     replyId: string;
   },
-): RoundInput {
+): Promise<RoundInput> {
   const member = db
     .prepare(
       `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
@@ -1121,6 +1125,17 @@ function readAssignmentRoundInput(
     contextKind: 'team-assignment',
     contextId: params.assignmentId,
   });
+  const mcp = await buildRoundMcp({
+    db,
+    dataDir: readRoundDataDir(db),
+    memberId: member.id,
+    sessionId: params.replyId,
+    targetId: params.team.targetId,
+    contextKind: 'team-assignment',
+    contextId: params.assignmentId,
+    projectRoot: readTargetProjectRoot(db, params.team.targetId),
+    env: process.env,
+  });
   const messages = readContextWindow(db, params.team.targetId, 'window');
   const memories = recallForRound(db, member.id, params.team.targetId, messages);
   const prompt = composeSystemPrompt(db, member, targetKind, false, params.reason, memories, {
@@ -1134,18 +1149,23 @@ function readAssignmentRoundInput(
     targetKind,
     channelMode: 'team',
     // A TeamAssign sub-round is a team-target member round, so the four Plan
-    // tools are part of its tool set too (D4.1).
-    tools: readRoundTools(
-      db,
-      member.id,
-      params.team.targetId,
-      targetKind,
-      false,
-      true,
-      workspace !== null,
-    ),
+    // tools are part of its tool set too (D4.1). MCP tools are appended after
+    // the built-ins, as `mcp:<server>/<tool>`.
+    tools: [
+      ...readRoundTools(
+        db,
+        member.id,
+        params.team.targetId,
+        targetKind,
+        false,
+        true,
+        workspace !== null,
+      ),
+      ...mcpToolNames(mcp),
+    ],
     plan: createPlanFace(db, params.team.targetId, member.id),
     workspace,
+    mcp,
     team: {
       leader_member_id:
         params.team.leaderMemberId.length === 0 ? null : params.team.leaderMemberId,
@@ -1165,6 +1185,21 @@ function readAssignmentRoundInput(
     systemPrompt: prompt.systemPrompt,
     promptSections: prompt.sections,
   };
+}
+
+/** The data directory of the one SQLite file (mcp-hosts lives beside it). */
+function readRoundDataDir(db: Database.Database): string {
+  return path.dirname(db.name);
+}
+
+/** MCP tools the adapter may call, in the stable built-in-then-MCP order. */
+function mcpToolNames(mcp: RoundInput['mcp']): string[] {
+  if (mcp === null) {
+    return [];
+  }
+  return mcp.servers.flatMap((server) =>
+    server.tools.map((tool) => `mcp:${server.name}/${tool.name}`),
+  );
 }
 
 /** The readable copy for a zero-fallback workspace failure (D5.3 / D5.7). */
@@ -1250,7 +1285,7 @@ export interface RoundOutcomeRow {
   merged: number;
 }
 
-function readRoundInput(
+async function readRoundInput(
   db: Database.Database,
   wake: Wake,
   context: {
@@ -1258,7 +1293,7 @@ function readRoundInput(
     assign: TeamAssignExecutor | null;
     replyId: string;
   },
-): RoundInput {
+): Promise<RoundInput> {
   const member = db
     .prepare(
       `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
@@ -1302,15 +1337,29 @@ function readRoundInput(
     contextKind: 'round',
     contextId: null,
   });
-  const tools = readRoundTools(
+  const mcp = await buildRoundMcp({
     db,
-    member.id,
-    wake.targetId,
-    targetKind,
-    isLeader,
-    planAvailable,
-    workspace !== null,
-  );
+    dataDir: readRoundDataDir(db),
+    memberId: member.id,
+    sessionId: context.replyId,
+    targetId: wake.targetId,
+    contextKind: 'round',
+    contextId: null,
+    projectRoot: readTargetProjectRoot(db, wake.targetId),
+    env: process.env,
+  });
+  const tools = [
+    ...readRoundTools(
+      db,
+      member.id,
+      wake.targetId,
+      targetKind,
+      isLeader,
+      planAvailable,
+      workspace !== null,
+    ),
+    ...mcpToolNames(mcp),
+  ];
   const plan = planAvailable ? createPlanFace(db, wake.targetId, member.id) : null;
   const team: RoundTeamContext | null =
     teamState === null
@@ -1342,6 +1391,7 @@ function readRoundInput(
     team,
     plan,
     workspace,
+    mcp,
     baseSeq: wake.fromSeq,
     reason: wake.reason,
     discipline,
@@ -1640,6 +1690,7 @@ function commitRound(
             joinedSeq,
             reply?.seq ?? null,
             action?.clause ?? null,
+            roundInput?.mcp?.diagnostics.join('；') ?? null,
           ),
       merged: 0,
       startedAt,
@@ -2129,6 +2180,7 @@ function roundReason(
   joinedSeq: number | null,
   replySeq: number | null,
   taskActionClause: string | null,
+  mcpDiagnostic: string | null,
 ): string {
   const parts: string[] = [wakeText(db, wake.reason)];
   if (result.verdict === 'replied' && replySeq === null) {
@@ -2158,6 +2210,11 @@ function roundReason(
   }
   if (taskActionClause !== null) {
     parts.push(taskActionClause);
+  }
+  if (mcpDiagnostic !== null && mcpDiagnostic.length > 0) {
+    // 文件非法 / 未确认远端 / 连接失败: only the readable diagnostic enters the
+    // round outcome; it never fabricates half a tool set.
+    parts.push(mcpDiagnostic);
   }
   return parts.join('；');
 }
