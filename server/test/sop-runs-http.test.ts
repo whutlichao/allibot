@@ -197,6 +197,37 @@ async function startFixture(): Promise<Fixture> {
   };
 }
 
+async function waitForRun(
+  fixture: Fixture,
+  id: string,
+  predicate: (run: Record<string, unknown>) => boolean,
+  label: string,
+): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + 8_000;
+  let last: Record<string, unknown> | undefined;
+  for (;;) {
+    const response = await request(fixture.base, 'GET', `/api/sop-runs/${id}`);
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    last = response.body;
+    if (predicate(last)) {
+      return last;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${label}; last: ${JSON.stringify(last)}`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+async function waitForClosed(fixture: Fixture, id: string): Promise<Record<string, unknown>> {
+  return await waitForRun(
+    fixture,
+    id,
+    (run) => run['phase'] === 'completed' || run['phase'] === 'failed',
+    'the run to close',
+  );
+}
+
 async function createDefinition(
   fixture: Fixture,
   channelId: string = fixture.channelId,
@@ -266,11 +297,13 @@ test('start returns 202 with a pending run and writes one run row without side e
     assert.equal(state['waiting_on'], null);
     assert.equal(state['error'], null);
 
+    // Execution starts after the 202; the scripted `reply` double carries no
+    // structured sopVerdict, so this run closes failed. The row survives with
+    // the same identity and the same started_at the start response returned.
+    const closed = await waitForClosed(fixture, String(run['id']));
     const row = runRow(fixture.dataDir, String(run['id']));
-    assert.ok(row !== undefined, 'the pending run is a sqlite row');
-    assert.equal(row.phase, 'pending');
-    assert.equal(row.current_step, 0);
-    assert.equal(row.finished_at, null);
+    assert.ok(row !== undefined, 'the run is a sqlite row');
+    assert.equal(row.phase, 'failed');
     assert.equal(row.definition_id, definitionId);
     assert.equal(row.channel_id, fixture.channelId);
     assert.equal(row.started_at, FIXED_NOW);
@@ -297,11 +330,15 @@ test('start returns 202 with a pending run and writes one run row without side e
 
     const single = await request(fixture.base, 'GET', `/api/sop-runs/${String(run['id'])}`);
     assert.equal(single.status, 200);
-    assert.deepEqual(single.body, run);
+    assert.equal(single.body['id'], run['id']);
+    assert.equal(single.body['phase'], closed['phase']);
+    assert.equal(single.body['started_at'], run['started_at']);
 
     const listed = await request(fixture.base, 'GET', `/api/sops/${definitionId}/runs`);
     assert.equal(listed.status, 200);
-    assert.deepEqual(listed.body['runs'], [run]);
+    const listedRuns = listed.body['runs'] as Record<string, unknown>[];
+    assert.equal(listedRuns.length, 1);
+    assert.equal(listedRuns[0]?.['id'], run['id']);
   } finally {
     await fixture.stop();
   }
@@ -314,10 +351,14 @@ test('a second start is 409 while a run is pending, running or awaiting; a close
     const first = await request(fixture.base, 'POST', `/api/sops/${definitionId}/runs`);
     assert.equal(first.status, 202);
     const firstId = first.body['id'] as string;
+    // The worker may finish before the next request; the active-run boundary is
+    // therefore exercised by advancing the stored row to each active phase.
+    await waitForClosed(fixture, firstId);
 
-    const duplicate = await request(fixture.base, 'POST', `/api/sops/${definitionId}/runs`);
-    assert.equal(duplicate.status, 409);
-    assert.equal(errorCode(duplicate.body), 'conflict');
+    setPhase(fixture.dataDir, firstId, 'pending');
+    const whilePending = await request(fixture.base, 'POST', `/api/sops/${definitionId}/runs`);
+    assert.equal(whilePending.status, 409);
+    assert.equal(errorCode(whilePending.body), 'conflict');
 
     setPhase(fixture.dataDir, firstId, 'running');
     const whileRunning = await request(fixture.base, 'POST', `/api/sops/${definitionId}/runs`);
@@ -332,10 +373,12 @@ test('a second start is 409 while a run is pending, running or awaiting; a close
     assert.equal(afterCompleted.status, 202, JSON.stringify(afterCompleted.body));
     const secondId = afterCompleted.body['id'] as string;
     assert.notEqual(secondId, firstId);
+    await waitForClosed(fixture, secondId);
 
     setPhase(fixture.dataDir, secondId, 'failed');
     const afterFailed = await request(fixture.base, 'POST', `/api/sops/${definitionId}/runs`);
     assert.equal(afterFailed.status, 202, JSON.stringify(afterFailed.body));
+    await waitForClosed(fixture, String(afterFailed.body['id']));
 
     const listed = await request(fixture.base, 'GET', `/api/sops/${definitionId}/runs`);
     assert.deepEqual(
@@ -353,8 +396,10 @@ test('the run snapshot pages newest first with the before cursor and a 1–50 li
   try {
     const definitionId = await createDefinition(fixture);
     const first = await request(fixture.base, 'POST', `/api/sops/${definitionId}/runs`);
+    await waitForClosed(fixture, String(first.body['id']));
     setPhase(fixture.dataDir, String(first.body['id']), 'completed');
     const second = await request(fixture.base, 'POST', `/api/sops/${definitionId}/runs`);
+    await waitForClosed(fixture, String(second.body['id']));
     setPhase(fixture.dataDir, String(second.body['id']), 'failed');
     const third = await request(fixture.base, 'POST', `/api/sops/${definitionId}/runs`);
 

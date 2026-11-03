@@ -1562,6 +1562,89 @@
   font-size: 12px;
 }
 
+.sop-panel__phase-strip {
+  flex-basis: 100%;
+  display: grid;
+  gap: 2px;
+}
+
+.sop-panel__phase-strip-label {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.sop-panel__phases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sop-panel__phase {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sop-panel__phase--active {
+  border-color: var(--accent-deep);
+  color: var(--accent-deep);
+  font-weight: 500;
+}
+
+.sop-panel__run-head {
+  flex-basis: 100%;
+}
+
+.sop-panel__run-details {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.sop-panel__run-steps {
+  flex-basis: 100%;
+  display: grid;
+  gap: 4px;
+  margin: 2px 0 0;
+  padding: 0 0 0 10px;
+  list-style: none;
+  border-left: 1px solid var(--line);
+}
+
+.sop-panel__run-step {
+  display: grid;
+  gap: 2px;
+}
+
+.sop-panel__run-step-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sop-panel__run-excerpt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sop-panel__run-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--error);
+  font-size: 12px;
+}
+
 /* 权限档 / 规则集与审批面板 (#44 / D5.5 / D5.6) */
 .permission-rules {
   display: grid;

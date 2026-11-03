@@ -7,12 +7,14 @@ import {
   type SopRunPhase,
   type SopRunStateSnapshot,
   type SopRunView,
+  type SopRunWaitingOn,
   type SopStepDefinition,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { readChannelLiveness } from './channels.js';
 import { nowIso } from './clock.js';
+import { publishSopUpdate } from './events.js';
 
 /**
  * SOP 定义与启动 (#41 / D4.2): an owner-started multi-step process. It is not a
@@ -45,17 +47,50 @@ const STEP_KEYS = new Set([
 /** The one active-run predicate (D4.2): any of these three phases blocks a start. */
 const ACTIVE_RUN_PHASES = "('pending', 'running', 'awaiting')";
 
-/** The initial `state` snapshot a pending run stores; #45 extends it while executing. */
-const INITIAL_RUN_STATE: SopRunStateSnapshot = {
-  current_step: 0,
-  attempt: 0,
-  steps: [],
-  waiting_on: null,
-  error: null,
-};
+/** The initial `state` snapshot a pending run stores; the executor extends it. */
+function initialRunState(now: string): SopRunStateSnapshot {
+  return {
+    current_step: 0,
+    attempt: 0,
+    steps: [],
+    waiting_on: null,
+    error: null,
+    started_at: now,
+    updated_at: now,
+    finished_at: null,
+  };
+}
 
 export const SOP_DEFAULT_RUN_LIMIT = 20;
 export const SOP_MAX_RUN_LIMIT = 50;
+
+/** Retention (D4.2): the latest 50 runs or 90 days, whichever is shorter. */
+export const SOP_RUN_RETENTION = 50;
+export const SOP_RUN_RETENTION_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Retention runs when a new run is created, not on startup (D4.2). A run is
+ * kept only when it is both among the definition's newest 50 and younger than
+ * 90 days; the definition itself is never deleted. This is a read-model cleanup
+ * of forensics rows, not a message delete.
+ */
+function pruneSopRuns(db: Database.Database, definitionId: string, now: string): void {
+  const cutoff = new Date(Date.parse(now) - SOP_RUN_RETENTION_DAYS * DAY_MS).toISOString();
+  db.prepare(
+    `DELETE FROM sop_run
+      WHERE definition_id = ?
+        AND (
+          started_at < ?
+          OR id NOT IN (
+            SELECT id FROM sop_run
+             WHERE definition_id = ?
+             ORDER BY started_at DESC, rowid DESC
+             LIMIT ?
+          )
+        )`,
+  ).run(definitionId, cutoff, definitionId, SOP_RUN_RETENTION);
+}
 
 interface DefinitionRow {
   id: string;
@@ -165,7 +200,7 @@ export function getSopDefinition(db: Database.Database, id: string): SopDefiniti
  * definition is a 400.
  */
 export function startSopRun(db: Database.Database, definitionId: string): SopRunView {
-  const id = db.transaction((): string => {
+  const runId = db.transaction((): string => {
     const definition = requireDefinition(db, definitionId);
     const liveness = readChannelLiveness(db, definition.channel_id);
     if (liveness === undefined) {
@@ -196,17 +231,28 @@ export function startSopRun(db: Database.Database, definitionId: string): SopRun
       });
     }
 
-    const runId = randomUUID();
+    const id = randomUUID();
     const now = nowIso();
     db.prepare(
       `INSERT INTO sop_run
          (id, definition_id, channel_id, phase, state, current_step, started_at, updated_at,
           finished_at)
        VALUES (?, ?, ?, 'pending', ?, 0, ?, ?, NULL)`,
-    ).run(runId, definitionId, definition.channel_id, JSON.stringify(INITIAL_RUN_STATE), now, now);
-    return runId;
+    ).run(id, definitionId, definition.channel_id, JSON.stringify(initialRunState(now)), now, now);
+    // The start is the privacy / retention point for the definition's old runs.
+    pruneSopRuns(db, definitionId, now);
+    return id;
   });
-  return getSopRun(db, id());
+  const view = getSopRun(db, runId());
+  publishSopUpdate({
+    sopRunId: view.id,
+    definitionId: view.definition_id,
+    phase: view.phase,
+    currentStep: view.current_step,
+    attempt: view.attempt,
+    occurredAt: view.updated_at,
+  });
+  return view;
 }
 
 export interface SopRunQuery {
@@ -515,17 +561,24 @@ function runView(row: RunRow): SopRunView {
   if (typeof state !== 'object' || state === null || Array.isArray(state)) {
     throw new Error(`sop_run ${row.id} carries a non-object state snapshot`);
   }
+  const snapshot = state as SopRunStateSnapshot;
   return {
     id: row.id,
     definition_id: row.definition_id,
     channel_id: row.channel_id,
     phase: parseRunPhase(row.phase),
-    state: state as SopRunStateSnapshot,
+    state: snapshot,
     current_step: row.current_step,
+    attempt: typeof snapshot['attempt'] === 'number' ? snapshot['attempt'] : 0,
+    waiting_on: readWaitingOn(snapshot['waiting_on']),
     started_at: row.started_at,
     updated_at: row.updated_at,
     finished_at: row.finished_at,
   };
+}
+
+function readWaitingOn(value: unknown): SopRunWaitingOn | null {
+  return value === 'verifier' || value === 'approval' ? value : null;
 }
 
 function parseRunPhase(value: string): SopRunPhase {

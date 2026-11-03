@@ -86,6 +86,7 @@ import {
   parseSopRunQuery,
   startSopRun,
 } from './sops.js';
+import { scheduleSopRun } from './sop-executor.js';
 import { listTeamRuns, parseTeamRunQuery, prepareTeamChangeWake } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
 import { readWorkspace } from './workspace.js';
@@ -395,10 +396,14 @@ const ROUTES: readonly Route[] = [
     },
   },
   {
+    // The one SOP start (D4.2): the row is inserted `pending`, the response
+    // carries it, and the execution worker advances it asynchronously.
     method: 'POST',
     pattern: new RegExp(`^/api/sops/${SOP_ID}/runs$`),
-    handle: async (_request, response, { db }, ...params) => {
-      sendJson(response, 202, startSopRun(db, decodeId(params[0])));
+    handle: async (_request, response, { db, orchestration }, ...params) => {
+      const run = startSopRun(db, decodeId(params[0]));
+      sendJson(response, 202, run);
+      scheduleSopRun(db, orchestration.provider, run.id);
     },
   },
   {

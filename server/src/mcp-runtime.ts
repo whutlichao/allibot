@@ -55,6 +55,10 @@ export interface BuildRoundMcpOptions {
   projectRoot: string | null;
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  /** A SOP approval has no target; ordinary / team rounds keep the target. */
+  approvalTargetId?: string | null;
+  onApprovalWait?: () => void;
+  onApprovalSettled?: () => void;
 }
 
 interface ConnectedServer {
@@ -99,6 +103,9 @@ export async function buildRoundMcp(
     replyId: options.sessionId,
     contextKind: options.contextKind,
     contextId: options.contextId,
+    approvalTargetId: options.approvalTargetId,
+    onApprovalWait: options.onApprovalWait,
+    onApprovalSettled: options.onApprovalSettled,
   });
 
   const diagnostics: string[] = [];

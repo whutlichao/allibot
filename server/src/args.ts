@@ -146,7 +146,7 @@ const USAGE =
   'usage: allibot <serve|--migrate|export-mcp> [--data-dir <path>] [--home-dir <path>] ' +
   '[--port <port>] [--apply] [--yes] ' +
   '[--provider <scripted|model>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|workspace|permission|mcp-approval|mcp|team-approval|shell>] ' +
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|sop-executor|sop-verifier|sop-approval|workspace|permission|mcp-approval|mcp|team-approval|shell>] ' +
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
   '[--scripted-report-calls] [--scripted-report-team] [--scripted-transfer-member <member-id>] ' +

@@ -22,6 +22,7 @@ export const SSE_EVENT_TYPES = [
   'workspace.changed',
   'team_assignment',
   'plan_update',
+  'sop_update',
   'approval.requested',
   'approval.resolved',
 ] as const;
@@ -197,6 +198,32 @@ export function publishPlanUpdate(update: {
   });
 }
 
+
+/**
+ * The frame one SOP run progress point produces (D2.5): a phase change or a
+ * step / attempt change. The stream is live-only; the excerpt snapshot stays on
+ * `GET /api/sop-runs/{id}` and is never replayed here.
+ */
+export function publishSopUpdate(update: {
+  sopRunId: string;
+  definitionId: string;
+  phase: string;
+  currentStep: number;
+  attempt: number;
+  occurredAt: string;
+}): void {
+  eventHub.publish({
+    event: 'sop_update',
+    data: {
+      sop_run_id: update.sopRunId,
+      definition_id: update.definitionId,
+      phase: update.phase,
+      current_step: update.currentStep,
+      attempt: update.attempt,
+      occurred_at: update.occurredAt,
+    },
+  });
+}
 
 /**
  * The frame an approval batch produces (D2.5). `tool_call_ids` names only the

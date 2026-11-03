@@ -1177,6 +1177,8 @@ async function readAssignmentRoundInput(
       assignment: { assignment_id: params.assignmentId, instruction: params.instruction },
       assign: null,
     },
+    replyId: params.replyId,
+    sop: null,
     baseSeq: params.baseSeq,
     reason: params.reason,
     discipline: { definite: true, signal: null },
@@ -1204,6 +1206,149 @@ function mcpToolNames(mcp: RoundInput['mcp']): string[] {
   );
 }
 
+/** One SOP step as the executor reads it (the stored definition step). */
+export interface SopRoundStep {
+  title: string;
+  description: string;
+  executor_member_id: string;
+  verifier_member_id: string;
+  max_attempts: number;
+}
+
+export interface SopRoundInputParams {
+  memberId: string;
+  runId: string;
+  definitionId: string;
+  channelId: string;
+  /** The stable identity of this internal round; it only ever names approvals. */
+  replyId: string;
+  step: SopRoundStep;
+  stepIndex: number;
+  attempt: number;
+  role: 'executor' | 'verifier';
+  /** The executor's text; `null` in an executor round. */
+  executorText: string | null;
+  /** The run's phase hook while an approval batch waits. */
+  onApprovalWait?: () => void;
+  /** The run's phase hook when the approval wait settles. */
+  onApprovalSettled?: () => void;
+}
+
+/**
+ * The input of one SOP executor / verifier round (D4.3). It is the same member
+ * face as an ordinary round, with the step / role stated instead of a wake. It
+ * reads the channel window and the member's available tool set, but it is not a
+ * target round: the caller writes no message and no round outcome.
+ *
+ * The approval identity is this round's stable `replyId`; a tool ask during the
+ * round registers `context_kind='sop'` with the run id, so the human approval
+ * face can mark the run `awaiting` while it waits.
+ */
+export async function readSopRoundInput(
+  db: Database.Database,
+  params: SopRoundInputParams,
+): Promise<RoundInput> {
+  const member = db
+    .prepare(
+      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
+         FROM member m JOIN agent_config c ON c.member_id = m.id
+        WHERE m.id = ? AND m.kind = 'agent' AND ${liveMemberClause('m')}`,
+    )
+    .get(params.memberId) as RoundMember | undefined;
+  if (member === undefined) {
+    throw new Error(`SOP round member not found: ${params.memberId}`);
+  }
+  const channel = db
+    .prepare('SELECT mode FROM channel WHERE id = ?')
+    .get(params.channelId) as { mode: string } | undefined;
+  const channelMode: 'autonomous' | 'team' = channel?.mode === 'team' ? 'team' : 'autonomous';
+  const workspace = readRoundWorkspace(db, member.id, params.channelId, {
+    replyId: params.replyId,
+    contextKind: 'sop',
+    contextId: params.runId,
+    // A SOP approval has no target (D5.6), but the permission context still
+    // resolves from the channel the definition belongs to.
+    approvalTargetId: null,
+    onApprovalWait: params.onApprovalWait,
+    onApprovalSettled: params.onApprovalSettled,
+  });
+  const mcp = await buildRoundMcp({
+    db,
+    dataDir: readRoundDataDir(db),
+    memberId: member.id,
+    sessionId: params.replyId,
+    targetId: params.channelId,
+    contextKind: 'sop',
+    contextId: params.runId,
+    projectRoot: readTargetProjectRoot(db, params.channelId),
+    env: process.env,
+    approvalTargetId: null,
+    onApprovalWait: params.onApprovalWait,
+    onApprovalSettled: params.onApprovalSettled,
+  });
+  const messages = readContextWindow(db, params.channelId, 'window');
+  const prompt = composeSystemPrompt(db, member, 'channel', false, 'channel-message', [], {
+    isLeader: false,
+    assignmentInstruction: null,
+    projectRoot: readTargetProjectRoot(db, params.channelId),
+    sop: {
+      role: params.role,
+      stepTitle: params.step.title,
+      description: params.step.description,
+      stepIndex: params.stepIndex,
+      attempt: params.attempt,
+      maxAttempts: params.step.max_attempts,
+      executorText: params.executorText,
+    },
+  });
+  return {
+    member,
+    targetId: params.channelId,
+    targetKind: 'channel',
+    channelMode,
+    tools: [
+      ...readRoundTools(
+        db,
+        member.id,
+        params.channelId,
+        'channel',
+        false,
+        false,
+        workspace !== null,
+        // A SOP round is an internal member round with the same workspace face:
+        // the explicit shell switch adds Bash, still behind the per-call gate.
+        workspace?.allow_local_shell === 1,
+      ),
+      ...mcpToolNames(mcp),
+    ],
+    team: null,
+    plan: null,
+    workspace,
+    mcp,
+    replyId: params.replyId,
+    sop: {
+      run_id: params.runId,
+      definition_id: params.definitionId,
+      step_index: params.stepIndex,
+      step_title: params.step.title,
+      step_description: params.step.description,
+      role: params.role,
+      attempt: params.attempt,
+      max_attempts: params.step.max_attempts,
+      executor_text: params.executorText,
+    },
+    baseSeq: 0,
+    reason: 'channel-message',
+    discipline: { definite: false, signal: null },
+    contextScope: 'window',
+    messages,
+    consumedSeq: readConsumedSeq(db, member.id, params.channelId),
+    memories: [],
+    systemPrompt: prompt.systemPrompt,
+    promptSections: prompt.sections,
+  };
+}
+
 /** The readable copy for a zero-fallback workspace failure (D5.3 / D5.7). */
 function workspaceFailureReason(db: Database.Database, backend: string): string {
   if (backend === 'docker') {
@@ -1224,8 +1369,11 @@ function readRoundWorkspace(
   targetId: string,
   approval: {
     replyId: string;
-    contextKind: 'round' | 'team-assignment';
+    contextKind: 'round' | 'team-assignment' | 'sop';
     contextId: string | null;
+    approvalTargetId?: string | null;
+    onApprovalWait?: () => void;
+    onApprovalSettled?: () => void;
   },
 ): RoundWorkspaceContext | null {
   const failure = readRoundWorkspaceFailure(db, memberId, targetId);
@@ -1246,6 +1394,9 @@ function readRoundWorkspace(
     replyId: approval.replyId,
     contextKind: approval.contextKind,
     contextId: approval.contextId,
+    approvalTargetId: approval.approvalTargetId,
+    onApprovalWait: approval.onApprovalWait,
+    onApprovalSettled: approval.onApprovalSettled,
   });
   return {
     root: binding.root,
@@ -1403,6 +1554,8 @@ async function readRoundInput(
     plan,
     workspace,
     mcp,
+    replyId: context.replyId,
+    sop: null,
     baseSeq: wake.fromSeq,
     reason: wake.reason,
     discipline,
@@ -1562,25 +1715,40 @@ function composeSystemPrompt(
     assignmentInstruction: string | null;
     /** The channel's project root; null for a DM / no-root round. */
     projectRoot: string | null;
+    /** The SOP step / role when this is an internal executor / verifier round. */
+    sop?: {
+      role: 'executor' | 'verifier';
+      stepTitle: string;
+      description: string;
+      stepIndex: number;
+      attempt: number;
+      maxAttempts: number;
+      executorText: string | null;
+    } | null;
   },
 ): { systemPrompt: string; sections: RoundPromptSections } {
+  const sop = options.sop ?? null;
   const targetDiscipline =
-    targetKind === 'dm'
-      ? tFromDb(db, 'prompt.dm.oneToOne')
-      : tFromDb(db, 'prompt.channel.rubric');
+    sop !== null
+      ? tFromDb(db, 'prompt.sop.discipline')
+      : targetKind === 'dm'
+        ? tFromDb(db, 'prompt.dm.oneToOne')
+        : tFromDb(db, 'prompt.channel.rubric');
   const mandatory: string[] = [];
-  if (targetKind === 'dm') {
-    mandatory.push(
-      triggeredByHuman
-        ? tFromDb(db, 'prompt.humanMessage.mandatory')
-        : tFromDb(db, 'prompt.dm.mandatory'),
-    );
-  } else {
-    if (triggeredByHuman) {
-      mandatory.push(tFromDb(db, 'prompt.humanMessage.mandatory'));
-    }
-    if (reason === 'team-change') {
-      mandatory.push(tFromDb(db, 'prompt.teamChange.mandatory'));
+  if (sop === null) {
+    if (targetKind === 'dm') {
+      mandatory.push(
+        triggeredByHuman
+          ? tFromDb(db, 'prompt.humanMessage.mandatory')
+          : tFromDb(db, 'prompt.dm.mandatory'),
+      );
+    } else {
+      if (triggeredByHuman) {
+        mandatory.push(tFromDb(db, 'prompt.humanMessage.mandatory'));
+      }
+      if (reason === 'team-change') {
+        mandatory.push(tFromDb(db, 'prompt.teamChange.mandatory'));
+      }
     }
   }
   const rules = readRoundRuleSections(member.id, options.projectRoot);
@@ -1599,6 +1767,24 @@ function composeSystemPrompt(
             instruction: options.assignmentInstruction,
           }),
     memory: memoryPromptSection(db, memories),
+    sop:
+      sop === null
+        ? null
+        : sop.role === 'executor'
+          ? tFromDb(db, 'prompt.sop.executor', {
+              title: sop.stepTitle,
+              step: String(sop.stepIndex + 1),
+              attempt: String(sop.attempt),
+              max_attempts: String(sop.maxAttempts),
+              description: sop.description,
+            })
+          : tFromDb(db, 'prompt.sop.verifier', {
+              title: sop.stepTitle,
+              step: String(sop.stepIndex + 1),
+              attempt: String(sop.attempt),
+              max_attempts: String(sop.maxAttempts),
+              executor: sop.executorText ?? '',
+            }),
   };
   const parts = [
     sections.rulesBase,
@@ -1609,6 +1795,7 @@ function composeSystemPrompt(
     ...sections.mandatory,
     sections.leaderDuties,
     sections.assignment,
+    sections.sop,
     sections.memory,
   ];
   return {

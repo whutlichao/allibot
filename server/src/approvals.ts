@@ -77,7 +77,8 @@ export interface RegisterApprovalInput {
    * always a distinct invocation.
    */
   toolCallId?: string;
-  targetId: string;
+  /** The target the approval belongs to; a SOP approval has none (D5.6). */
+  targetId: string | null;
   contextKind: ApprovalContextKind;
   contextId: string | null;
   memberId: string;
@@ -86,6 +87,12 @@ export interface RegisterApprovalInput {
   pattern: string;
   /** Secret-shaped fields are masked before the row and the frame. */
   arguments: Record<string, unknown>;
+  /**
+   * Called only when this registration actually waits for a human (not for an
+   * immediate replay / terminal decision). The SOP executor uses it to move the
+   * run to `awaiting` / `waiting_on='approval'`.
+   */
+  onWait?: () => void;
 }
 
 type WaitOutcome = 'approved' | 'denied' | 'timeout';
@@ -215,6 +222,7 @@ export async function requestApproval(
     wait = { batch, timeout, waiters: new Map() };
     replyWaits.set(key, wait);
   }
+  input.onWait?.();
   return await new Promise<WaitOutcome>((resolve) => {
     wait!.waiters.set(registered.toolCallId, resolve);
     // A decision may have landed between the read and the waiter registration
@@ -547,6 +555,18 @@ function approvalRuleScope(
   row: ApprovalRow,
 ): { kind: PermissionScopeKind; id: string } | null {
   if (row.target_id === null) {
+    // A SOP approval has no target (D5.6), but it still has a channel: the
+    // run's definition names it, so `rules?` replaces that channel's set.
+    if (row.context_kind === 'sop' && row.context_id !== null) {
+      const run = db
+        .prepare(
+          `SELECT d.channel_id AS channel_id
+             FROM sop_run r JOIN sop_definition d ON d.id = r.definition_id
+            WHERE r.id = ?`,
+        )
+        .get(row.context_id) as { channel_id: string } | undefined;
+      return run === undefined ? null : { kind: 'channel', id: run.channel_id };
+    }
     return null;
   }
   const kind = readTargetKind(db, row.target_id);
