@@ -55,9 +55,9 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
 }
 
 function replyResult(input: RoundInput, replies: readonly string[] | undefined): RoundResult {
-  // The scripted round reports what it read: the seq numbers of the context it
-  // was handed, so a test can observe "the wake carried no body, the round
-  // read through the ordinary read path" without a second seam.
+  // Without an explicit body the double answers with what it read through the
+  // ordinary read path — the triggering seq — so the round is observably a
+  // real round rather than a canned string.
   const bodies = replies ?? [defaultScriptedReply(input)];
   return { verdict: 'replied', replies: [...bodies] };
 }

@@ -109,9 +109,8 @@ export function collectWakes(
     return [];
   }
 
-  const mentioned = new Set(
-    listMentionedAgents(db, message.targetId, message.seq).map((member) => member.id),
-  );
+  const mentions = listMentionedAgents(db, message.targetId, message.seq);
+  const mentioned = new Set(mentions.map((member) => member.id));
   const wakes: Wake[] = [];
   const woken = new Set<string>();
 
@@ -130,7 +129,7 @@ export function collectWakes(
     woken.add(member.id);
   }
 
-  for (const member of listMentionedAgents(db, message.targetId, message.seq)) {
+  for (const member of mentions) {
     if (member.id === message.authorMemberId || woken.has(member.id)) {
       continue;
     }
