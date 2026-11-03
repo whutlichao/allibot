@@ -1,21 +1,14 @@
-import type { WorkspaceSettingsView } from '@allibot/shared';
+import {
+  MESSAGE_DENSITIES,
+  SUPPORTED_LOCALES,
+  THEMES,
+  type Locale,
+  type MessageDensity,
+  type Theme,
+  type WorkspaceSettingsView,
+} from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
-
-/**
- * The delivered locale. M1 ships Simplified Chinese only; the English catalog
- * slot stays open as a text increment, never as a half-delivered second locale.
- */
-export const SUPPORTED_LOCALES = ['zh-CN'] as const;
-export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
-
-/** Message density has exactly two readings. */
-export const MESSAGE_DENSITIES = ['comfortable', 'compact'] as const;
-export type MessageDensity = (typeof MESSAGE_DENSITIES)[number];
-
-/** `system` follows the OS appearance; the other two pin it. */
-export const THEMES = ['light', 'dark', 'system'] as const;
-export type Theme = (typeof THEMES)[number];
 
 /** The three workspace settings, in the order the human face reads them. */
 export const DEFAULT_SETTINGS: WorkspaceSettingsView = {
@@ -124,7 +117,7 @@ function parseSettingValue(key: SettingKey, value: unknown): string {
  * M1 accepts one locale. Rejecting `en` and every other value keeps a client
  * from pinning a language the backend cannot render.
  */
-export function parseLocale(value: string): SupportedLocale {
+export function parseLocale(value: string): Locale {
   const locale = SUPPORTED_LOCALES.find((candidate) => candidate === value);
   if (locale === undefined) {
     throw ApiFailure.validation(`locale must be one of: ${SUPPORTED_LOCALES.join(', ')}`, {
@@ -158,7 +151,7 @@ function parseTheme(value: string): Theme {
 }
 
 /** Stored values are CHECK-constrained by the write path; the guards only make a hand-edited row readable. */
-function parseStoredLocale(value: string | undefined): SupportedLocale {
+function parseStoredLocale(value: string | undefined): Locale {
   return value === undefined ? DEFAULT_SETTINGS.locale : parseLocale(value);
 }
 
