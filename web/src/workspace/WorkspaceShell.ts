@@ -2,6 +2,7 @@ import {
   t,
   type ChannelConfigPatch,
   type Locale,
+  type PlanRunView,
   type TargetMemberView,
   type TaskStatus,
   type TaskView,
@@ -56,6 +57,8 @@ export interface WorkspaceShellProps {
   channelMembers?: Record<string, readonly TargetMemberView[]>;
   /** Team run snapshots, keyed by target id; the run panel reads them. */
   teamRuns?: Record<string, readonly TeamRunView[]>;
+  /** Plan snapshots, keyed by target id; the run panel reads them. */
+  plans?: Record<string, readonly PlanRunView[]>;
   viewportWidth?: number;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
@@ -121,6 +124,7 @@ export function WorkspaceShell({
   onDeleteAgent,
   onChannelConfigChange,
   teamRuns,
+  plans,
   saveFailed = false,
   onLiveEvent,
 }: WorkspaceShellProps) {
@@ -295,6 +299,7 @@ export function WorkspaceShell({
           ? undefined
           : (patch: ChannelConfigPatch) => onChannelConfigChange(selectedTargetId, patch),
       teamRuns: selectedTargetId === null ? undefined : teamRuns?.[selectedTargetId],
+      plans: selectedTargetId === null ? undefined : plans?.[selectedTargetId],
       onOpenPanel: openPanel,
     });
   } else if (drawer === 'members') {

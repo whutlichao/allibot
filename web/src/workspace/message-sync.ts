@@ -40,6 +40,7 @@ export const LIVE_EVENT_TYPES = [
   'reminder.due',
   'workspace.changed',
   'team_assignment',
+  'plan_update',
 ] as const;
 
 export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];
@@ -427,7 +428,10 @@ export function parseLiveEvent(eventType: string, rawData: string): LiveEvent | 
 
 const WORKSPACE_REFRESH_EVENTS: ReadonlySet<string> = new Set(
   LIVE_EVENT_TYPES.filter(
-    (event) => event !== 'message.created' && event !== 'team_assignment',
+    (event) =>
+      event !== 'message.created' &&
+      event !== 'team_assignment' &&
+      event !== 'plan_update',
   ),
 );
 

@@ -90,6 +90,12 @@ export interface CliOptions {
    * 30-second default; a test injects a short interval instead of waiting.
    */
   reminderTickMs: number;
+  /**
+   * A fixed instant for the process clock (`--fixed-clock <ISO>`), or
+   * undefined for the wall clock. It is a test injection: retention windows and
+   * Plan occurrence timestamps become deterministic without waiting 30 days.
+   */
+  fixedClock: string | undefined;
 }
 
 const DEFAULT_PORT = 3000;
@@ -112,7 +118,7 @@ const USAGE =
   '[--scripted-report-calls] [--scripted-report-team] [--scripted-transfer-member <member-id>] ' +
   '[--scripted-team-assign-member <member-id>] [--scripted-team-assign-instruction <text>] ' +
   '[--scripted-team-member-fail] ' +
-  '[--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
+  '[--fixed-clock <ISO-8601>] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -138,6 +144,7 @@ export function parseCliArgs(
       'scripted-team-member-fail': { type: 'boolean' },
       'sse-lifetime-ms': { type: 'string' },
       'reminder-tick-ms': { type: 'string' },
+      'fixed-clock': { type: 'string' },
     },
     strict: true,
     allowPositionals: true,
@@ -182,6 +189,7 @@ export function parseCliArgs(
     scriptedTeamMemberFail: values['scripted-team-member-fail'] === true,
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
     reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),
+    fixedClock: parseFixedClock(values['fixed-clock']),
   };
 }
 
@@ -283,6 +291,18 @@ function parseScriptedTeamAssignInstruction(raw: string | undefined): string | u
     throw new Error('invalid --scripted-team-assign-instruction value: an instruction must not be empty');
   }
   return raw;
+}
+
+/** A fixed clock is one valid instant; it is stored normalized so ISO comparison is stable. */
+function parseFixedClock(raw: string | undefined): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const instant = new Date(raw);
+  if (!Number.isFinite(instant.getTime())) {
+    throw new Error(`invalid --fixed-clock value: ${raw}; expected an ISO 8601 instant`);
+  }
+  return instant.toISOString();
 }
 
 function parseDelayMs(raw: string | undefined): number {

@@ -500,6 +500,12 @@ export const ZH_CN = {
     params: [],
   },
   'team.assignment.truncated': { text: '…（摘录已截断）', params: [] },
+  // Plan 工具的输入错误（#40）：工具结果的可读原因，不是 HTTP 错误文案。
+  'plan.error.titleRequired': { text: '计划项标题不能为空。', params: [] },
+  'plan.error.statusInvalid': {
+    text: '计划项状态无效：{status}；只接受 pending / in_progress / completed。',
+    params: ['status'],
+  },
   // 运行面板的分派区块（#39）：assignment 是运行记录，不渲染成消息。
   'workspace.teamRuns.assignments.title': { text: '分派', params: [] },
   'workspace.teamRuns.assignments.jump': { text: '跳数', params: [] },
@@ -509,4 +515,13 @@ export const ZH_CN = {
   'workspace.teamRuns.assignments.state.completed': { text: '已完成', params: [] },
   'workspace.teamRuns.assignments.state.failed': { text: '失败', params: [] },
   'workspace.teamRuns.assignments.state.budgetExhausted': { text: '预算耗尽', params: [] },
+  // 运行面板的 Plan 区块（#40）：plan_task 是自己的三词状态，不是任务五态。
+  'workspace.plan.title': { text: '计划', params: [] },
+  'workspace.plan.empty': { text: '暂无计划', params: [] },
+  'workspace.plan.member': { text: '成员', params: [] },
+  'workspace.plan.tasks': { text: '清单', params: [] },
+  'workspace.plan.updatedAt': { text: '更新于', params: [] },
+  'workspace.plan.status.pending': { text: '待开始', params: [] },
+  'workspace.plan.status.inProgress': { text: '进行中', params: [] },
+  'workspace.plan.status.completed': { text: '已完成', params: [] },
 } as const satisfies Record<string, CatalogEntry>;

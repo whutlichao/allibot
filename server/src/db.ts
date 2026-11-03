@@ -7,7 +7,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 export interface MigrationStep {
   readonly to: number;
@@ -727,6 +727,43 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
         BEGIN
           SELECT RAISE(ABORT, 'team_assignment is closed or changes an immutable field');
         END;
+      `);
+    },
+  },
+  {
+    // The Plan ticket (#40 / T15) lands the member's Plan work list. A run is
+    // one persisted plan for a (target, member) pair; a task is one item with
+    // its own three-word status, which is not the task five-state. plan_task
+    // follows its run: the foreign key cascades on delete, because retention
+    // deletes whole runs and their snapshots go with them.
+    to: 16,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE plan_run (
+          id TEXT PRIMARY KEY,
+          target_id TEXT NOT NULL REFERENCES target (id),
+          member_id TEXT NOT NULL REFERENCES member (id),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        -- The one current-run lookup and the retention scan are per pair,
+        -- newest first.
+        CREATE INDEX plan_run_target_member_created
+          ON plan_run (target_id, member_id, created_at);
+
+        CREATE TABLE plan_task (
+          id TEXT PRIMARY KEY,
+          plan_run_id TEXT NOT NULL REFERENCES plan_run (id) ON DELETE CASCADE,
+          title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+          status TEXT NOT NULL CHECK (status IN ('pending', 'in_progress', 'completed')),
+          position INTEGER NOT NULL CHECK (position >= 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        -- The plan read and every tool result walk one run in plan order.
+        CREATE INDEX plan_task_run_position ON plan_task (plan_run_id, position);
       `);
     },
   },

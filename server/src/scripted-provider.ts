@@ -53,7 +53,8 @@ export type ScriptedBehavior =
   | 'continue-task'
   | 'transfer-task'
   | 'team-assign'
-  | 'team-budget';
+  | 'team-budget'
+  | 'plan';
 
 export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'reply',
@@ -67,6 +68,7 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'transfer-task',
   'team-assign',
   'team-budget',
+  'plan',
 ];
 
 export interface ScriptedProviderOptions {
@@ -183,6 +185,8 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
           return await teamAssignResult(input, options, callReport, false);
         case 'team-budget':
           return await teamAssignResult(input, options, callReport, true);
+        case 'plan':
+          return await planResult(input, options, callReport);
         case 'reply':
           return replyResult(input, options, callReport);
       }
@@ -312,6 +316,77 @@ async function teamAssignResult(
       `[team-assign] ${reports.length === 0 ? 'no-members' : reports.join(' | ')}` +
         `${callReport}${teamReport(input, options)}`,
     ],
+  };
+}
+
+/**
+ * The double's Plan behaviour (#40 / D4.1): it calls the four tools through the
+ * round's plan face — `TaskList` first (which lazily creates the run), then two
+ * `TaskCreate` calls, a `TaskUpdate` that changes both title and status, another
+ * `TaskList` and a `TaskGet`. The reply reports what the tools returned, so a
+ * process-level test observes the current list, the append order and the three
+ * words through the ordinary message.
+ *
+ * When the round is a leader round with injected assignees it also calls
+ * TeamAssign; the member sub-round runs this same behaviour, so the sub-round's
+ * own Plan face is exercised too. A round without the face reports
+ * `available:false` and writes nothing.
+ */
+async function planResult(
+  input: RoundInput,
+  options: ScriptedProviderOptions,
+  callReport: string,
+): Promise<RoundResult> {
+  const plan = input.plan;
+  if (plan === null) {
+    return {
+      verdict: 'replied',
+      replies: [
+        `[plan] available:false${callReport}` +
+          `\n[plan-tools] ${input.tools.length === 0 ? '-' : input.tools.join(',')}` +
+          teamReport(input, options),
+      ],
+    };
+  }
+
+  const before = plan.TaskList();
+  const one = plan.TaskCreate({ title: 'PLAN-ITEM-ONE' });
+  const two = plan.TaskCreate({ title: 'PLAN-ITEM-TWO' });
+  const updated = plan.TaskUpdate({
+    id: one.id,
+    title: 'PLAN-ITEM-ONE-UPDATED',
+    status: 'in_progress',
+  });
+  const listed = plan.TaskList();
+  const got = plan.TaskGet({ id: two.id });
+  const order = listed
+    .map((task) => `${task.id}:${task.status}:${task.position}`)
+    .join(',');
+  const lines = [
+    `[plan] available:true run:${one.plan_run_id} before:${before.length}` +
+      ` count:${listed.length} order:${order}` +
+      ` get:${got?.status ?? 'missing'}` +
+      ` updated:${updated?.status ?? 'missing'}`,
+    `[plan-tools] ${input.tools.join(',')}`,
+  ];
+
+  const assign = input.team?.assign ?? null;
+  if (input.team?.is_leader === true && assign !== null) {
+    const memberIds = options.teamAssignMemberIds ?? [];
+    const instruction = options.teamAssignInstruction ?? '请完成这个子任务。';
+    const reports: string[] = [];
+    for (const memberId of memberIds) {
+      const result = await assign({ member_id: memberId, instruction });
+      reports.push(toolReport(result));
+    }
+    if (reports.length > 0) {
+      lines.push(`[team-assign] ${reports.join(' | ')}`);
+    }
+  }
+
+  return {
+    verdict: 'replied',
+    replies: [`${lines.join('\n')}${callReport}${teamReport(input, options)}`],
   };
 }
 

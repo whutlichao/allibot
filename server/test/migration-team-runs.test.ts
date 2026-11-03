@@ -4,6 +4,7 @@ import { cpSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { SCHEMA_VERSION } from '../dist/db.js';
 import {
   MIGRATION_FIXTURE,
   makeTempDir,
@@ -195,7 +196,7 @@ function insertRun(db: Database.Database, input: RunInput): void {
   );
 }
 
-test('a v14 data directory migrates to v15 with a whole-directory backup and one ledger line', async () => {
+test('a v14 data directory migrates to the current version with a whole-directory backup and one ledger line', async () => {
   const parent = await makeTempDir('allibot-team-runs-migrate-');
   const dataDir = path.join(parent, 'data');
   const snapshot = path.join(parent, 'snapshot');
@@ -206,7 +207,11 @@ test('a v14 data directory migrates to v15 with a whole-directory backup and one
 
     const migrated = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(migrated.exitCode, 0, `migrate should exit 0; output: ${migrated.output}`);
-    assert.equal(readSchemaVersion(dataDir), 15, 'the strict +1 step lands at version 15');
+    assert.equal(
+      readSchemaVersion(dataDir),
+      SCHEMA_VERSION,
+      'the strict +1 chain lands at the current schema version',
+    );
 
     const backups = readdirSync(parent).filter((name) => name.startsWith('data.backup-'));
     assert.equal(
@@ -223,7 +228,7 @@ test('a v14 data directory migrates to v15 with a whole-directory backup and one
     const last = ledger[ledger.length - 1];
     assert.ok(last !== undefined, 'the audit ledger has a record for the migration');
     assert.equal(last['from'], 14);
-    assert.equal(last['to'], 15);
+    assert.equal(last['to'], SCHEMA_VERSION);
     assert.equal(last['result'], 'ok');
     assert.equal(last['backup_path'], backupPath);
     const startedAt = Date.parse(String(last['started_at']));

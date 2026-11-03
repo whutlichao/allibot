@@ -1,4 +1,4 @@
-import type { TeamAssignmentState } from '@allibot/shared';
+import type { PlanTaskStatus, PlanTaskView, TeamAssignmentState } from '@allibot/shared';
 
 /**
  * The member-face adapter seam (成员面适配接缝): one member round in, zero or
@@ -133,6 +133,41 @@ export interface RoundAssignmentContext {
   instruction: string;
 }
 
+/** `TaskCreate` input: a title; the item is appended at the end of the run. */
+export interface PlanTaskCreateRequest {
+  title: string;
+}
+
+/** `TaskGet` / `TaskUpdate` identify one item of the current run. */
+export interface PlanTaskGetRequest {
+  id: string;
+}
+
+/** `TaskUpdate` changes the title and / or the three-word status. */
+export interface PlanTaskUpdateRequest {
+  id: string;
+  title?: string;
+  status?: PlanTaskStatus;
+}
+
+/**
+ * The four Plan tools as one tool face on the round input (D3.7 / D4.1). The
+ * names are kept verbatim because they are the product's tool names. The face
+ * is `null` on a round that does not get Plan tools (a DM or an autonomous
+ * channel's ordinary round); a task target and any team target — including a
+ * TeamAssign sub-round — gets it.
+ *
+ * The first call lazily creates the `plan_run` for this (target, member) pair;
+ * the run is reused by later rounds while it is current. A tool call never
+ * writes a message, an unread count, a search hit, a wake or budget.
+ */
+export interface RoundPlanFace {
+  TaskCreate(request: PlanTaskCreateRequest): PlanTaskView;
+  TaskGet(request: PlanTaskGetRequest): PlanTaskView | null;
+  TaskList(): PlanTaskView[];
+  TaskUpdate(request: PlanTaskUpdateRequest): PlanTaskView | null;
+}
+
 /**
  * The team reading of one round (D3.7 / D3.9). It is `null` on an ordinary
  * autonomous / DM round. `assign` is the TeamAssign tool face and exists only
@@ -183,6 +218,12 @@ export interface RoundInput {
   tools: readonly string[];
   /** The team reading of this round; null on an autonomous / DM round. */
   team: RoundTeamContext | null;
+  /**
+   * The Plan tool face (D4.1). It is `null` on a DM or an autonomous channel's
+   * ordinary round; a task target and a team target always carry it, and a
+   * TeamAssign sub-round carries it too.
+   */
+  plan: RoundPlanFace | null;
   /** The seq of the message that triggered this wake. */
   baseSeq: number;
   reason: WakeReason;

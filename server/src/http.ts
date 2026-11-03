@@ -58,6 +58,7 @@ import {
   listChannelMembers,
   listTargetMembers,
 } from './target-members.js';
+import { listPlans, parsePlanQuery } from './plans.js';
 import { listTeamRuns, parseTeamRunQuery, prepareTeamChangeWake } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
 import { readWorkspace } from './workspace.js';
@@ -326,6 +327,19 @@ const ROUTES: readonly Route[] = [
       const query = parseTeamRunQuery(new URL(request.url ?? '/', `http://${HOST}`).searchParams);
       sendJson(response, 200, {
         team_runs: listTeamRuns(db, decodeId(params[0]), query, env),
+      });
+    },
+  },
+  {
+    // The Plan read model (D2.3): the target's latest runs with their complete
+    // task lists, newest first; `member_id` narrows to one member. Plan has no
+    // human-face write endpoint — the four tools run inside a member round.
+    method: 'GET',
+    pattern: new RegExp(`^/api/targets/${TARGET_ID}/plans$`),
+    handle: async (request, response, { db }, ...params) => {
+      const query = parsePlanQuery(new URL(request.url ?? '/', `http://${HOST}`).searchParams);
+      sendJson(response, 200, {
+        plans: listPlans(db, decodeId(params[0]), query),
       });
     },
   },
