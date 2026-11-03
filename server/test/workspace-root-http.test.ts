@@ -15,6 +15,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import {
+  MIGRATION_FIXTURE,
   makeTempDir,
   removeTempDir,
   runCli,
@@ -591,11 +592,9 @@ test('the whole-directory backup does not copy the project root', async () => {
   const dataDir = path.join(tmp, 'data');
   const project = path.join(tmp, 'project');
   try {
-    const fixture = spawnSync(
-      process.execPath,
-      [path.join(process.cwd(), 'server/test/fixtures/migrate-steps.mjs'), 'v17', dataDir],
-      { encoding: 'utf8' },
-    );
+    const fixture = spawnSync(process.execPath, [MIGRATION_FIXTURE, 'v17', dataDir], {
+      encoding: 'utf8',
+    });
     assert.equal(fixture.status, 0, fixture.stderr);
     mkdirSync(project, { recursive: true });
     writeFileSync(path.join(project, 'PROJECT-SENTINEL.txt'), 'project bytes');

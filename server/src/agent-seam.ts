@@ -1,4 +1,9 @@
-import type { PlanTaskStatus, PlanTaskView, TeamAssignmentState } from '@allibot/shared';
+import type {
+  PlanTaskStatus,
+  PlanTaskView,
+  TeamAssignmentState,
+  WorkspaceBackend,
+} from '@allibot/shared';
 
 /**
  * The member-face adapter seam (成员面适配接缝): one member round in, zero or
@@ -52,6 +57,104 @@ export interface RoundMember {
   role: string;
   model: string | null;
   system_prompt: string;
+}
+
+
+/** One successful / failed file-tool call (D5.1). */
+export type FileToolErrorCode =
+  | 'invalid-path'
+  | 'outside-root'
+  | 'read-only'
+  | 'not-found'
+  | 'not-a-directory'
+  | 'is-directory'
+  | 'invalid-pattern'
+  | 'old-string-not-found'
+  | 'io-error';
+
+/** One grep hit: a path relative to the searched root, its 1-based line and the line text. */
+export interface RoundGrepMatch {
+  path: string;
+  line: number;
+  text: string;
+}
+
+/** The project / skills scope a result path belongs to. */
+export type RoundFileScope = 'project' | 'skills';
+
+/**
+ * The member-face file-tool result. A failure is a tool error (`ok:false` with
+ * a stable code and readable message), never an approval and never a rule
+ * bypass candidate: root escapes are hard errors (D5.1).
+ */
+export interface RoundFileToolResult {
+  ok: boolean;
+  error?: FileToolErrorCode;
+  message?: string;
+  scope?: RoundFileScope;
+  path?: string;
+  content?: string;
+  paths?: string[];
+  matches?: RoundGrepMatch[];
+  replacements?: number;
+  bytes?: number;
+}
+
+export interface ReadFileRequest {
+  path: string;
+}
+
+export interface GlobFileRequest {
+  /** A root-relative glob; `*` stays inside one path segment, `**` crosses. */
+  pattern: string;
+  /** Optional directory (inside either root) to search from; default the project root. */
+  path?: string;
+}
+
+export interface GrepFileRequest {
+  /** A JavaScript regular expression source, applied line by line. */
+  pattern: string;
+  /** Optional file or directory (inside either root) to search; default the project root. */
+  path?: string;
+}
+
+export interface WriteFileRequest {
+  path: string;
+  content: string;
+}
+
+export interface EditFileRequest {
+  path: string;
+  old_string: string;
+  new_string: string;
+}
+
+/**
+ * The restricted file tools a local round with a project root gets (D5.1).
+ * `Read` / `Glob` / `Grep` can read the project root and the member's
+ * `skills/` second root; `Write` / `Edit` only accept the project root.
+ */
+export interface RoundFileTools {
+  Read(request: ReadFileRequest): RoundFileToolResult;
+  Glob(request: GlobFileRequest): RoundFileToolResult;
+  Grep(request: GrepFileRequest): RoundFileToolResult;
+  Write(request: WriteFileRequest): RoundFileToolResult;
+  Edit(request: EditFileRequest): RoundFileToolResult;
+}
+
+/**
+ * The round's workspace context (D3.7 / D5.1): the one project root, the
+ * effective backend, the local-shell flag (always 0 until #46) and the file
+ * tool face. `null` on a DM or a local channel / task with no root: no project
+ * file tools and no shell.
+ */
+export interface RoundWorkspaceContext {
+  root: string;
+  backend: WorkspaceBackend;
+  allow_local_shell: 0 | 1;
+  /** The member's read-only skills second root, when it exists. */
+  skills_root: string | null;
+  files: RoundFileTools;
 }
 
 /**
@@ -224,6 +327,13 @@ export interface RoundInput {
    * TeamAssign sub-round carries it too.
    */
   plan: RoundPlanFace | null;
+  /**
+   * The local workspace face (D5.1): `null` when the round has no project root
+   * (a DM, or a channel / task that never configured one), so no project file
+   * tools and no shell. A configured root that vanished or the docker backend
+   * fails the round before the adapter runs.
+   */
+  workspace: RoundWorkspaceContext | null;
   /** The seq of the message that triggered this wake. */
   baseSeq: number;
   reason: WakeReason;

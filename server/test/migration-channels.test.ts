@@ -83,6 +83,9 @@ test('migrating an empty data dir adds channel, target and target_member', async
       'deleted_at',
       'created_at',
       'updated_at',
+      'workspace_root',
+      'workspace_backend',
+      'allow_local_shell',
     ]);
     assert.deepEqual(columnNames(dataDir, 'target'), ['id', 'kind']);
     assert.deepEqual(columnNames(dataDir, 'target_member'), ['target_id', 'member_id']);

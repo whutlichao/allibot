@@ -431,6 +431,24 @@ export const ZH_CN = {
   'channel.config.leader.saveFailed': { text: '保存失败，请重试。', params: [] },
   'channel.config.leader.loading': { text: '正在读取频道成员…', params: [] },
   'channel.config.invalid': { text: '配置无效', params: [] },
+  'channel.config.workspace.root.label': { text: '项目根', params: [] },
+  'channel.config.workspace.root.placeholder': { text: '输入项目根的绝对路径', params: [] },
+  'channel.config.workspace.root.save': { text: '保存项目根', params: [] },
+  'channel.config.workspace.backend.label': { text: '工作区后端', params: [] },
+  'channel.config.workspace.backend.local': { text: '本地', params: [] },
+  'channel.config.workspace.backend.docker': { text: 'Docker', params: [] },
+  'channel.config.workspace.status.label': { text: '工作区状态', params: [] },
+  'workspace.status.available': { text: '可用', params: [] },
+  'workspace.status.reason.workspace-root-missing': { text: '项目根不存在或不可读', params: [] },
+  'workspace.status.reason.docker-unavailable': { text: 'Docker 后端不可用', params: [] },
+  'workspace.round.rootMissing': {
+    text: '工作区不可用：项目根不存在或不可读（workspace-root-missing）。',
+    params: [],
+  },
+  'workspace.round.dockerUnavailable': {
+    text: '工作区不可用：Docker 后端不可用（docker-unavailable），本轮不回落本地文件工具。',
+    params: [],
+  },
   // 运行面板（#38）：run 是取证面，不是消息；状态、reason、归属与时间都来自
   // `GET /api/targets/{id}/team-runs` 的同一份读数。
   'workspace.teamRuns.title': { text: '运行记录', params: [] },

@@ -1,5 +1,7 @@
+import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type {
+  RoundFileToolResult,
   RoundInput,
   RoundProvider,
   RoundResult,
@@ -56,7 +58,8 @@ export type ScriptedBehavior =
   | 'team-budget'
   | 'plan'
   | 'sop-create'
-  | 'sop-start';
+  | 'sop-start'
+  | 'workspace';
 
 export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'reply',
@@ -73,6 +76,7 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'plan',
   'sop-create',
   'sop-start',
+  'workspace',
 ];
 
 export interface ScriptedProviderOptions {
@@ -191,6 +195,8 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
           return await teamAssignResult(input, options, callReport, true);
         case 'plan':
           return await planResult(input, options, callReport);
+        case 'workspace':
+          return workspaceResult(input, options, callReport);
         case 'sop-create':
         case 'sop-start':
           // The member face has no SOP write tool (D4.2): the double states
@@ -421,6 +427,128 @@ function sopUnavailableResult(
         teamReport(input, options),
     ],
   };
+}
+
+
+/**
+ * The double's project-root file-tool behaviour (#42 / D5.1). It calls the
+ * round's file-tool face in a fixed order over fixtures a process-level test
+ * controls (`notes.txt`, `sub/`, an `escape` symlink, an outside file next to
+ * the root and the member's `skills/`), then reports each result in the reply.
+ * The double never touches the filesystem itself: every read / write / edit is
+ * the production face, so an escaping path is a tool error here exactly as it
+ * is for a model.
+ *
+ * A round with no project root reports `available:false` and its actual tool
+ * set; the test reads that as "no file tools and no shell".
+ */
+function workspaceResult(
+  input: RoundInput,
+  options: ScriptedProviderOptions,
+  callReport: string,
+): RoundResult {
+  const toolsLine = `[workspace-tools] ${input.tools.length === 0 ? '-' : input.tools.join(',')}`;
+  const workspace = input.workspace;
+  if (workspace === null) {
+    return {
+      verdict: 'replied',
+      replies: [
+        `[workspace] available:false${callReport}\n${toolsLine}` +
+          teamReport(input, options),
+      ],
+    };
+  }
+
+  const files = workspace.files;
+  const outside = path.join(path.dirname(workspace.root), 'outside.txt');
+  const lines: string[] = [
+    `[workspace] root:${workspace.root} backend:${workspace.backend}` +
+      ` shell:${workspace.allow_local_shell}`,
+    reportFileCall('workspace-read', files.Read({ path: 'notes.txt' })),
+    reportFileCall('workspace-glob', files.Glob({ pattern: '**/*.txt' })),
+    reportFileCall('workspace-grep', files.Grep({ pattern: 'NEEDLE' })),
+    reportFileCall(
+      'workspace-absolute-inside',
+      files.Read({ path: path.join(workspace.root, 'notes.txt') }),
+    ),
+    reportFileCall(
+      'workspace-write',
+      files.Write({ path: 'written.txt', content: 'written-by-tool' }),
+    ),
+    reportFileCall(
+      'workspace-edit',
+      files.Edit({
+        path: 'written.txt',
+        old_string: 'written-by-tool',
+        new_string: 'edited-by-tool',
+      }),
+    ),
+    reportFileCall('workspace-reread', files.Read({ path: 'written.txt' })),
+    reportFileCall('workspace-dotdot', files.Read({ path: '../outside.txt' })),
+    reportFileCall('workspace-absolute', files.Read({ path: outside })),
+    reportFileCall('workspace-symlink', files.Read({ path: 'escape/outside.txt' })),
+  ];
+
+  if (workspace.skills_root !== null) {
+    const skills = workspace.skills_root;
+    lines.push(
+      reportFileCall(
+        'workspace-skills-read',
+        files.Read({ path: path.join(skills, 'demo', 'SKILL.md') }),
+      ),
+      reportFileCall(
+        'workspace-skills-glob',
+        files.Glob({ pattern: '**/*.md', path: skills }),
+      ),
+      reportFileCall(
+        'workspace-skills-grep',
+        files.Grep({ pattern: 'SKILL-NEEDLE', path: skills }),
+      ),
+      reportFileCall(
+        'workspace-skills-write',
+        files.Write({ path: path.join(skills, 'demo', 'SKILL.md'), content: 'hacked' }),
+      ),
+      reportFileCall(
+        'workspace-skills-edit',
+        files.Edit({
+          path: path.join(skills, 'demo', 'SKILL.md'),
+          old_string: 'SKILL-NEEDLE',
+          new_string: 'hacked',
+        }),
+      ),
+    );
+  } else {
+    lines.push('[workspace-skills] absent');
+  }
+  lines.push(toolsLine);
+  return {
+    verdict: 'replied',
+    replies: [`${lines.join('\n')}${callReport}${teamReport(input, options)}`],
+  };
+}
+
+/** The double's readable line for one file-tool result (never production copy). */
+function reportFileCall(label: string, result: RoundFileToolResult): string {
+  if (!result.ok) {
+    return `[${label}] error:${result.error ?? 'unknown'}`;
+  }
+  const parts = [`[${label}] ok`];
+  if (result.path !== undefined) {
+    parts.push(`path:${result.path}`);
+  }
+  if (result.paths !== undefined) {
+    parts.push(`paths:${result.paths.join(',')}`);
+  }
+  if (result.matches !== undefined) {
+    parts.push(`matches:${result.matches.length}`);
+  }
+  if (result.replacements !== undefined) {
+    parts.push(`replacements:${result.replacements}`);
+  }
+  if (result.content !== undefined) {
+    parts.push(`content:${result.content.replaceAll('\n', ' ').trimEnd()}`);
+  }
+  return parts.join(' ');
 }
 
 /** The double's readable line for one tool result (never production copy). */

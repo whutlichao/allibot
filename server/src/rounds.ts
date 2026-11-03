@@ -11,6 +11,7 @@ import type {
   RoundResult,
   RoundTargetKind,
   RoundTeamContext,
+  RoundWorkspaceContext,
   TeamAssignRequest,
   TeamAssignToolResult,
   WakeReason,
@@ -35,6 +36,11 @@ import { createPlanFace } from './plans.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
+import { createRoundFileTools } from './workspace-files.js';
+import {
+  readRoundWorkspaceBinding,
+  readRoundWorkspaceFailure,
+} from './workspace-root.js';
 import {
   readTeamMemberAvailability,
   readTeamTargetState,
@@ -881,6 +887,37 @@ async function executeTeamAssignment(
     };
   }
 
+  const workspaceFailure = readRoundWorkspaceFailure(db, request.member_id, team.targetId);
+  if (workspaceFailure !== null) {
+    const reason = tFromDb(
+      db,
+      workspaceFailure.backend === 'docker'
+        ? 'workspace.round.dockerUnavailable'
+        : 'workspace.round.rootMissing',
+    );
+    const assignment = insertFinalTeamAssignment(db, {
+      teamRunId: run.id,
+      targetId: team.targetId,
+      taskId: team.taskId,
+      memberId: request.member_id,
+      jumpConsumed: 0,
+      state: 'failed',
+      reason,
+    });
+    publishTeamAssignment(assignment);
+    return {
+      ok: false,
+      assignment_id: assignment.id,
+      member_id: request.member_id,
+      state: 'failed',
+      jump_consumed: 0,
+      reply_excerpt: null,
+      reason,
+      code: 'target_unavailable',
+      output: null,
+    };
+  }
+
   const availability = readTeamMemberAvailability(
     db,
     team.channelId,
@@ -1071,6 +1108,7 @@ function readAssignmentRoundInput(
     throw new Error(`assignment member not found: ${params.memberId}`);
   }
   const targetKind: RoundTargetKind = params.team.targetKind;
+  const workspace = readRoundWorkspace(db, member.id, params.team.targetId);
   const messages = readContextWindow(db, params.team.targetId, 'window');
   const memories = recallForRound(db, member.id, params.team.targetId, messages);
   const prompt = composeSystemPrompt(db, member, targetKind, false, params.reason, memories, {
@@ -1084,8 +1122,17 @@ function readAssignmentRoundInput(
     channelMode: 'team',
     // A TeamAssign sub-round is a team-target member round, so the four Plan
     // tools are part of its tool set too (D4.1).
-    tools: readRoundTools(db, member.id, params.team.targetId, targetKind, false, true),
+    tools: readRoundTools(
+      db,
+      member.id,
+      params.team.targetId,
+      targetKind,
+      false,
+      true,
+      workspace !== null,
+    ),
     plan: createPlanFace(db, params.team.targetId, member.id),
+    workspace,
     team: {
       leader_member_id:
         params.team.leaderMemberId.length === 0 ? null : params.team.leaderMemberId,
@@ -1104,6 +1151,41 @@ function readAssignmentRoundInput(
     memories,
     systemPrompt: prompt.systemPrompt,
     promptSections: prompt.sections,
+  };
+}
+
+/**
+ * The round's local workspace face (D5.1 / D5.3). A configured root that has
+ * disappeared and the docker backend are readable round failures before the
+ * adapter runs: zero tool calls, no local fallback. A DM or a local channel /
+ * task without a root simply has no workspace face.
+ */
+function readRoundWorkspace(
+  db: Database.Database,
+  memberId: string,
+  targetId: string,
+): RoundWorkspaceContext | null {
+  const failure = readRoundWorkspaceFailure(db, memberId, targetId);
+  if (failure !== null) {
+    throw new Error(
+      tFromDb(
+        db,
+        failure.backend === 'docker'
+          ? 'workspace.round.dockerUnavailable'
+          : 'workspace.round.rootMissing',
+      ),
+    );
+  }
+  const binding = readRoundWorkspaceBinding(db, memberId, targetId);
+  if (binding === null) {
+    return null;
+  }
+  return {
+    root: binding.root,
+    backend: 'local',
+    allow_local_shell: binding.allowLocalShell,
+    skills_root: binding.skillsRoot,
+    files: createRoundFileTools({ root: binding.root, skillsRoot: binding.skillsRoot }),
   };
 }
 
@@ -1171,7 +1253,16 @@ function readRoundInput(
   // is the Plan owner, so the same face serves the leader and a plain member.
   const planAvailable =
     targetKind === 'task' || (targetKind === 'channel' && teamState !== null);
-  const tools = readRoundTools(db, member.id, wake.targetId, targetKind, isLeader, planAvailable);
+  const workspace = readRoundWorkspace(db, member.id, wake.targetId);
+  const tools = readRoundTools(
+    db,
+    member.id,
+    wake.targetId,
+    targetKind,
+    isLeader,
+    planAvailable,
+    workspace !== null,
+  );
   const plan = planAvailable ? createPlanFace(db, wake.targetId, member.id) : null;
   const team: RoundTeamContext | null =
     teamState === null
@@ -1202,6 +1293,7 @@ function readRoundInput(
     tools,
     team,
     plan,
+    workspace,
     baseSeq: wake.fromSeq,
     reason: wake.reason,
     discipline,
@@ -1227,6 +1319,7 @@ function readRoundTools(
   targetKind: RoundTargetKind,
   isLeader: boolean,
   planAvailable: boolean,
+  fileToolsAvailable: boolean,
 ): readonly string[] {
   const tools: string[] = [];
   if (isLeader) {
@@ -1244,6 +1337,11 @@ function readRoundTools(
     // The tool names are product names; the adapter calls the same face under
     // its `RoundInput.plan`.
     tools.push('TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate');
+  }
+  if (fileToolsAvailable) {
+    // A local round with a project root gets exactly the restricted file tools;
+    // there is no shell tool in this ticket (`allow_local_shell=0`).
+    tools.push('Read', 'Glob', 'Grep', 'Write', 'Edit');
   }
   return tools;
 }
