@@ -82,6 +82,7 @@ export const ZH_CN = {
   'wake.mention': { text: '本轮由个人提及唤醒', params: [] },
   'wake.claim': { text: '本轮由认领唤醒', params: [] },
   'wake.continue': { text: '本轮由自动续跑唤醒', params: [] },
+  'wake.teamChange': { text: '本轮由任务变化唤醒', params: [] },
   'round.replied': { text: '已回复', params: [] },
   'round.ignored': { text: '自判忽略：本轮没有需要回应的话', params: [] },
   'round.failed': { text: '处理失败，需要排查', params: [] },
@@ -93,6 +94,10 @@ export const ZH_CN = {
   'round.mandatory.claim': { text: '本轮由认领唤醒：这是确定信号，必须回应', params: [] },
   'round.mandatory.humanMessage': { text: '本轮由人类消息唤醒：这是确定信号，必须回应', params: [] },
   'round.mandatory.continue': { text: '本轮由自动续跑唤醒：这是确定信号，必须回应', params: [] },
+  'round.mandatory.teamChange': {
+    text: '本轮由任务变化唤醒：这是确定信号，必须回应',
+    params: [],
+  },
   'round.silent.allowed': {
     text: '本轮不是确定信号：结构化沉默是正常协议结果，不按失败收口',
     params: [],
@@ -156,6 +161,12 @@ export const ZH_CN = {
   },
   'prompt.humanMessage.mandatory': {
     text: '这条消息来自人类（owner）：人类消息是确定信号，必须回应。',
+    params: [],
+  },
+  // 队长被任务变化唤醒的那一轮（#38 / D3.2）：任务变化是确定信号，与人类
+  // 消息、认领、提及的可读文案分开，不能写下没发生过的来源。
+  'prompt.teamChange.mandatory': {
+    text: '这次唤醒来自任务变化（建任务 / 改派 / 转派）：作为队长，你必须回应并推进这件事。',
     params: [],
   },
 

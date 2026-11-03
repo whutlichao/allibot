@@ -20,7 +20,13 @@
  * diagnostics only; it is never the discipline that decides whether the Agent
  * must answer.
  */
-export const WAKE_REASONS = ['channel-message', 'mention', 'claim', 'continue'] as const;
+export const WAKE_REASONS = [
+  'channel-message',
+  'mention',
+  'claim',
+  'continue',
+  'team-change',
+] as const;
 export type WakeReason = (typeof WAKE_REASONS)[number];
 
 /** The three target kinds; a DM round reads its own one-to-one prompt. */
@@ -72,7 +78,7 @@ export interface RoundMessage {
 export interface RoundDiscipline {
   definite: boolean;
   /** The definite signal that fired; `null` when `definite` is false. */
-  signal: 'mention' | 'claim' | 'human-message' | 'continue' | null;
+  signal: 'mention' | 'claim' | 'human-message' | 'continue' | 'team-change' | null;
 }
 
 /** The round's input: the member, the context it reads, and its discipline. */
