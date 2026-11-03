@@ -3,12 +3,12 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "dist/main.js",
+  "main": "dist/cli.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json",
-    "test": "node --test test/process.test.ts",
-    "start": "node dist/main.js"
+    "test": "node --test test/*.test.ts",
+    "start": "node dist/cli.js serve"
   },
   "dependencies": {
     "@ag-ui/client": "1.0.3",
