@@ -43,7 +43,7 @@ SELECT id, message_id, filename, mime, size, storage_path, created_at
 FROM attachment`;
 
 /**
- * `POST /api/attachments`: read one multipart file part, write its bytes under
+ * `POST /api/attachments`: read the multipart `file` part, write its bytes under
  * `<data dir>/attachments/<storage_path>` and record the metadata as an unbound
  * draft. The user filename is metadata only; the storage path is an opaque
  * server-chosen name, so a filename can never steer where bytes land.

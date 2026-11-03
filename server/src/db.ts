@@ -167,12 +167,12 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
     to: 5,
     apply(db) {
       db.exec(`
-        -- An attachment is the metadata of one uploaded file object. The bytes
-        -- live in the data directory under attachments/, never in this file.
-        -- message_id is the binding: NULL is an upload draft that no read path
-        -- exposes, and the message write path sets it inside its own
-        -- transaction. storage_path is an opaque name chosen by the server, so
-        -- a user filename never decides where bytes land.
+        -- An attachment is the metadata of one object that rides with a
+        -- message. The bytes live in the data directory under attachments/,
+        -- never in this file. message_id is the binding: NULL is an upload
+        -- draft that no read path exposes, and the message write path sets it
+        -- inside its own transaction. storage_path is an opaque name chosen by
+        -- the server, so a user filename never decides where bytes land.
         CREATE TABLE attachment (
           id TEXT PRIMARY KEY,
           message_id TEXT REFERENCES message (id),
