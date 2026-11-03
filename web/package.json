@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json && vite build",
     "typecheck": "tsc -p tsconfig.test.json",
     "test:visual-contract": "node --test test/visual-contract.test.ts",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:agui-contract": "node --import ./test/support/register-css.mjs --test test/copilotkit-contract.test.ts"
   },
   "dependencies": {
     "@copilotkit/react-core": "1.83.0",
