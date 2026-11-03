@@ -8,12 +8,25 @@ import {
 } from 'node:http';
 import { ApiFailure } from './api-error.js';
 import {
+  archiveChannel,
+  createChannel,
+  deleteChannel,
+  getChannel,
+  listChannels,
+  updateChannel,
+} from './channels.js';
+import {
   createAgent,
   getAgent,
   listAgents,
   softDeleteAgent,
   updateAgent,
 } from './members.js';
+import {
+  joinChannel,
+  listChannelMembers,
+  listTargetMembers,
+} from './target-members.js';
 
 export const HOST = '127.0.0.1';
 
@@ -76,8 +89,79 @@ export async function startHttpServer(
 }
 
 const AGENT_ID = '([^/]+)';
+const CHANNEL_ID = '([^/]+)';
 
 const ROUTES: readonly Route[] = [
+  {
+    method: 'GET',
+    pattern: /^\/api\/channels$/,
+    handle: async (_request, response, { db }) => {
+      sendJson(response, 200, { channels: listChannels(db) });
+    },
+  },
+  {
+    method: 'POST',
+    pattern: /^\/api\/channels$/,
+    handle: async (request, response, { db }) => {
+      sendJson(response, 201, createChannel(db, await readJsonBody(request)));
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}$`),
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, getChannel(db, decodeId(params[0])));
+    },
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}$`),
+    handle: async (request, response, { db }, ...params) => {
+      sendJson(
+        response,
+        200,
+        updateChannel(db, decodeId(params[0]), await readJsonBody(request)),
+      );
+    },
+  },
+  {
+    method: 'DELETE',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}$`),
+    handle: async (_request, response, { db }, ...params) => {
+      deleteChannel(db, decodeId(params[0]));
+      response.writeHead(204);
+      response.end();
+    },
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}/archive$`),
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, archiveChannel(db, decodeId(params[0])));
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}/members$`),
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, { members: listChannelMembers(db, decodeId(params[0])) });
+    },
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}/members$`),
+    handle: async (request, response, { db }, ...params) => {
+      const result = joinChannel(db, decodeId(params[0]), await readJsonBody(request));
+      sendJson(response, 200, result);
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/targets/${CHANNEL_ID}/members$`),
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, { members: listTargetMembers(db, decodeId(params[0])) });
+    },
+  },
   {
     method: 'GET',
     pattern: /^\/api\/agents$/,
@@ -191,14 +275,15 @@ function parseIncludeDeleted(searchParams: URLSearchParams): boolean {
   throw ApiFailure.validation('include_deleted must be true or false');
 }
 
+/**
+ * Route captures are always present; the only real failure is a malformed
+ * percent-encoding, which reads as "that id does not exist".
+ */
 function decodeId(raw: string | undefined): string {
-  if (raw === undefined) {
-    throw ApiFailure.notFound('agent not found');
-  }
   try {
-    return decodeURIComponent(raw);
+    return decodeURIComponent(raw ?? '');
   } catch {
-    throw ApiFailure.notFound(`agent not found: ${raw}`);
+    throw ApiFailure.notFound(`malformed id: ${raw ?? ''}`);
   }
 }
 

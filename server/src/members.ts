@@ -152,18 +152,26 @@ export function updateAgent(db: Database.Database, id: string, body: unknown): A
 }
 
 /**
- * Soft delete only writes member.deleted_at. Message history, agent_config and
- * round results are deliberately left alone; cleanup of target_member belongs
- * to the channel ticket.
+ * Soft delete writes member.deleted_at and removes the member from every
+ * target (channel and task threads) by deleting its target_member rows. DM
+ * targets, messages, task history, agent_config and round results are
+ * deliberately left alone, and task.assignee_member_id is not rewritten.
  */
 export function softDeleteAgent(db: Database.Database, id: string): void {
-  const result = db
-    .prepare(
-      `UPDATE member SET deleted_at = ?
-        WHERE id = ? AND kind = 'agent' AND ${liveMemberClause()}`,
-    )
-    .run(new Date().toISOString(), id);
-  if (result.changes !== 1) {
+  const remove = db.transaction((): boolean => {
+    const result = db
+      .prepare(
+        `UPDATE member SET deleted_at = ?
+          WHERE id = ? AND kind = 'agent' AND ${liveMemberClause()}`,
+      )
+      .run(new Date().toISOString(), id);
+    if (result.changes !== 1) {
+      return false;
+    }
+    db.prepare('DELETE FROM target_member WHERE member_id = ?').run(id);
+    return true;
+  });
+  if (!remove()) {
     throw ApiFailure.notFound(`agent not found: ${id}`);
   }
 }

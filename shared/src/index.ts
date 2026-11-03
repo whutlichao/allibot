@@ -47,3 +47,27 @@ export interface AgentView {
   max_iterations: number;
   auto_claim: number;
 }
+
+/**
+ * A channel as the human face returns it. `archived_at` lets the client split
+ * the active segment from the archived one; a deleted channel never appears.
+ */
+export interface ChannelView {
+  id: string;
+  name: string;
+  description: string;
+  mode: string;
+  response_budget_limit: number;
+  archived_at: string | null;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A member of a channel (or any target), as the completion and panel views read it. */
+export interface TargetMemberView {
+  id: string;
+  kind: 'owner' | 'agent';
+  display_name: string;
+  avatar_slot: number;
+}

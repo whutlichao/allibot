@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export interface MigrationStep {
   readonly to: number;
@@ -69,6 +69,40 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
         `INSERT INTO member (id, kind, display_name, avatar_slot, deleted_at, created_at)
          VALUES (?, 'owner', ?, ?, NULL, ?)`,
       ).run(randomUUID(), OWNER_DISPLAY_NAME, OWNER_AVATAR_SLOT, new Date().toISOString());
+    },
+  },
+  {
+    to: 3,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE channel (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          mode TEXT NOT NULL CHECK (mode IN ('autonomous')),
+          response_budget_limit INTEGER NOT NULL DEFAULT 3 CHECK (response_budget_limit IN (3, 5, 10)),
+          archived_at TEXT,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        -- target is the scope key for messages, read positions, response budgets
+        -- and round results. A channel-type target is a shadow row reusing
+        -- channel.id: target.id == channel.id and kind = 'channel'.
+        CREATE TABLE target (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('channel', 'dm', 'task'))
+        );
+
+        -- The single membership ledger for every target kind. Channel members
+        -- are its rows read on a channel-type target.
+        CREATE TABLE target_member (
+          target_id TEXT NOT NULL REFERENCES target (id),
+          member_id TEXT NOT NULL REFERENCES member (id),
+          PRIMARY KEY (target_id, member_id)
+        );
+      `);
     },
   },
 ];
