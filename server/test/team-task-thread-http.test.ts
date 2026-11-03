@@ -448,6 +448,13 @@ test('an unusable leader leaves invalid-leader runs on create, reassign and thre
       [],
       'an invalid leader never creates an assignment',
     );
+    assert.equal(
+      readDatabase<{ used: number }>(fixture, 'SELECT used FROM target_budget').every(
+        (row) => row.used === 0,
+      ),
+      true,
+      'an invalid leader spends no budget (no wake ever reaches a jump)',
+    );
 
     const thread = messagesOf(fixture, task.targetId);
     assert.ok(thread.some((row) => row.body === '任务线程消息'), 'messages still land');
