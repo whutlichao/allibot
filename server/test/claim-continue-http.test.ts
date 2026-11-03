@@ -348,6 +348,15 @@ test('an available auto-claim Agent picks up a new task in one transaction and i
 
     const report = contextReport(String(agentReplies(thread)[0]?.['body']));
     assert.equal(report.thread, 'window', 'the claim round is a normal round, not an auto-continue');
+
+    // The next human message opens a new epoch: its own seq is the identity and
+    // the jump count starts over.
+    const human = await postMessage(fixture, targetId, { body: '下一世代的一句' });
+    assert.deepEqual(
+      budgetRow(fixture, targetId),
+      { epoch_seq: human['seq'], used: 0, limit_value: 3 },
+      'the next human message opens the next human epoch',
+    );
   } finally {
     await fixture.stop();
   }
