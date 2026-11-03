@@ -8,6 +8,12 @@ import {
 } from 'node:http';
 import { ApiFailure } from './api-error.js';
 import {
+  decideApproval,
+  getApproval,
+  listApprovals,
+  parseApprovalQuery,
+} from './approvals.js';
+import {
   maxUploadEnvelopeBytes,
   readAttachment,
   uploadAttachment,
@@ -21,6 +27,8 @@ import {
 } from './events.js';
 import {
   archiveChannel,
+  assertChannelReadable,
+  assertChannelWritable,
   createChannel,
   deleteChannel,
   getChannel,
@@ -59,6 +67,12 @@ import {
   listTargetMembers,
 } from './target-members.js';
 import { listPlans, parsePlanQuery } from './plans.js';
+import {
+  assertRuleScopeExists,
+  parsePermissionRuleSet,
+  readPermissionRules,
+  writePermissionRules,
+} from './permissions.js';
 import {
   createSopDefinition,
   getSopDefinition,
@@ -562,6 +576,79 @@ const ROUTES: readonly Route[] = [
     handle: async (_request, response, { db }, ...params) => {
       const provider = parseProviderParam(decodeId(params[0]));
       sendJson(response, 200, confirmProviderConsent(db, provider));
+    },
+  },
+  {
+    // The channel rule set (D2.3): a bare JSON array is the complete
+    // replacement; an empty array is valid and a same-content replay is
+    // idempotent. The write path validates every row before the transaction,
+    // so an invalid row leaves the old set untouched.
+    method: 'GET',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}/permission-rules$`),
+    handle: async (_request, response, { db }, ...params) => {
+      const id = decodeId(params[0]);
+      assertChannelReadable(db, id);
+      sendJson(response, 200, { rules: readPermissionRules(db, 'channel', id) });
+    },
+  },
+  {
+    method: 'PUT',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}/permission-rules$`),
+    handle: async (request, response, { db }, ...params) => {
+      const id = decodeId(params[0]);
+      const channel = assertChannelReadable(db, id);
+      assertChannelWritable(channel);
+      const rules = parsePermissionRuleSet(await readJsonBody(request));
+      sendJson(response, 200, { rules: writePermissionRules(db, 'channel', id, rules) });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/permission-rules$`),
+    handle: async (_request, response, { db }, ...params) => {
+      const id = decodeId(params[0]);
+      assertRuleScopeExists(db, 'agent', id);
+      sendJson(response, 200, { rules: readPermissionRules(db, 'agent', id) });
+    },
+  },
+  {
+    method: 'PUT',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/permission-rules$`),
+    handle: async (request, response, { db }, ...params) => {
+      const id = decodeId(params[0]);
+      assertRuleScopeExists(db, 'agent', id);
+      const rules = parsePermissionRuleSet(await readJsonBody(request));
+      sendJson(response, 200, { rules: writePermissionRules(db, 'agent', id, rules) });
+    },
+  },
+  {
+    // The approval list (D2.3): pending by default, `status=all` reads every
+    // state. It is a pure read: no message, no wake, no budget, no frame.
+    method: 'GET',
+    pattern: /^\/api\/approvals$/,
+    handle: async (request, response, { db }) => {
+      const query = parseApprovalQuery(
+        new URL(request.url ?? '/', `http://${HOST}`).searchParams,
+      );
+      sendJson(response, 200, { approvals: listApprovals(db, query) });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/approvals\/([^/]+)$/,
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, getApproval(db, decodeId(params[0])));
+    },
+  },
+  {
+    // The one approval decision (D2.3 / D5.6): pending only; a same decision
+    // replay is 200, the opposite is 409, an unknown call is 400. `rules?` is
+    // written in the same transaction as the decision.
+    method: 'POST',
+    pattern: /^\/api\/approvals\/([^/]+)$/,
+    handle: async (request, response, { db }, ...params) => {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, decideApproval(db, decodeId(params[0]), body));
     },
   },
   {

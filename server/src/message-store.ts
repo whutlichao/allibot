@@ -21,6 +21,12 @@ import { maxSeqForTarget, readTargetKind } from './sql.js';
  * dispatch wakes or not.
  */
 export interface MessageRowInput {
+  /**
+   * The prescribed row id. A round allocates its reply id before it runs (an
+   * approval uses it as `reply_id`); when the round lands a message, that id
+   * is the message id. System / human writes omit it and get a fresh one.
+   */
+  id?: string;
   targetId: string;
   kind: MessageKind;
   /** Defaults to the owner; a system event names the member it is about. */
@@ -54,7 +60,7 @@ export function insertMessageRow(
   input: MessageRowInput,
 ): { id: string; seq: number } {
   const author = readAuthorIdentity(db, input.authorMemberId ?? null);
-  const id = randomUUID();
+  const id = input.id ?? randomUUID();
   const seq = maxSeqForTarget(db, input.targetId) + 1;
   const taskRef = resolveTaskRef(db, input.targetId, input.taskRef ?? null);
   db.prepare(

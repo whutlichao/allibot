@@ -1,5 +1,6 @@
 import type { WorkspaceView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
+import { countPendingApprovals } from './approvals.js';
 import { listChannels } from './channels.js';
 import { listDms } from './dms.js';
 import { listAgents, readOwner } from './members.js';
@@ -42,5 +43,6 @@ export function readWorkspace(
     unread_by_target: unread.unread_by_target,
     settings: getSettings(db),
     status_points: readStatusPoints(db, agents, env, inFlight),
+    pending_approvals: countPendingApprovals(db),
   };
 }

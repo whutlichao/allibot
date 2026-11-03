@@ -4,11 +4,13 @@ import {
   WORKSPACE_BACKENDS,
   type AgentView,
   type OwnerView,
+  type PermissionMode,
   type WorkspaceBackend,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { publishMemberStatus, publishWorkspaceChanged } from './events.js';
+import { DEFAULT_PERMISSION_MODE, isPermissionMode, requirePermissionMode } from './permissions.js';
 import { credentialStatus, parseModelIdentifier } from './providers.js';
 import type { InFlightRounds } from './rounds.js';
 import { readStatusPoint } from './status.js';
@@ -75,6 +77,7 @@ interface AgentRow {
   max_iterations: number;
   auto_claim: number;
   workspace_backend: string | null;
+  permission_mode: string | null;
 }
 
 const AGENT_SELECT = `
@@ -91,7 +94,8 @@ SELECT m.id,
        c.compression_threshold,
        c.max_iterations,
        c.auto_claim,
-       c.workspace_backend
+       c.workspace_backend,
+       c.permission_mode
 FROM member m
 JOIN agent_config c ON c.member_id = m.id
 WHERE m.kind = 'agent'`;
@@ -189,7 +193,7 @@ export function updateAgent(
       `UPDATE agent_config
           SET role = ?, model = ?, system_prompt = ?, enabled = ?, context_window = ?,
               compression_threshold = ?, max_iterations = ?, auto_claim = ?,
-              workspace_backend = ?
+              workspace_backend = ?, permission_mode = ?
         WHERE member_id = ?`,
     ).run(
       patch.role ?? current.role,
@@ -203,6 +207,7 @@ export function updateAgent(
       patch.workspaceBackend !== undefined
         ? patch.workspaceBackend
         : current.workspace_backend,
+      patch.permissionMode !== undefined ? patch.permissionMode : current.permission_mode,
       id,
     );
     if (patch.displayName !== undefined) {
@@ -277,6 +282,7 @@ interface PatchInput {
   maxIterations?: number;
   autoClaim?: number;
   workspaceBackend?: WorkspaceBackend | null;
+  permissionMode?: PermissionMode | null;
 }
 
 const FIELD_KEYS = {
@@ -290,6 +296,7 @@ const FIELD_KEYS = {
   max_iterations: 'maxIterations',
   auto_claim: 'autoClaim',
   workspace_backend: 'workspaceBackend',
+  permission_mode: 'permissionMode',
 } as const;
 
 type FieldKey = keyof typeof FIELD_KEYS;
@@ -355,6 +362,9 @@ function parsePatchInput(body: unknown): PatchInput {
   }
   if (record['workspace_backend'] !== undefined) {
     patch.workspaceBackend = optionalWorkspaceBackend(record['workspace_backend']);
+  }
+  if (record['permission_mode'] !== undefined) {
+    patch.permissionMode = optionalPermissionMode(record['permission_mode']);
   }
   return patch;
 }
@@ -451,6 +461,15 @@ function optionalInteger(
  * `null` clears the override (follow the channel); a backend string sets it.
  * An omitted field is `undefined` and leaves the stored value alone.
  */
+/** `null` clears the Agent override (follow the channel / default). */
+function optionalPermissionMode(value: unknown): PermissionMode | null {
+  if (value === null) {
+    return null;
+  }
+  const mode = requirePermissionMode(value);
+  return mode;
+}
+
 function optionalWorkspaceBackend(value: unknown): WorkspaceBackend | null {
   if (value === null) {
     return null;
@@ -529,6 +548,10 @@ function toAgentView(
       (WORKSPACE_BACKENDS as readonly string[]).includes(row.workspace_backend)
         ? (row.workspace_backend as WorkspaceBackend)
         : null,
+    permission_mode: isPermissionMode(row.permission_mode) ? row.permission_mode : null,
+    effective_permission_mode: isPermissionMode(row.permission_mode)
+      ? row.permission_mode
+      : DEFAULT_PERMISSION_MODE,
   };
 }
 

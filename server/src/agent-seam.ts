@@ -1,4 +1,5 @@
 import type {
+  PermissionMode,
   PlanTaskStatus,
   PlanTaskView,
   TeamAssignmentState,
@@ -70,6 +71,7 @@ export type FileToolErrorCode =
   | 'is-directory'
   | 'invalid-pattern'
   | 'old-string-not-found'
+  | 'denied'
   | 'io-error';
 
 /** One grep hit: a path relative to the searched root, its 1-based line and the line text. */
@@ -135,11 +137,45 @@ export interface EditFileRequest {
  * `skills/` second root; `Write` / `Edit` only accept the project root.
  */
 export interface RoundFileTools {
-  Read(request: ReadFileRequest): RoundFileToolResult;
-  Glob(request: GlobFileRequest): RoundFileToolResult;
-  Grep(request: GrepFileRequest): RoundFileToolResult;
-  Write(request: WriteFileRequest): RoundFileToolResult;
-  Edit(request: EditFileRequest): RoundFileToolResult;
+  Read(request: ReadFileRequest): Promise<RoundFileToolResult>;
+  Glob(request: GlobFileRequest): Promise<RoundFileToolResult>;
+  Grep(request: GrepFileRequest): Promise<RoundFileToolResult>;
+  Write(request: WriteFileRequest): Promise<RoundFileToolResult>;
+  Edit(request: EditFileRequest): Promise<RoundFileToolResult>;
+}
+
+/** One gate decision as an adapter may preview it before calling a tool. */
+export interface RoundPermissionCheck {
+  decision: 'allow' | 'deny' | 'ask';
+  reason: string;
+}
+
+/**
+ * The permission gate's read-only preview face (D5.5). It exists so an adapter
+ * (the scripted double today, the model adapter's tool loop later) can classify
+ * a call — including the local-shell hook and MCP names — without executing it.
+ * The file tools apply the same gate themselves; this face writes nothing and
+ * never registers an approval.
+ */
+export interface RoundPermissionRequest {
+  tool_name: string;
+  pattern: string;
+  /** A stable model / adapter call id; a retry re-registers the same call. */
+  tool_call_id?: string;
+  root_internal_write?: boolean;
+  /** The (masked at write time) tool arguments an approval would carry. */
+  arguments?: Record<string, unknown>;
+}
+
+export interface RoundPermissionFace {
+  mode: PermissionMode;
+  /** Classify a call without executing it or registering an approval. */
+  check(request: RoundPermissionRequest): RoundPermissionCheck;
+  /**
+   * Apply the gate to one non-file-tool call (the local shell / MCP hooks).
+   * An ask waits for the human decision; a denial is `denied`.
+   */
+  authorize(request: RoundPermissionRequest): Promise<'allow' | 'denied'>;
 }
 
 /**
@@ -151,9 +187,13 @@ export interface RoundFileTools {
 export interface RoundWorkspaceContext {
   root: string;
   backend: WorkspaceBackend;
+  /** The effective permission mode for this target context (D5.5). */
+  permission_mode: PermissionMode;
   allow_local_shell: 0 | 1;
   /** The member's read-only skills second root, when it exists. */
   skills_root: string | null;
+  /** The tool gate preview; the file tools apply the gate themselves. */
+  permission: RoundPermissionFace;
   files: RoundFileTools;
 }
 

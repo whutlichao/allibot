@@ -157,6 +157,7 @@ test('GET /api/workspace returns the complete reading in a fresh workspace', asy
       Object.keys(workspace).sort(),
       [
         'owner',
+        'pending_approvals',
         'agents',
         'channels',
         'dms',

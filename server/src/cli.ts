@@ -1,6 +1,7 @@
 import { t } from '@allibot/shared';
 import type { Server } from 'node:http';
 import { parseCliArgs, type CliOptions } from './args.js';
+import { expirePendingApprovals, setApprovalTimeoutMs } from './approvals.js';
 import { setClock } from './clock.js';
 import { tFromDb } from './copy.js';
 import { databasePath, resolveDataDir } from './data-dir.js';
@@ -44,6 +45,7 @@ async function run(argv: readonly string[]): Promise<number> {
     const instant = options.fixedClock;
     setClock(() => new Date(instant));
   }
+  setApprovalTimeoutMs(options.approvalTimeoutMs);
   const { command, port } = options;
   const resolution = resolveDataDir(options.dataDir);
   if (resolution.origin === 'legacy') {
@@ -100,6 +102,9 @@ async function run(argv: readonly string[]): Promise<number> {
   // previous process never concluded. It closes as failed/interrupted before
   // the server accepts work; nothing is replayed or refunded.
   closeInterruptedTeamRuns(db);
+  // 审批重启收口 (D5.6): a pending approval belongs to a round the previous
+  // process never concluded. It closes `expired`; no waiter survives a restart.
+  expirePendingApprovals(db);
   // 提醒到点 is a backend fact, not a request: the process ticks on its own.
   // The first pass runs now, so a restart catches up overdue reminders.
   const stopReminders = startReminderScheduler(db, options.reminderTickMs);

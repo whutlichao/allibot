@@ -22,6 +22,8 @@ export const SSE_EVENT_TYPES = [
   'workspace.changed',
   'team_assignment',
   'plan_update',
+  'approval.requested',
+  'approval.resolved',
 ] as const;
 
 export type SseEventType = (typeof SSE_EVENT_TYPES)[number];
@@ -193,6 +195,31 @@ export function publishPlanUpdate(update: {
       occurred_at: update.occurred_at,
     },
   });
+}
+
+
+/**
+ * The frame an approval batch produces (D2.5). `tool_call_ids` names only the
+ * calls this frame is about: a reopened batch publishes the new calls, not the
+ * history. The payload carries no tool arguments, so no masked / raw parameter
+ * can leak through it.
+ */
+export function publishApprovalRequested(payload: ApprovalSsePayload): void {
+  eventHub.publish({ event: 'approval.requested', data: { ...payload } });
+}
+
+/** The frame a batch closure produces: confirmed / denied / failed / expired. */
+export function publishApprovalResolved(payload: ApprovalSsePayload): void {
+  eventHub.publish({ event: 'approval.resolved', data: { ...payload } });
+}
+
+export interface ApprovalSsePayload {
+  reply_id: string;
+  context_kind: string;
+  context_id: string | null;
+  target_id: string | null;
+  status: string;
+  tool_call_ids: string[];
 }
 
 /**
