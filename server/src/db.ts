@@ -7,7 +7,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 export interface MigrationStep {
   readonly to: number;
@@ -836,6 +836,27 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
         BEGIN
           SELECT RAISE(ABORT, 'sop_run changes an immutable field');
         END;
+      `);
+    },
+  },
+  {
+    // The workspace ticket (#42 / T17) adds the channel-scoped project root,
+    // the workspace backend (Agent override = NULL follows the channel) and
+    // the local-shell switch. The shell switch is only a column in this
+    // ticket: shell execution arrives later (#46), so every existing row keeps
+    // the default 0. `workspace_root` stays nullable; the write path, not the
+    // database, validates that a non-NULL value is an absolute, existing
+    // directory outside the data directory and Agent homes.
+    to: 18,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE channel ADD COLUMN workspace_root TEXT;
+        ALTER TABLE channel ADD COLUMN workspace_backend TEXT NOT NULL DEFAULT 'local'
+          CHECK (workspace_backend IN ('local', 'docker'));
+        ALTER TABLE channel ADD COLUMN allow_local_shell INTEGER NOT NULL DEFAULT 0
+          CHECK (allow_local_shell IN (0, 1));
+        ALTER TABLE agent_config ADD COLUMN workspace_backend TEXT
+          CHECK (workspace_backend IS NULL OR workspace_backend IN ('local', 'docker'));
       `);
     },
   },
