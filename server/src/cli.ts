@@ -1,5 +1,5 @@
 import type { Server } from 'node:http';
-import { parseCliArgs } from './args.js';
+import { parseCliArgs, type CliOptions } from './args.js';
 import {
   databasePath,
   legacyDataDirWarning,
@@ -13,6 +13,8 @@ import {
 } from './db.js';
 import { HOST, startHttpServer } from './http.js';
 import { acquireDataDirLock } from './lock.js';
+import { createInFlightRounds } from './rounds.js';
+import { createScriptedProvider } from './scripted-provider.js';
 
 const SHUTDOWN_GRACE_MS = 5_000;
 
@@ -26,8 +28,9 @@ export async function main(argv: readonly string[]): Promise<number> {
 }
 
 async function run(argv: readonly string[]): Promise<number> {
-  const { command, dataDir: explicitDataDir, port } = parseCliArgs(argv);
-  const resolution = resolveDataDir(explicitDataDir);
+  const options = parseCliArgs(argv);
+  const { command, port } = options;
+  const resolution = resolveDataDir(options.dataDir);
   if (resolution.origin === 'legacy') {
     console.error(legacyDataDirWarning(resolution.dataDir));
   }
@@ -59,14 +62,36 @@ async function run(argv: readonly string[]): Promise<number> {
   const lock = await acquireDataDirLock(resolution.dataDir);
   const db = openDatabase(resolution.dataDir);
   try {
-    const { server, port: boundPort } = await startHttpServer(port, db, resolution.dataDir);
+    const orchestration = createOrchestration(options);
+    const { server, port: boundPort } = await startHttpServer(port, db, resolution.dataDir, {
+      orchestration,
+    });
     console.log(`allibot server listening on http://${HOST}:${boundPort}`);
+    console.log(`allibot member-face adapter: ${orchestration.provider.name}`);
 
     return await waitForShutdown(server);
   } finally {
     db.close();
     await lock.release();
   }
+}
+
+/**
+ * The member-face adapter is selected at startup, exactly once, and handed to
+ * the HTTP layer. A later ticket adds the real provider adapter here; nothing
+ * downstream branches on which one is live.
+ */
+function createOrchestration(options: CliOptions): {
+  provider: ReturnType<typeof createScriptedProvider>;
+  inFlight: ReturnType<typeof createInFlightRounds>;
+} {
+  return {
+    provider: createScriptedProvider({
+      behavior: options.scriptedProvider,
+      delayMs: options.scriptedDelayMs,
+    }),
+    inFlight: createInFlightRounds(),
+  };
 }
 
 function waitForShutdown(server: Server): Promise<number> {

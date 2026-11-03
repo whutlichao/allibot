@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import { SCRIPTED_BEHAVIORS, type ScriptedBehavior } from './scripted-provider.js';
 
 export type CliCommand = 'serve' | 'migrate';
 
@@ -6,10 +7,29 @@ export interface CliOptions {
   command: CliCommand;
   dataDir: string | undefined;
   port: number;
+  /**
+   * The member-face adapter injected through startup (D4.3). The scripted
+   * double is the only adapter this ticket ships; a real provider adapter is
+   * a later ticket's selection at this same place, never a production branch
+   * on a test environment variable.
+   */
+  scriptedProvider: ScriptedBehavior;
+  /** How long the scripted `delay` behaviour holds one round. */
+  scriptedDelayMs: number;
 }
 
 const DEFAULT_PORT = 3000;
-const USAGE = 'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>]';
+/**
+ * Until the real provider adapter lands (D4.3), the only member-face adapter is
+ * the scripted double. Its default is `ignore`: a server started without an
+ * explicit `--scripted-provider` runs every round exactly once and lands no
+ * invented reply. The startup line names the adapter, so the choice is visible.
+ */
+const DEFAULT_SCRIPTED_PROVIDER: ScriptedBehavior = 'ignore';
+const DEFAULT_SCRIPTED_DELAY_MS = 1500;
+const USAGE =
+  'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
+  '[--scripted-provider <reply|ignore|fail|delay>] [--scripted-delay-ms <ms>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -21,6 +41,8 @@ export function parseCliArgs(
       'data-dir': { type: 'string' },
       port: { type: 'string' },
       migrate: { type: 'boolean' },
+      'scripted-provider': { type: 'string' },
+      'scripted-delay-ms': { type: 'string' },
     },
     strict: true,
     allowPositionals: true,
@@ -34,6 +56,8 @@ export function parseCliArgs(
     command: resolveCommand(values.migrate === true, positionals[0]),
     dataDir: values['data-dir'] ?? env.allibot_DATA_DIR,
     port: parsePort(values.port ?? String(DEFAULT_PORT)),
+    scriptedProvider: parseScriptedProvider(values['scripted-provider']),
+    scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
   };
 }
 
@@ -62,4 +86,27 @@ function parsePort(raw: string): number {
     throw new Error(`--port must be between 0 and 65535, got ${raw}`);
   }
   return port;
+}
+
+function parseScriptedProvider(raw: string | undefined): ScriptedBehavior {
+  if (raw === undefined) {
+    return DEFAULT_SCRIPTED_PROVIDER;
+  }
+  const behavior = SCRIPTED_BEHAVIORS.find((candidate) => candidate === raw);
+  if (behavior === undefined) {
+    throw new Error(
+      `invalid --scripted-provider value: ${raw}; expected one of ${SCRIPTED_BEHAVIORS.join(', ')}`,
+    );
+  }
+  return behavior;
+}
+
+function parseDelayMs(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_SCRIPTED_DELAY_MS;
+  }
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`invalid --scripted-delay-ms value: ${raw}`);
+  }
+  return Number(raw);
 }

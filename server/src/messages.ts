@@ -6,11 +6,13 @@ import {
   type MessageView,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
+import type { RoundProvider } from './agent-seam.js';
 import { ApiFailure } from './api-error.js';
 import { bindAttachments, listAttachmentsForMessages } from './attachments.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { liveMemberClause } from './members.js';
 import { parseMentions, type MentionCandidate } from './mentions.js';
+import { collectWakes, dispatchWakes, type InFlightRounds } from './rounds.js';
 
 /** The human face may only write human messages. */
 const HUMAN_MESSAGE_KIND = 'human';
@@ -90,20 +92,24 @@ export function listMessages(
  * parser resolved.
  *
  * Returns the new (or replayed) message identity; a replay writes nothing.
+ * `created` is false for a replay, so a caller can tell a fresh write (which
+ * wakes members) from an idempotent echo of one that already did.
  */
 export function appendMessage(
   db: Database.Database,
   input: AppendMessageInput,
-): { id: string; seq: number } {
-  const write = db.transaction((): { id: string; seq: number } => {
+): { id: string; seq: number; created: boolean } {
+  const write = db.transaction((): { id: string; seq: number; created: boolean } => {
     assertTargetWritable(db, input.targetId);
 
     if (input.clientMessageId !== null && input.clientMessageId !== undefined) {
       const replay = db
         .prepare('SELECT id, seq FROM message WHERE target_id = ? AND client_message_id = ?')
-        .get(input.targetId, input.clientMessageId) as { id: string; seq: number } | undefined;
+        .get(input.targetId, input.clientMessageId) as
+        | { id: string; seq: number }
+        | undefined;
       if (replay !== undefined) {
-        return replay;
+        return { ...replay, created: false };
       }
     }
 
@@ -143,9 +149,37 @@ export function appendMessage(
     // already-bound attachment aborts the whole write, so no message is left
     // holding a partial attachment set.
     bindAttachments(db, id, input.attachmentIds ?? []);
-    return { id, seq };
+    return { id, seq, created: true };
   });
   return write();
+}
+
+/**
+ * Write a message and deliver its wakes. This is the entry point every caller
+ * that can wake members uses: the message and its mention snapshot commit
+ * first, and only a fresh (non-replayed) write produces a wake — a replay
+ * writes nothing, so it wakes nobody. `system` messages produce no wake at
+ * all.
+ *
+ * The caller supplies the orchestration runtime because the member-face
+ * adapter is selected at startup, not inside the write path.
+ */
+export async function appendMessageAndDispatch(
+  db: Database.Database,
+  input: AppendMessageInput,
+  orchestration: { provider: RoundProvider; inFlight: InFlightRounds },
+): Promise<{ id: string; seq: number }> {
+  const appended = appendMessage(db, input);
+  if (appended.created) {
+    const wakes = collectWakes(db, {
+      targetId: input.targetId,
+      authorMemberId: readAuthorId(db, input.authorMemberId ?? null),
+      kind: input.kind,
+      seq: appended.seq,
+    });
+    await dispatchWakes(db, orchestration.provider, wakes, orchestration.inFlight);
+  }
+  return { id: appended.id, seq: appended.seq };
 }
 
 /**
@@ -185,6 +219,14 @@ function readAuthor(db: Database.Database, memberId: string | null): AuthorRow {
     throw new Error(`message author not found: ${memberId ?? 'owner'}`);
   }
   return row;
+}
+
+/**
+ * The author identity the wake surface excludes. It is read after the write so
+ * it is the same row the message snapshot came from.
+ */
+function readAuthorId(db: Database.Database, memberId: string | null): string {
+  return readAuthor(db, memberId).id;
 }
 
 /**
