@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export interface MigrationStep {
   readonly to: number;
@@ -412,6 +412,28 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
         -- Recall reads one member's cards, freshest first, with no target or
         -- project filter: the member-level lookup is the only read shape.
         CREATE INDEX agent_memory_member ON agent_memory (member_id, created_at);
+      `);
+    },
+  },
+  {
+    // The provider ticket lands here as the next strict +1 of the chain.
+    to: 10,
+    apply(db) {
+      db.exec(`
+        -- The remote data flow consent (远端数据流告知): one row per confirmed
+        -- scope, recording only when the owner confirmed it. It deliberately
+        -- has no connection parameters and no credential of any kind — the
+        -- provider is named by its scope_id, and the credential itself is read
+        -- from an environment variable at call time, never stored.
+        --
+        -- The key is the pair: a provider is confirmed once, and a second
+        -- consent for the same scope is not a new fact.
+        CREATE TABLE remote_consent_scope (
+          scope_kind TEXT NOT NULL CHECK (scope_kind = 'model'),
+          scope_id TEXT NOT NULL CHECK (scope_id IN ('anthropic', 'openai')),
+          confirmed_at TEXT NOT NULL,
+          PRIMARY KEY (scope_kind, scope_id)
+        );
       `);
     },
   },

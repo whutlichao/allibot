@@ -63,7 +63,7 @@ test('migrating an empty data dir adds agent_memory and no embedding or vector t
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
     assert.deepEqual(columnNames(dataDir, 'agent_memory'), MEMORY_COLUMNS);
     assert.equal(countRows(dataDir, 'agent_memory'), 0, 'the migration seeds no memories');
 
@@ -84,7 +84,7 @@ test('migrating an empty data dir adds agent_memory and no embedding or vector t
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 9);
+    assert.equal(entries[0]?.['to'], 10);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -135,7 +135,7 @@ test('a version 8 data dir upgrades to version 9 with a backup that keeps channe
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
     assert.deepEqual(columnNames(dataDir, 'agent_memory'), MEMORY_COLUMNS);
     assert.equal(countRows(dataDir, "message WHERE id = 'kept-message'"), 1);
 
@@ -164,7 +164,7 @@ test('a version 8 data dir upgrades to version 9 with a backup that keeps channe
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 8);
-    assert.equal(last?.['to'], 9);
+    assert.equal(last?.['to'], 10);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);
