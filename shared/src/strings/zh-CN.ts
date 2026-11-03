@@ -500,6 +500,12 @@ export const ZH_CN = {
     params: [],
   },
   'team.assignment.truncated': { text: '…（摘录已截断）', params: [] },
+  // Plan 工具的输入错误（#40）：工具结果的可读原因，不是 HTTP 错误文案。
+  'plan.error.titleRequired': { text: '计划项标题不能为空。', params: [] },
+  'plan.error.statusInvalid': {
+    text: '计划项状态无效：{status}；只接受 pending / in_progress / completed。',
+    params: ['status'],
+  },
   // 运行面板的分派区块（#39）：assignment 是运行记录，不渲染成消息。
   'workspace.teamRuns.assignments.title': { text: '分派', params: [] },
   'workspace.teamRuns.assignments.jump': { text: '跳数', params: [] },

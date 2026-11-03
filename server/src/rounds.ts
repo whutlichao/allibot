@@ -31,6 +31,7 @@ import {
   publishUnreadChanged,
 } from './events.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
+import { createPlanFace } from './plans.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
@@ -1081,7 +1082,10 @@ function readAssignmentRoundInput(
     targetId: params.team.targetId,
     targetKind,
     channelMode: 'team',
-    tools: readRoundTools(db, member.id, params.team.targetId, targetKind, false),
+    // A TeamAssign sub-round is a team-target member round, so the four Plan
+    // tools are part of its tool set too (D4.1).
+    tools: readRoundTools(db, member.id, params.team.targetId, targetKind, false, true),
+    plan: createPlanFace(db, params.team.targetId, member.id),
     team: {
       leader_member_id:
         params.team.leaderMemberId.length === 0 ? null : params.team.leaderMemberId,
@@ -1162,7 +1166,13 @@ function readRoundInput(
   const teamState = readTeamTargetState(db, wake.targetId, process.env);
   const isLeader =
     teamState !== null && teamState.available && teamState.leaderMemberId === member.id;
-  const tools = readRoundTools(db, member.id, wake.targetId, targetKind, isLeader);
+  // Plan tools (D4.1): a task target and any team target carry them; a DM and
+  // an autonomous channel's ordinary round do not. The subtarget's own member
+  // is the Plan owner, so the same face serves the leader and a plain member.
+  const planAvailable =
+    targetKind === 'task' || (targetKind === 'channel' && teamState !== null);
+  const tools = readRoundTools(db, member.id, wake.targetId, targetKind, isLeader, planAvailable);
+  const plan = planAvailable ? createPlanFace(db, wake.targetId, member.id) : null;
   const team: RoundTeamContext | null =
     teamState === null
       ? null
@@ -1191,6 +1201,7 @@ function readRoundInput(
     channelMode: teamState === null ? 'autonomous' : 'team',
     tools,
     team,
+    plan,
     baseSeq: wake.fromSeq,
     reason: wake.reason,
     discipline,
@@ -1215,6 +1226,7 @@ function readRoundTools(
   targetId: string,
   targetKind: RoundTargetKind,
   isLeader: boolean,
+  planAvailable: boolean,
 ): readonly string[] {
   const tools: string[] = [];
   if (isLeader) {
@@ -1227,6 +1239,11 @@ function readRoundTools(
     if (task?.assignee_member_id === memberId) {
       tools.push('transfer_task');
     }
+  }
+  if (planAvailable) {
+    // The tool names are product names; the adapter calls the same face under
+    // its `RoundInput.plan`.
+    tools.push('TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate');
   }
   return tools;
 }

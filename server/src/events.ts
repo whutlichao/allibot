@@ -1,3 +1,5 @@
+import type { PlanTaskView } from '@allibot/shared';
+
 /**
  * 订阅 (Subscription): the process-local publish/subscribe hub behind the one
  * global live stream. It carries events only — it never reads the database and
@@ -19,6 +21,7 @@ export const SSE_EVENT_TYPES = [
   'reminder.due',
   'workspace.changed',
   'team_assignment',
+  'plan_update',
 ] as const;
 
 export type SseEventType = (typeof SSE_EVENT_TYPES)[number];
@@ -163,6 +166,31 @@ export function publishTeamAssignment(assignment: {
       reply_excerpt: assignment.reply_excerpt,
       reason: assignment.reason,
       occurred_at: assignment.finished_at,
+    },
+  });
+}
+
+/**
+ * The frame a Plan mutation produces (D2.5): `tasks` is the run's complete
+ * current list, never a delta, so a subscriber can replace its copy. Only a
+ * committed mutation publishes; a read-only tool call and the retention prune
+ * announce nothing.
+ */
+export function publishPlanUpdate(update: {
+  plan_run_id: string;
+  target_id: string;
+  member_id: string;
+  tasks: readonly PlanTaskView[];
+  occurred_at: string;
+}): void {
+  eventHub.publish({
+    event: 'plan_update',
+    data: {
+      plan_run_id: update.plan_run_id,
+      target_id: update.target_id,
+      member_id: update.member_id,
+      tasks: update.tasks,
+      occurred_at: update.occurred_at,
     },
   });
 }

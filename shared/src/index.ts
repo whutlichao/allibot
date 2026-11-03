@@ -367,6 +367,55 @@ export interface TeamRunView {
 }
 
 /**
+ * The three Plan item statuses (D4.1). They are a field vocabulary of
+ * `plan_task`, not the task five-state and not a new object: a Plan item never
+ * appears on the task board.
+ */
+export const PLAN_TASK_STATUSES = ['pending', 'in_progress', 'completed'] as const;
+export type PlanTaskStatus = (typeof PLAN_TASK_STATUSES)[number];
+
+/**
+ * One item of a member's Plan work list. `position` is the append order inside
+ * its run; it is never rendered as a task status.
+ */
+export interface PlanTaskView {
+  id: string;
+  plan_run_id: string;
+  title: string;
+  status: PlanTaskStatus;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One Plan run as `GET /api/targets/{id}/plans` returns it: one member's plan
+ * in one target, with the complete current task list. A Plan is not a target
+ * and not a message.
+ */
+export interface PlanRunView {
+  id: string;
+  target_id: string;
+  member_id: string;
+  created_at: string;
+  updated_at: string;
+  tasks: PlanTaskView[];
+}
+
+/**
+ * The `plan_update` SSE frame (D2.5): `tasks` is the run's complete current
+ * list, so a subscriber replaces its copy instead of applying a delta. The
+ * stream is live-only and frames are never replayed.
+ */
+export interface PlanUpdateFrame {
+  plan_run_id: string;
+  target_id: string;
+  member_id: string;
+  tasks: PlanTaskView[];
+  occurred_at: string;
+}
+
+/**
  * One highlight range inside a hit's text. `start` / `end` are UTF-16
  * code-unit offsets and half-open `[start, end)`, the same convention the
  * mention ranges use: the backend decides every range, the frontend only wraps

@@ -1,6 +1,7 @@
 import { t } from '@allibot/shared';
 import type { Server } from 'node:http';
 import { parseCliArgs, type CliOptions } from './args.js';
+import { setClock } from './clock.js';
 import { tFromDb } from './copy.js';
 import { databasePath, resolveDataDir } from './data-dir.js';
 import {
@@ -37,6 +38,12 @@ export async function main(argv: readonly string[]): Promise<number> {
 
 async function run(argv: readonly string[]): Promise<number> {
   const options = parseCliArgs(argv);
+  if (options.fixedClock !== undefined) {
+    // 固定时钟 injection: one process-wide instant, selected at startup like
+    // the scripted adapter. Production keeps the wall clock.
+    const instant = options.fixedClock;
+    setClock(() => new Date(instant));
+  }
   const { command, port } = options;
   const resolution = resolveDataDir(options.dataDir);
   if (resolution.origin === 'legacy') {
