@@ -6,6 +6,7 @@ import {
   type Server,
   type ServerResponse,
 } from 'node:http';
+import type { RoundProvider } from './agent-seam.js';
 import { ApiFailure } from './api-error.js';
 import {
   maxUploadEnvelopeBytes,
@@ -27,7 +28,8 @@ import {
   softDeleteAgent,
   updateAgent,
 } from './members.js';
-import { appendMessage, listMessages, parseMessageRequest, parsePageQuery } from './messages.js';
+import { appendMessageAndDispatch, listMessages, parseMessageRequest, parsePageQuery } from './messages.js';
+import type { InFlightRounds } from './rounds.js';
 import { getSettings, updateSettings } from './settings.js';
 import {
   joinChannel,
@@ -45,9 +47,21 @@ export interface StartedServer {
   port: number;
 }
 
+/**
+ * The orchestration runtime the HTTP face drives: the member-face adapter and
+ * the process-local in-flight registry. It is created once by the CLI (which
+ * selects the adapter from startup arguments) and handed to the HTTP layer, so
+ * the routes stay free of adapter selection.
+ */
+export interface OrchestrationRuntime {
+  provider: RoundProvider;
+  inFlight: InFlightRounds;
+}
+
 interface HttpContext {
   db: Database.Database;
   dataDir: string;
+  orchestration: OrchestrationRuntime;
 }
 
 type Handler = (
@@ -67,9 +81,13 @@ export async function startHttpServer(
   port: number,
   db: Database.Database,
   dataDir: string,
+  orchestration: OrchestrationRuntime,
   options: { writeError?: (message: string, error: unknown) => void } = {},
 ): Promise<StartedServer> {
-  const context: HttpContext = { db, dataDir };
+  // The HTTP layer never selects a member-face adapter itself: the CLI resolves
+  // one from startup arguments and passes it in, so there is no silent default
+  // adapter in a production path.
+  const context: HttpContext = { db, dataDir, orchestration };
   const writeError = options.writeError ?? defaultWriteError;
   const server = createServer((request, response) => {
     handleRequest(request, response, context).catch((error: unknown) => {
@@ -204,9 +222,13 @@ const ROUTES: readonly Route[] = [
   {
     method: 'POST',
     pattern: new RegExp(`^/api/targets/${CHANNEL_ID}/messages$`),
-    handle: async (request, response, { db }, ...params) => {
+    handle: async (request, response, { db, orchestration }, ...params) => {
       const targetId = decodeId(params[0]);
-      const result = appendMessage(db, parseMessageRequest(targetId, await readJsonBody(request)));
+      const result = await appendMessageAndDispatch(
+        db,
+        parseMessageRequest(targetId, await readJsonBody(request)),
+        orchestration,
+      );
       sendJson(response, 201, result);
     },
   },

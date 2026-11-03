@@ -1,16 +1,18 @@
 import { t } from '@allibot/shared';
 import type { Server } from 'node:http';
-import { parseCliArgs } from './args.js';
-import { databasePath, resolveDataDir } from './data-dir.js';
+import { parseCliArgs, type CliOptions } from './args.js';
 import { tFromDb } from './copy.js';
+import { databasePath, resolveDataDir } from './data-dir.js';
 import {
   assertServeableSchemaVersion,
   databaseExists,
   migrateDataDir,
   openDatabase,
 } from './db.js';
-import { HOST, startHttpServer } from './http.js';
+import { HOST, startHttpServer, type OrchestrationRuntime } from './http.js';
 import { acquireDataDirLock } from './lock.js';
+import { createInFlightRounds } from './rounds.js';
+import { createScriptedProvider } from './scripted-provider.js';
 
 const SHUTDOWN_GRACE_MS = 5_000;
 
@@ -24,8 +26,9 @@ export async function main(argv: readonly string[]): Promise<number> {
 }
 
 async function run(argv: readonly string[]): Promise<number> {
-  const { command, dataDir: explicitDataDir, port } = parseCliArgs(argv);
-  const resolution = resolveDataDir(explicitDataDir);
+  const options = parseCliArgs(argv);
+  const { command, port } = options;
+  const resolution = resolveDataDir(options.dataDir);
   if (resolution.origin === 'legacy') {
     // 数据目录解析发生在库打开之前，所以这条兼容读取提示用源文案的默认
     // 语言偏好渲染；库内 locale 只在库可用之后才读得到。
@@ -75,16 +78,37 @@ async function run(argv: readonly string[]): Promise<number> {
   const lock = await acquireDataDirLock(resolution.dataDir);
   const db = openDatabase(resolution.dataDir);
   try {
-    const { server, port: boundPort } = await startHttpServer(port, db, resolution.dataDir);
-    console.log(
-      tFromDb(db, 'cli.serve.listening', { url: `http://${HOST}:${boundPort}` }),
+    const orchestration = createOrchestration(options);
+    const { server, port: boundPort } = await startHttpServer(
+      port,
+      db,
+      resolution.dataDir,
+      orchestration,
     );
+    console.log(tFromDb(db, 'cli.serve.listening', { url: `http://${HOST}:${boundPort}` }));
+    console.log(`allibot member-face adapter: ${orchestration.provider.name}`);
 
     return await waitForShutdown(server);
   } finally {
     db.close();
     await lock.release();
   }
+}
+
+/**
+ * The member-face adapter is selected at startup, exactly once, and handed to
+ * the HTTP layer. A later ticket adds the real provider adapter here; nothing
+ * downstream branches on which one is live.
+ */
+function createOrchestration(options: CliOptions): OrchestrationRuntime {
+  return {
+    provider: createScriptedProvider({
+      behavior: options.scriptedProvider,
+      delayMs: options.scriptedDelayMs,
+      replies: options.scriptedReplies.length > 0 ? options.scriptedReplies : undefined,
+    }),
+    inFlight: createInFlightRounds(),
+  };
 }
 
 function waitForShutdown(server: Server): Promise<number> {

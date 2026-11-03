@@ -93,12 +93,12 @@ export function runNodeScript(
 
 export async function startServer(
   dataDir: string,
-  options: { env?: NodeJS.ProcessEnv; port?: number } = {},
+  options: { env?: NodeJS.ProcessEnv; port?: number; args?: readonly string[] } = {},
 ): Promise<RunningServer> {
   const port = options.port ?? 0;
   const child = spawn(
     process.execPath,
-    [CLI_ENTRY, 'serve', '--data-dir', dataDir, '--port', String(port)],
+    [CLI_ENTRY, 'serve', '--data-dir', dataDir, '--port', String(port), ...(options.args ?? [])],
     {
       cwd: REPO_ROOT,
       env: buildEnv(options.env),

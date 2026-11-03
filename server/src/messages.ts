@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   MESSAGE_KINDS,
   type MessageKind,
@@ -6,11 +5,13 @@ import {
   type MessageView,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
+import type { RoundProvider } from './agent-seam.js';
 import { ApiFailure } from './api-error.js';
-import { bindAttachments, listAttachmentsForMessages } from './attachments.js';
+import { listAttachmentsForMessages } from './attachments.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
+import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
-import { parseMentions, type MentionCandidate } from './mentions.js';
+import { collectWakes, dispatchWakes, type InFlightRounds } from './rounds.js';
 
 /** The human face may only write human messages. */
 const HUMAN_MESSAGE_KIND = 'human';
@@ -59,12 +60,6 @@ interface MentionRow {
   end: number;
 }
 
-interface AuthorRow {
-  id: string;
-  display_name: string;
-  avatar_slot: number;
-}
-
 const MESSAGE_SELECT = `
 SELECT id, target_id, seq, kind, author_member_id, author_display_name, author_avatar_slot,
        body, created_at, task_ref, task_pointer, client_message_id
@@ -90,112 +85,81 @@ export function listMessages(
  * parser resolved.
  *
  * Returns the new (or replayed) message identity; a replay writes nothing.
+ * `created` is false for a replay, so a caller can tell a fresh write (which
+ * wakes members) from an idempotent echo of one that already did.
  */
 export function appendMessage(
   db: Database.Database,
   input: AppendMessageInput,
-): { id: string; seq: number } {
-  const write = db.transaction((): { id: string; seq: number } => {
+): { id: string; seq: number; created: boolean } {
+  const write = db.transaction((): { id: string; seq: number; created: boolean } => {
     assertTargetWritable(db, input.targetId);
 
     if (input.clientMessageId !== null && input.clientMessageId !== undefined) {
       const replay = db
         .prepare('SELECT id, seq FROM message WHERE target_id = ? AND client_message_id = ?')
-        .get(input.targetId, input.clientMessageId) as { id: string; seq: number } | undefined;
+        .get(input.targetId, input.clientMessageId) as
+        | { id: string; seq: number }
+        | undefined;
       if (replay !== undefined) {
-        return replay;
+        return { ...replay, created: false };
       }
     }
 
-    const author = readAuthor(db, input.authorMemberId ?? null);
-    const id = randomUUID();
-    const seq = nextSeq(db, input.targetId);
-    db.prepare(
-      `INSERT INTO message
-         (id, target_id, seq, kind, author_member_id, author_display_name,
-          author_avatar_slot, body, created_at, task_ref, task_pointer, client_message_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
-    ).run(
-      id,
-      input.targetId,
-      seq,
-      input.kind,
-      author.id,
-      author.display_name,
-      author.avatar_slot,
-      input.body,
-      new Date().toISOString(),
-      input.clientMessageId ?? null,
-    );
-
-    // A system event is a record, not a turn: it wakes nobody, so it carries no
-    // mention ranges even when its text happens to contain an @name.
-    if (input.kind !== 'system') {
-      const insertMention = db.prepare(
-        `INSERT INTO message_mention (message_id, member_id, start, "end") VALUES (?, ?, ?, ?)`,
-      );
-      for (const mention of parseMentions(input.body, listMentionCandidates(db))) {
-        insertMention.run(id, mention.member_id, mention.start, mention.end);
-      }
-    }
-
-    // Binding is part of the same transaction as the message row: an unknown or
-    // already-bound attachment aborts the whole write, so no message is left
-    // holding a partial attachment set.
-    bindAttachments(db, id, input.attachmentIds ?? []);
-    return { id, seq };
+    // One row insert for every message path: the author snapshot, MAX(seq)+1,
+    // the mention ranges and the attachment binding all live there.
+    return { ...insertMessageRow(db, input), created: true };
   });
   return write();
 }
 
 /**
- * The mention candidate set: every live member, the owner included, in a
- * stable order so duplicate display names resolve reproducibly.
+ * Write a message and deliver its wakes. This is the entry point every caller
+ * that can wake members uses: the message and its mention snapshot commit
+ * first, and only a fresh (non-replayed) write produces a wake — a replay
+ * writes nothing, so it wakes nobody. `system` messages produce no wake at
+ * all.
+ *
+ * The caller supplies the orchestration runtime because the member-face
+ * adapter is selected at startup, not inside the write path.
  */
-function listMentionCandidates(db: Database.Database): MentionCandidate[] {
-  return db
-    .prepare(
-      `SELECT id, display_name FROM member WHERE ${liveMemberClause()} ORDER BY rowid`,
-    )
-    .all() as MentionCandidate[];
+export async function appendMessageAndDispatch(
+  db: Database.Database,
+  input: AppendMessageInput,
+  orchestration: { provider: RoundProvider; inFlight: InFlightRounds },
+): Promise<{ id: string; seq: number }> {
+  const appended = appendMessage(db, input);
+  if (appended.created) {
+    const wakes = collectWakes(db, {
+      targetId: input.targetId,
+      authorMemberId: readAuthorId(db, input.authorMemberId ?? null),
+      kind: input.kind,
+      seq: appended.seq,
+    });
+    await dispatchWakes(db, orchestration.provider, wakes, orchestration.inFlight);
+  }
+  return { id: appended.id, seq: appended.seq };
 }
 
 /**
- * The author snapshot: display name and avatar slot are copied into the message
- * row, so renaming or soft-deleting the member later cannot rewrite history.
- * Human writes are always authored by the owner; a backend system event may
- * name the member it is about.
+ * The author identity the wake surface excludes. It is read after the write so
+ * it is the same row the message snapshot came from.
  */
-function readAuthor(db: Database.Database, memberId: string | null): AuthorRow {
+function readAuthorId(db: Database.Database, memberId: string | null): string {
   const row =
     memberId === null
       ? (db
           .prepare(
-            `SELECT id, display_name, avatar_slot FROM member
-              WHERE kind = 'owner' AND ${liveMemberClause()}`,
+            `SELECT id FROM member WHERE kind = 'owner' AND ${liveMemberClause()}`,
           )
-          .get() as AuthorRow | undefined)
+          .get() as { id: string } | undefined)
       : (db
-          .prepare(
-            `SELECT id, display_name, avatar_slot FROM member
-              WHERE id = ? AND ${liveMemberClause()}`,
-          )
-          .get(memberId) as AuthorRow | undefined);
+          .prepare(`SELECT id FROM member WHERE id = ? AND ${liveMemberClause()}`)
+          .get(memberId) as { id: string } | undefined);
   if (row === undefined) {
     throw new Error(`message author not found: ${memberId ?? 'owner'}`);
   }
-  return row;
-}
-
-/**
- * `MAX(seq) + 1` inside the write transaction. `UNIQUE(target_id, seq)` is the
- * backstop: a second writer would abort rather than reuse a number.
- */
-function nextSeq(db: Database.Database, targetId: string): number {
-  const row = db
-    .prepare('SELECT coalesce(MAX(seq), 0) AS last FROM message WHERE target_id = ?')
-    .get(targetId) as { last: number };
-  return row.last + 1;
+  return row.id;
 }
 
 function hydrate(db: Database.Database, rows: readonly MessageRow[]): MessageView[] {
