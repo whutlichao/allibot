@@ -1,6 +1,7 @@
 import {
   SOP_MAX_ATTEMPTS,
   SOP_MAX_STEPS,
+  SOP_RUN_PHASES,
   t,
   type ChannelView,
   type Locale,
@@ -11,7 +12,13 @@ import {
   type TargetMemberView,
 } from '@allibot/shared';
 import { createElement, useState, type ReactNode } from 'react';
-import { hasActiveSopRun, sopPhaseLabel, SOP_RUNS_PAGE_LIMIT } from './sops.ts';
+import {
+  hasActiveSopRun,
+  readSopRunState,
+  sopPhaseLabel,
+  sopWaitingOnLabel,
+  SOP_RUNS_PAGE_LIMIT,
+} from './sops.ts';
 
 type DraftStep = SopStepDefinition;
 
@@ -320,24 +327,53 @@ export function SopPanel({
   }
 
   function renderRun(run: SopRunView): ReactNode {
-    return createElement(
-      'li',
-      {
-        key: run.id,
-        className: 'sop-panel__run',
-        'data-sop-run-id': run.id,
-        'data-sop-run-phase': run.phase,
-        'data-sop-run-current-step': run.current_step,
-      },
+    const state = readSopRunState(run.state);
+    const waiting = sopWaitingOnLabel(locale, run.waiting_on);
+    const phaseStrip = createElement(
+      'div',
+      { className: 'sop-panel__phase-strip', 'data-sop-phases': '' },
       createElement(
         'span',
-        { className: 'sop-panel__run-phase' },
-        sopPhaseLabel(locale, run.phase),
+        { className: 'sop-panel__phase-strip-label' },
+        t(locale, 'workspace.sop.runs.phaseStrip'),
       ),
+      createElement(
+        'ol',
+        { className: 'sop-panel__phases' },
+        ...SOP_RUN_PHASES.map((phase) =>
+          createElement(
+            'li',
+            {
+              key: phase,
+              className:
+                phase === run.phase
+                  ? 'sop-panel__phase sop-panel__phase--active'
+                  : 'sop-panel__phase',
+              'data-sop-phase': phase,
+              'data-sop-phase-active': phase === run.phase ? 'true' : 'false',
+            },
+            sopPhaseLabel(locale, phase),
+          ),
+        ),
+      ),
+    );
+    const details = createElement(
+      'div',
+      { className: 'sop-panel__run-details' },
       createElement(
         'span',
         { className: 'sop-panel__run-detail' },
         `${t(locale, 'workspace.sop.runs.currentStep')}：${run.current_step}`,
+      ),
+      createElement(
+        'span',
+        { className: 'sop-panel__run-detail' },
+        `${t(locale, 'workspace.sop.runs.attempt')}：${run.attempt}`,
+      ),
+      createElement(
+        'span',
+        { className: 'sop-panel__run-detail' },
+        `${t(locale, 'workspace.sop.runs.waitingOn')}：${waiting}`,
       ),
       createElement(
         'span',
@@ -349,6 +385,86 @@ export function SopPanel({
         { className: 'sop-panel__run-detail' },
         `${t(locale, 'workspace.sop.runs.finishedAt')}：${run.finished_at ?? '—'}`,
       ),
+    );
+    const excerpts = createElement(
+      'ul',
+      { className: 'sop-panel__run-steps', 'data-sop-run-steps': '' },
+      ...state.steps.map((step) =>
+        createElement(
+          'li',
+          {
+            key: step.index,
+            className: 'sop-panel__run-step',
+            'data-sop-step-index': step.index,
+            'data-sop-step-verdict': step.verifier_verdict ?? 'none',
+          },
+          createElement(
+            'div',
+            { className: 'sop-panel__run-step-head' },
+            createElement(
+              'strong',
+              { className: 'sop-panel__run-step-title' },
+              `${step.index + 1}. ${step.title}`,
+            ),
+            createElement(
+              'span',
+              { className: 'sop-panel__run-step-attempts' },
+              `${t(locale, 'workspace.sop.runs.attempt')}：${step.attempts}`,
+            ),
+          ),
+          step.executor_excerpt === null
+            ? null
+            : createElement(
+                'p',
+                {
+                  className: 'sop-panel__run-excerpt',
+                  'data-sop-executor-excerpt': '',
+                },
+                `${t(locale, 'workspace.sop.runs.executorExcerpt')}：${step.executor_excerpt}`,
+              ),
+          step.verifier_excerpt === null
+            ? null
+            : createElement(
+                'p',
+                {
+                  className: 'sop-panel__run-excerpt',
+                  'data-sop-verifier-excerpt': '',
+                },
+                `${t(locale, 'workspace.sop.runs.verifierExcerpt')}：${step.verifier_excerpt}`,
+              ),
+        ),
+      ),
+    );
+    return createElement(
+      'li',
+      {
+        key: run.id,
+        className: 'sop-panel__run',
+        'data-sop-run-id': run.id,
+        'data-sop-run-phase': run.phase,
+        'data-sop-run-current-step': run.current_step,
+        'data-sop-run-attempt': run.attempt,
+        'data-sop-run-waiting-on': run.waiting_on ?? 'none',
+      },
+      phaseStrip,
+      createElement(
+        'div',
+        { className: 'sop-panel__run-head' },
+        createElement(
+          'span',
+          { className: 'sop-panel__run-phase' },
+          sopPhaseLabel(locale, run.phase),
+        ),
+      ),
+      details,
+      state.steps.length === 0 ? null : excerpts,
+      state.error === null
+        ? null
+        : createElement(
+            'p',
+            { className: 'sop-panel__run-error', role: 'alert' },
+            `${t(locale, 'workspace.sop.runs.error')}：${state.error}`,
+          ),
     );
   }
 

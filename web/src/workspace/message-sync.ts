@@ -41,6 +41,7 @@ export const LIVE_EVENT_TYPES = [
   'workspace.changed',
   'team_assignment',
   'plan_update',
+  'sop_update',
   'approval.requested',
   'approval.resolved',
 ] as const;
@@ -433,7 +434,8 @@ const WORKSPACE_REFRESH_EVENTS: ReadonlySet<string> = new Set(
     (event) =>
       event !== 'message.created' &&
       event !== 'team_assignment' &&
-      event !== 'plan_update',
+      event !== 'plan_update' &&
+      event !== 'sop_update',
   ),
 );
 

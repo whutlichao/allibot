@@ -22,6 +22,7 @@
     "test:team-assignments": "node --import ./test/support/register-css.mjs --test test/team-assignments.test.ts",
     "test:plan-panel": "node --import ./test/support/register-css.mjs --test test/plan-panel.test.ts",
     "test:sop-definitions": "node --import ./test/support/register-css.mjs --test test/sop-definitions.test.ts",
+    "test:sop-runs": "node --import ./test/support/register-css.mjs --test test/sop-runs.test.ts",
     "test:workspace-root": "node --import ./test/support/register-css.mjs --test test/workspace-root.test.ts",
     "test:approvals": "node --import ./test/support/register-css.mjs --test test/approvals.test.ts"
   },

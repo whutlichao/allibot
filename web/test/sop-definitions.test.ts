@@ -122,6 +122,8 @@ const PENDING_RUN: SopRunView = {
   phase: 'pending',
   state: { current_step: 0, attempt: 0, steps: [], waiting_on: null, error: null },
   current_step: 0,
+  attempt: 0,
+  waiting_on: null,
   started_at: '2026-11-04T01:00:01.000Z',
   updated_at: '2026-11-04T01:00:01.000Z',
   finished_at: null,
