@@ -28,8 +28,20 @@ export const AGENT_PROVIDERS = ['anthropic', 'openai'] as const;
 export type AgentProvider = (typeof AGENT_PROVIDERS)[number];
 
 /**
+ * Whether the provider credential the Agent needs is readable from the
+ * environment right now. It is a status enum, never a credential: the value
+ * of the environment variable never reaches the human face.
+ */
+export const CREDENTIAL_STATUSES = ['present', 'missing'] as const;
+export type CredentialStatus = (typeof CREDENTIAL_STATUSES)[number];
+
+/**
  * The Agent configuration as the human face returns it. `member` holds the
  * identity; `agent_config` holds everything below `created_at`.
+ *
+ * `credential_status` reports whether the environment variable the model's
+ * provider reads is set — "present" or "missing" — and never carries the key
+ * itself: the database is not a secret store (D1.10).
  */
 export interface AgentView {
   id: string;
@@ -40,12 +52,44 @@ export interface AgentView {
   created_at: string;
   role: string;
   model: string | null;
+  credential_status: CredentialStatus;
   system_prompt: string;
   enabled: number;
   context_window: number;
   compression_threshold: number;
   max_iterations: number;
   auto_claim: number;
+}
+
+/**
+ * One remote provider's consent state plus the data surfaces that leave the
+ * machine when an Agent on it answers. The list is the consent copy itself: it
+ * names what leaves, never a connection parameter or a credential.
+ */
+export interface RemoteDataFlowView {
+  provider: AgentProvider;
+  /** The environment variable this provider reads its credential from. */
+  credential_env: string;
+  credential_status: CredentialStatus;
+  /** The receiving end of the model call. */
+  receiver: string;
+  confirmed_at: string | null;
+}
+
+/** `GET /api/remote-data-flow`'s body. */
+export interface RemoteDataFlowReadView {
+  /** The data surfaces that leave the machine on a remote model call (D4.2). */
+  data_surfaces: string[];
+  providers: RemoteDataFlowView[];
+}
+
+/**
+ * `POST /api/remote-data-flow/{provider}/consent`'s body. Confirming twice is
+ * the same fact, so `confirmed_at` keeps the first confirmation.
+ */
+export interface RemoteConsentView {
+  provider: AgentProvider;
+  confirmed_at: string;
 }
 
 /**

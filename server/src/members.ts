@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { AGENT_PROVIDERS, type AgentView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
+import { credentialStatus, parseModelIdentifier } from './providers.js';
 
 /**
  * Built-in agent_config defaults. The context window matches the spec's
@@ -60,22 +61,33 @@ FROM member m
 JOIN agent_config c ON c.member_id = m.id
 WHERE m.kind = 'agent'`;
 
-export function listAgents(db: Database.Database, options: { includeDeleted: boolean }): AgentView[] {
+export function listAgents(
+  db: Database.Database,
+  options: { includeDeleted: boolean; env?: NodeJS.ProcessEnv },
+): AgentView[] {
   const visibility = options.includeDeleted ? '' : ` AND ${liveMemberClause('m')}`;
   const rows = db
     .prepare(`${AGENT_SELECT}${visibility} ORDER BY m.created_at, m.rowid`)
     .all() as AgentRow[];
-  return rows.map(toAgentView);
+  return rows.map((row) => toAgentView(row, options.env ?? process.env));
 }
 
-export function getAgent(db: Database.Database, id: string): AgentView | null {
+export function getAgent(
+  db: Database.Database,
+  id: string,
+  env: NodeJS.ProcessEnv = process.env,
+): AgentView | null {
   const row = db
     .prepare(`${AGENT_SELECT} AND m.id = ? AND ${liveMemberClause('m')}`)
     .get(id) as AgentRow | undefined;
-  return row === undefined ? null : toAgentView(row);
+  return row === undefined ? null : toAgentView(row, env);
 }
 
-export function createAgent(db: Database.Database, body: unknown): AgentView {
+export function createAgent(
+  db: Database.Database,
+  body: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): AgentView {
   const input = parseCreateInput(body);
   const create = db.transaction((): string => {
     const id = randomUUID();
@@ -103,14 +115,19 @@ export function createAgent(db: Database.Database, body: unknown): AgentView {
     return id;
   });
   const id = create();
-  const agent = getAgent(db, id);
+  const agent = getAgent(db, id, env);
   if (agent === null) {
     throw new Error('created Agent could not be read back');
   }
   return agent;
 }
 
-export function updateAgent(db: Database.Database, id: string, body: unknown): AgentView {
+export function updateAgent(
+  db: Database.Database,
+  id: string,
+  body: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): AgentView {
   const patch = parsePatchInput(body);
   const update = db.transaction((): boolean => {
     const current = db
@@ -144,7 +161,7 @@ export function updateAgent(db: Database.Database, id: string, body: unknown): A
   if (!update()) {
     throw ApiFailure.notFound(`agent not found: ${id}`);
   }
-  const agent = getAgent(db, id);
+  const agent = getAgent(db, id, env);
   if (agent === null) {
     throw new Error('updated Agent could not be read back');
   }
@@ -323,14 +340,13 @@ function optionalModel(record: Record<string, unknown>): string | null {
   }
   const separator = value.indexOf(':');
   const provider = separator > 0 ? value.slice(0, separator) : '';
-  const model = separator > 0 ? value.slice(separator + 1) : '';
   if (!(AGENT_PROVIDERS as readonly string[]).includes(provider)) {
     throw ApiFailure.validation(
       `model provider must be one of: ${AGENT_PROVIDERS.join(', ')}`,
       { field: 'model', value },
     );
   }
-  if (model.trim().length === 0) {
+  if (parseModelIdentifier(value) === null) {
     throw ApiFailure.validation('model must name a model after the provider prefix', {
       field: 'model',
       value,
@@ -402,7 +418,7 @@ function nextAvatarSlot(db: Database.Database): number {
   return bestSlot;
 }
 
-function toAgentView(row: AgentRow): AgentView {
+function toAgentView(row: AgentRow, env: NodeJS.ProcessEnv): AgentView {
   return {
     id: row.id,
     kind: 'agent',
@@ -412,6 +428,7 @@ function toAgentView(row: AgentRow): AgentView {
     created_at: row.created_at,
     role: row.role,
     model: row.model,
+    credential_status: readCredentialStatus(row.model, env),
     system_prompt: row.system_prompt,
     enabled: row.enabled,
     context_window: row.context_window,
@@ -419,4 +436,18 @@ function toAgentView(row: AgentRow): AgentView {
     max_iterations: row.max_iterations,
     auto_claim: row.auto_claim,
   };
+}
+
+/**
+ * The credential fact is a status, never a value: an Agent whose model names a
+ * provider reports whether that provider's environment variable is set. An
+ * Agent without a model is missing by definition — there is no provider to read
+ * a credential for.
+ */
+function readCredentialStatus(
+  model: string | null,
+  env: NodeJS.ProcessEnv,
+): AgentView['credential_status'] {
+  const parsed = parseModelIdentifier(model);
+  return parsed === null ? 'missing' : credentialStatus(parsed.provider, env);
 }

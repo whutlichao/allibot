@@ -30,6 +30,11 @@ import {
   updateAgent,
 } from './members.js';
 import { appendMessageAndDispatch, listMessages, parseMessageRequest, parsePageQuery } from './messages.js';
+import {
+  confirmProviderConsent,
+  parseProviderParam,
+  remoteDataFlowView,
+} from './providers.js';
 import type { InFlightRounds } from './rounds.js';
 import { getSettings, updateSettings } from './settings.js';
 import {
@@ -70,6 +75,8 @@ interface HttpContext {
   db: Database.Database;
   dataDir: string;
   orchestration: OrchestrationRuntime;
+  /** The process environment: the one place credentials and base URLs are read. */
+  env: NodeJS.ProcessEnv;
 }
 
 type Handler = (
@@ -90,12 +97,21 @@ export async function startHttpServer(
   db: Database.Database,
   dataDir: string,
   orchestration: OrchestrationRuntime,
-  options: { writeError?: (message: string, error: unknown) => void } = {},
+  options: {
+    writeError?: (message: string, error: unknown) => void;
+    /** The process environment credentials are read from; tests inject their own. */
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<StartedServer> {
   // The HTTP layer never selects a member-face adapter itself: the CLI resolves
   // one from startup arguments and passes it in, so there is no silent default
   // adapter in a production path.
-  const context: HttpContext = { db, dataDir, orchestration };
+  const context: HttpContext = {
+    db,
+    dataDir,
+    orchestration,
+    env: options.env ?? process.env,
+  };
   const writeError = options.writeError ?? defaultWriteError;
   // The CopilotKit multi-route handler owns everything under its base path;
   // its routes are not part of the human-face REST table below.
@@ -304,26 +320,41 @@ const ROUTES: readonly Route[] = [
   },
   {
     method: 'GET',
+    pattern: /^\/api\/remote-data-flow$/,
+    handle: async (_request, response, { db, env }) => {
+      sendJson(response, 200, remoteDataFlowView(db, env));
+    },
+  },
+  {
+    method: 'POST',
+    pattern: /^\/api\/remote-data-flow\/([^/]+)\/consent$/,
+    handle: async (_request, response, { db }, ...params) => {
+      const provider = parseProviderParam(decodeId(params[0]));
+      sendJson(response, 200, confirmProviderConsent(db, provider));
+    },
+  },
+  {
+    method: 'GET',
     pattern: /^\/api\/agents$/,
-    handle: async (request, response, { db }) => {
+    handle: async (request, response, { db, env }) => {
       const includeDeleted = parseIncludeDeleted(new URL(request.url ?? '/', 'http://allibot').searchParams);
-      sendJson(response, 200, { agents: listAgents(db, { includeDeleted }) });
+      sendJson(response, 200, { agents: listAgents(db, { includeDeleted, env }) });
     },
   },
   {
     method: 'POST',
     pattern: /^\/api\/agents$/,
-    handle: async (request, response, { db }) => {
-      const agent = createAgent(db, await readJsonBody(request));
+    handle: async (request, response, { db, env }) => {
+      const agent = createAgent(db, await readJsonBody(request), env);
       sendJson(response, 201, agent);
     },
   },
   {
     method: 'GET',
     pattern: new RegExp(`^/api/agents/${AGENT_ID}$`),
-    handle: async (_request, response, { db }, ...params) => {
+    handle: async (_request, response, { db, env }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id);
+      const agent = getAgent(db, id, env);
       if (agent === null) {
         throw ApiFailure.notFound(`agent not found: ${id}`);
       }
@@ -333,8 +364,8 @@ const ROUTES: readonly Route[] = [
   {
     method: 'PATCH',
     pattern: new RegExp(`^/api/agents/${AGENT_ID}$`),
-    handle: async (request, response, { db }, ...params) => {
-      const agent = updateAgent(db, decodeId(params[0]), await readJsonBody(request));
+    handle: async (request, response, { db, env }, ...params) => {
+      const agent = updateAgent(db, decodeId(params[0]), await readJsonBody(request), env);
       sendJson(response, 200, agent);
     },
   },
