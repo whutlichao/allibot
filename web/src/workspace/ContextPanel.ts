@@ -91,8 +91,14 @@ export function ContextPanel({ workspace, targetId, locale, onOpenPanel }: Conte
           createElement(
             'div',
             { className: 'context-panel__entries' },
-            panelButton('members', t(locale, 'workspace.panel.members')),
-            panelButton('roster', t(locale, 'workspace.panel.roster')),
+            // 成员面板与名册只属于频道（R1 词条 76 / 77）；私信与任务线程
+            // 不提供这两个入口。
+            context.kind === 'channel'
+              ? [
+                  panelButton('members', t(locale, 'workspace.panel.members')),
+                  panelButton('roster', t(locale, 'workspace.panel.roster')),
+                ]
+              : null,
             panelButton('agent-detail', t(locale, 'workspace.panel.agentDetail')),
             panelButton('task-board', t(locale, 'workspace.panel.taskBoard')),
           ),

@@ -1,7 +1,7 @@
 import { t, type Locale, type WorkspaceView } from '@allibot/shared';
 import { createElement, type ReactNode } from 'react';
 import { buildWorkspaceNav, type TargetNavEntry } from './model.ts';
-import { statusLabel } from './status-label.ts';
+import { StatusPoint } from './StatusPoint.ts';
 import type { WorkspacePanel } from './shell-state.ts';
 
 export interface TargetNavProps {
@@ -10,6 +10,8 @@ export interface TargetNavProps {
   locale: Locale;
   onSelectTarget?: (targetId: string) => void;
   onOpenPanel?: (panel: WorkspacePanel) => void;
+  /** 本机 Agent 行打开哪一位 Agent 的详情；缺省时只打开详情面。 */
+  onOpenAgentDetail?: (agentId: string) => void;
 }
 
 /**
@@ -26,6 +28,7 @@ export function TargetNav({
   locale,
   onSelectTarget,
   onOpenPanel,
+  onOpenAgentDetail,
 }: TargetNavProps) {
   const nav = buildWorkspaceNav(workspace);
 
@@ -100,20 +103,16 @@ export function TargetNav({
           className: 'target-nav__target',
           'data-action': 'open-agent-detail',
           'data-member-id': agent.id,
-          onClick: () => onOpenPanel?.('agent-detail'),
+          onClick: () => {
+            if (onOpenAgentDetail !== undefined) {
+              onOpenAgentDetail(agent.id);
+            } else {
+              onOpenPanel?.('agent-detail');
+            }
+          },
         },
         createElement('span', { className: 'target-nav__label' }, agent.display_name),
-        point === undefined
-          ? null
-          : createElement(
-              'span',
-              {
-                className: 'status-point',
-                'data-status': point.status,
-                title: statusLabel(locale, point.status),
-              },
-              statusLabel(locale, point.status),
-            ),
+        point === undefined ? null : createElement(StatusPoint, { status: point.status, locale }),
       ),
     );
   });
