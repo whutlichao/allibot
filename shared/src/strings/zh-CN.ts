@@ -478,6 +478,11 @@ export const ZH_CN = {
   'channel.config.workspace.backend.local': { text: '本地', params: [] },
   'channel.config.workspace.backend.docker': { text: 'Docker', params: [] },
   'channel.config.workspace.status.label': { text: '工作区状态', params: [] },
+  'channel.config.workspace.shell.label': { text: '允许本地 shell', params: [] },
+  'channel.config.workspace.shell.risk': {
+    text: '本地 shell 无沙箱：命令以项目根为工作目录运行，且每次调用都必须人工审批。',
+    params: [],
+  },
   'workspace.status.available': { text: '可用', params: [] },
   'workspace.status.line': { text: '工作区状态：{status}', params: ['status'] },
   'workspace.status.loading': { text: '正在读取工作区状态…', params: [] },
@@ -654,4 +659,6 @@ export const ZH_CN = {
   'workspace.approval.decided': { text: '已决策', params: [] },
   'workspace.approval.detail': { text: '审批详情', params: [] },
   'workspace.approval.back': { text: '返回列表', params: [] },
+  'workspace.approval.shell.command': { text: '命令', params: [] },
+  'workspace.approval.shell.cwd': { text: '工作目录', params: [] },
 } as const satisfies Record<string, CatalogEntry>;

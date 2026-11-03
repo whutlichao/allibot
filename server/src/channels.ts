@@ -484,7 +484,7 @@ function requireAutonomousCreateMode(value: unknown): void {
   }
 }
 
-/** The explicit local-shell switch (#44 hook; shell execution is #46). */
+/** The explicit local-shell switch (#46 / D5.4): exactly 0 or 1. */
 function requireBinary(value: unknown, field: string): 0 | 1 {
   if (value !== 0 && value !== 1) {
     throw ApiFailure.validation(`${field} must be 0 or 1`, { field, value });

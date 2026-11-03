@@ -131,9 +131,9 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
 
 function channelMembers(): TargetMemberView[] {
   return [
-    { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
-    { id: AGENT_ID, kind: 'agent', display_name: '阿蓝', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
-    { id: OFFLINE_ID, kind: 'agent', display_name: '阿灰', avatar_slot: 3, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, permission_mode: 'ask-writes' },
+    { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, allow_local_shell: 0, permission_mode: 'ask-writes' },
+    { id: AGENT_ID, kind: 'agent', display_name: '阿蓝', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, allow_local_shell: 0, permission_mode: 'ask-writes' },
+    { id: OFFLINE_ID, kind: 'agent', display_name: '阿灰', avatar_slot: 3, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, allow_local_shell: 0, permission_mode: 'ask-writes' },
   ];
 }
 

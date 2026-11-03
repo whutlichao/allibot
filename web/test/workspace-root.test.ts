@@ -54,7 +54,7 @@ function members(status: WorkspaceStatusView): TargetMemberView[] {
       kind: 'owner',
       display_name: 'owner',
       avatar_slot: 0,
-      workspace_status: status,
+      workspace_status: status, allow_local_shell: 0,
       permission_mode: 'ask-writes',
     },
     {
@@ -62,7 +62,7 @@ function members(status: WorkspaceStatusView): TargetMemberView[] {
       kind: 'agent',
       display_name: '工作区成员',
       avatar_slot: 1,
-      workspace_status: status,
+      workspace_status: status, allow_local_shell: 0,
       permission_mode: 'ask-writes',
     },
   ];

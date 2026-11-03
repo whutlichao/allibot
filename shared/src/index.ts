@@ -260,9 +260,9 @@ export const WORKSPACE_STATUS_REASONS = ['workspace-root-missing', 'docker-unava
 export type WorkspaceStatusReason = (typeof WORKSPACE_STATUS_REASONS)[number];
 
 /**
- * The channel's workspace configuration (D5.1 / D5.3): the one shared project
- * root, the default backend and the explicit local-shell switch (always 0
- * until #46). The root is the canonical realpath the write path stored.
+ * The channel's workspace configuration (D5.1 / D5.3 / D5.4): the one shared
+ * project root, the default backend and the explicit local-shell switch. The
+ * root is the canonical realpath the write path stored.
  */
 export interface ChannelWorkspaceView {
   root: string | null;
@@ -405,6 +405,8 @@ export interface ChannelConfigPatch {
   /** `null` clears the project root; a string is validated and canonicalized. */
   workspace_root?: string | null;
   workspace_backend?: WorkspaceBackend;
+  /** The explicit local-shell switch (#46 / D5.4): exactly 0 or 1. */
+  allow_local_shell?: 0 | 1;
   /** The channel's permission default; it has no override (rules do). */
   permission_mode?: PermissionMode;
 }
@@ -446,6 +448,11 @@ export interface TargetMemberView {
    * still decides that row's `backend`.
    */
   workspace_status: WorkspaceStatusView;
+  /**
+   * The channel's explicit local-shell switch in this target context (#46).
+   * It is channel-only (no Agent override); a DM / no-channel target reads 0.
+   */
+  allow_local_shell: 0 | 1;
   /** The member's effective mode in this target context (D5.5). */
   permission_mode: PermissionMode;
 }

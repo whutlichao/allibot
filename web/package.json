@@ -24,6 +24,7 @@
     "test:sop-definitions": "node --import ./test/support/register-css.mjs --test test/sop-definitions.test.ts",
     "test:workspace-root": "node --import ./test/support/register-css.mjs --test test/workspace-root.test.ts",
     "test:approvals": "node --import ./test/support/register-css.mjs --test test/approvals.test.ts",
+    "test:local-shell": "node --import ./test/support/register-css.mjs --test test/local-shell.test.ts",
     "test:mcp-tab": "node --import ./test/support/register-css.mjs --test test/mcp-tab.test.ts"
   },
   "dependencies": {

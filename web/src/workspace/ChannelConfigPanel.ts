@@ -17,6 +17,7 @@ import {
   backendChangePatch,
   leaderCandidates,
   leaderChangePatch,
+  localShellChangePatch,
   modeChangePatch,
   rootChangePatch,
   workspaceStatusCopy,
@@ -170,6 +171,7 @@ export function ChannelConfigPanel({
       : null;
 
   const rootPatch = rootChangePatch(channel, rootDraft);
+  const shellEnabled = channel.workspace.allow_local_shell === 1;
   const workspaceControls = createElement(
     'div',
     { className: 'channel-config__workspace', 'data-workspace-config': '' },
@@ -238,6 +240,34 @@ export function ChannelConfigPanel({
               : t(locale, 'channel.config.workspace.backend.docker'),
           ),
         ),
+      ),
+    ),
+    createElement(
+      'div',
+      { className: 'channel-config__field', 'data-local-shell-config': '' },
+      createElement(
+        'label',
+        { className: 'channel-config__label', htmlFor: 'channel-config-local-shell' },
+        createElement('input', {
+          id: 'channel-config-local-shell',
+          type: 'checkbox',
+          checked: shellEnabled,
+          disabled: saving,
+          'data-action': 'local-shell',
+          'data-allow-local-shell': shellEnabled ? '1' : '0',
+          onChange: (event: { target: { checked: boolean } }) =>
+            submit(localShellChangePatch(channel, event.target.checked)),
+        }),
+        t(locale, 'channel.config.workspace.shell.label'),
+      ),
+      createElement(
+        'p',
+        {
+          className: 'channel-config__risk',
+          'data-shell-risk': 'true',
+          role: 'note',
+        },
+        t(locale, 'channel.config.workspace.shell.risk'),
       ),
     ),
     workspaceStatus === undefined
