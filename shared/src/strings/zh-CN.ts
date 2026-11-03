@@ -49,4 +49,31 @@ export const ZH_CN = {
   // 示例文案：用来看消息密度在壳里的呈现。
   'message.sample.author': { text: '示例成员', params: [] },
   'message.sample.body': { text: '{author} 的消息示例：正文按消息密度呈现。', params: ['author'] },
+
+  // 任务线程里的系统事件消息：任务创建与每次任务变更各落一条。
+  'task.event.created': { text: '任务「{title}」已创建。', params: ['title'] },
+  'task.event.title.renamed': {
+    text: '任务标题由「{previous}」改为「{title}」。',
+    params: ['previous', 'title'],
+  },
+  'task.event.status.changed': {
+    text: '任务状态由 {previous} 改为 {status}。',
+    params: ['previous', 'status'],
+  },
+  'task.event.assignee.assigned': { text: '任务已指派给 {assignee}。', params: ['assignee'] },
+  'task.event.assignee.unassigned': { text: '任务已收回指派。', params: [] },
+  'task.event.assignee.reassigned': {
+    text: '任务由 {previous} 改派给 {assignee}。',
+    params: ['previous', 'assignee'],
+  },
+
+  // 频道里的指针消息正文：它是 system，不计未读、不唤醒。
+  'task.pointer.body': { text: '已创建任务「{title}」，在这里进入任务线程。', params: ['title'] },
+
+  // 任务状态在系统事件消息里的可读标签（承重词，不用看板列名替代）。
+  'task.status.todo': { text: '待认领', params: [] },
+  'task.status.inProgress': { text: '进行中', params: [] },
+  'task.status.inReview': { text: '待审', params: [] },
+  'task.status.done': { text: '完成', params: [] },
+  'task.status.closed': { text: '已关闭', params: [] },
 } as const satisfies Record<string, CatalogEntry>;

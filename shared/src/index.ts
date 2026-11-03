@@ -126,6 +126,36 @@ export interface MessageView {
   attachments: AttachmentView[];
 }
 
+/**
+ * The five task statuses. The legal move set is backend-fixed (the server's
+ * `TASK_STATUS_TRANSITIONS`) and travels with every task payload as
+ * `allowed_transitions`; the frontend never keeps a copy of the table.
+ */
+export const TASK_STATUSES = ['todo', 'in_progress', 'in_review', 'done', 'closed'] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+/**
+ * A task as the board and the detail read return it. The row is mutable
+ * (title / status / assignee); its thread messages stay append-only.
+ * `allowed_transitions` is the backend's answer for the current status,
+ * `message_count` counts every message in the task thread and `unread_count`
+ * counts the thread messages the owner has not read (the pointer chip's N).
+ */
+export interface TaskView {
+  id: string;
+  channel_id: string;
+  target_id: string;
+  title: string;
+  status: TaskStatus;
+  assignee_member_id: string | null;
+  claimed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  allowed_transitions: TaskStatus[];
+  message_count: number;
+  unread_count: number;
+}
+
 export {
   MESSAGE_DENSITIES,
   SUPPORTED_LOCALES,

@@ -35,6 +35,12 @@ export interface AppendMessageInput {
   clientMessageId?: string | null;
   /** Upload drafts to bind to this message in the same transaction. */
   attachmentIds?: readonly string[];
+  /**
+   * The task this channel system message points into. Backend-written only:
+   * the db trigger refuses anything that is not a system message on the
+   * channel that owns the task, and the human-face parser has no such field.
+   */
+  taskPointer?: string | null;
 }
 
 interface MessageRow {
@@ -114,7 +120,7 @@ export function appendMessage(
       `INSERT INTO message
          (id, target_id, seq, kind, author_member_id, author_display_name,
           author_avatar_slot, body, created_at, task_ref, task_pointer, client_message_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
     ).run(
       id,
       input.targetId,
@@ -125,6 +131,7 @@ export function appendMessage(
       author.avatar_slot,
       input.body,
       new Date().toISOString(),
+      input.taskPointer ?? null,
       input.clientMessageId ?? null,
     );
 

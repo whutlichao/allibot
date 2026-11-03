@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export interface MigrationStep {
   readonly to: number;
@@ -235,7 +235,89 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
       insert.run('theme', 'system');
     },
   },
+  {
+    to: 7,
+    apply(db) {
+      db.exec(`
+        -- A task is a work item that belongs to exactly one channel and owns
+        -- its own task-type target (the task thread). The task row is mutable
+        -- (title, status, assignee); its messages stay append-only. The task
+        -- never moves across channels, so the target cannot be rewritten and
+        -- a task row is never deleted: the five-state status expresses its
+        -- lifecycle instead.
+        CREATE TABLE task (
+          id TEXT PRIMARY KEY,
+          channel_id TEXT NOT NULL REFERENCES channel (id),
+          target_id TEXT NOT NULL REFERENCES target (id),
+          title TEXT NOT NULL CHECK (length(title) > 0),
+          status TEXT NOT NULL CHECK (
+            status IN ('todo', 'in_progress', 'in_review', 'done', 'closed')
+          ),
+          assignee_member_id TEXT REFERENCES member (id),
+          claimed_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (target_id)
+        );
 
+        -- The board reads the tasks of a channel; the target lookup is the
+        -- detail path.
+        CREATE INDEX task_channel ON task (channel_id, created_at);
+
+        -- A task points at a task-type target and nowhere else. Column
+        -- references cannot express a join, so the trigger is the backstop the
+        -- spec requires for the pointer guard's siblings.
+        CREATE TRIGGER task_target_must_be_task_kind
+        BEFORE INSERT ON task
+        WHEN (SELECT kind FROM target WHERE id = NEW.target_id) IS NOT 'task'
+        BEGIN
+          SELECT RAISE(ABORT, 'task.target_id must reference a task-type target');
+        END;
+
+        -- A task belongs to exactly one channel for its whole life: a change
+        -- that would move it is a bug, not a state transition.
+        CREATE TRIGGER task_scope_is_fixed
+        BEFORE UPDATE OF channel_id, target_id ON task
+        WHEN NEW.channel_id IS NOT OLD.channel_id OR NEW.target_id IS NOT OLD.target_id
+        BEGIN
+          SELECT RAISE(ABORT, 'task must stay in its channel and target');
+        END;
+
+        CREATE TRIGGER task_no_delete
+        BEFORE DELETE ON task
+        BEGIN
+          SELECT RAISE(ABORT, 'task rows are not deleted: close the task instead');
+        END;
+
+        -- A task pointer is a channel system message that points into its own
+        -- task thread. At most one pointer per task (partial unique index
+        -- below), and the trigger refuses any row that is not a system message
+        -- on the channel that owns the task. Client-submitted messages never
+        -- carry the field: the human-face parser rejects it as an unknown
+        -- field.
+        CREATE UNIQUE INDEX message_task_pointer_unique
+          ON message (task_pointer)
+          WHERE task_pointer IS NOT NULL;
+
+        CREATE TRIGGER message_task_pointer_guard
+        BEFORE INSERT ON message
+        WHEN NEW.task_pointer IS NOT NULL AND (
+          NEW.kind IS NOT 'system'
+          OR NOT EXISTS (
+            SELECT 1
+              FROM target t
+              JOIN task k ON k.channel_id = t.id
+             WHERE t.id = NEW.target_id
+               AND t.kind = 'channel'
+               AND k.id = NEW.task_pointer
+          )
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'task_pointer must be a system message on the channel that owns the task');
+        END;
+      `);
+    },
+  },
 ];
 
 export type MigrationOutcome =
