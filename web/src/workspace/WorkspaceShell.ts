@@ -1,5 +1,6 @@
 import {
   t,
+  type AgentMcpView,
   type AgentRulesView,
   type ApprovalDecisionInput,
   type ApprovalView,
@@ -30,6 +31,7 @@ import type { AsyncAction1, AsyncAction2 } from '../async-action.ts';
 import { AgentDetailPanel } from './AgentDetailPanel.ts';
 import { rulesChannelId } from './agent-rules.ts';
 import { ApprovalPanel } from './ApprovalPanel.ts';
+import type { McpSaveBody } from './mcp-tab.ts';
 import { permissionScopeKey } from './permissions.ts';
 import { ContextPanel } from './ContextPanel.ts';
 import { MemberPanel } from './MemberPanel.ts';
@@ -78,6 +80,12 @@ export interface WorkspaceShellProps {
   sopDefinitions?: Record<string, readonly SopDefinitionView[]>;
   /** SOP run snapshots, keyed by definition id. */
   sopRuns?: Record<string, readonly SopRunView[]>;
+  /** Agent-home mcp.json readings, keyed by Agent id. */
+  agentMcp?: Record<string, AgentMcpView>;
+  /** Read the Agent's mcp.json when the detail opens; the host fetches. */
+  onAgentMcpNeeded?: (agentId: string) => void;
+  /** The one mcp.json write shared by the structured form and raw textarea. */
+  onAgentMcpChange?: (agentId: string, body: McpSaveBody) => void | Promise<AgentMcpView | void>;
   /** Effective rules per Agent id, read on demand when the detail opens. */
   agentRules?: Record<string, AgentRulesView>;
   viewportWidth?: number;
@@ -173,6 +181,9 @@ export function WorkspaceShell({
   onAgentPermissionModeChange,
   agentRules,
   onAgentRulesNeeded,
+  agentMcp,
+  onAgentMcpNeeded,
+  onAgentMcpChange,
   saveFailed = false,
   onLiveEvent,
 }: WorkspaceShellProps) {
@@ -217,6 +228,7 @@ export function WorkspaceShell({
         agentId,
         rulesChannelId(workspace, selectedTargetId),
       );
+      onAgentMcpNeeded?.(agentId);
     }
     setDrawer(openWorkspacePanel({ activeTargetId: selectedTargetId, drawer }, panel).drawer);
   }
@@ -430,6 +442,11 @@ export function WorkspaceShell({
             agent: selectedAgent,
             locale,
             rules: agentRules?.[selectedAgent.id] ?? null,
+            mcp: agentMcp?.[selectedAgent.id] ?? null,
+            onMcpChange:
+              onAgentMcpChange === undefined
+                ? undefined
+                : (body) => onAgentMcpChange(selectedAgent.id, body),
             onSave:
               onSaveAgent === undefined
                 ? undefined

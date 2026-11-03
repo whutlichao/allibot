@@ -5,6 +5,7 @@ import type { RoundProvider, RoundResult } from './agent-seam.js';
 import { nowIso } from './clock.js';
 import { tFromDb } from './copy.js';
 import { publishSopUpdate } from './events.js';
+import { closeRoundMcp } from './mcp-runtime.js';
 import { readSopRoundInput, type SopRoundStep } from './rounds.js';
 import { ApprovalTimeoutError } from './tool-gate.js';
 
@@ -265,7 +266,7 @@ async function runInternalRound(
   provider: RoundProvider,
   params: InternalRoundParams,
 ): Promise<RoundResult> {
-  const input = readSopRoundInput(db, {
+  const input = await readSopRoundInput(db, {
     memberId: params.memberId,
     runId: params.run.id,
     definitionId: params.run.definition_id,
@@ -279,7 +280,11 @@ async function runInternalRound(
     onApprovalWait: params.onApprovalWait,
     onApprovalSettled: params.onApprovalSettled,
   });
-  return await provider.runRound(input);
+  try {
+    return await provider.runRound(input);
+  } finally {
+    await closeRoundMcp(input.mcp);
+  }
 }
 
 function newStepRecord(

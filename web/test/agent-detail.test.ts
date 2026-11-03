@@ -190,18 +190,21 @@ test('the basic tab holds stats, system prompt, config, rules and the danger blo
   );
 });
 
-test('skills and mcp are T11 placeholders with no controls and no fabricated data', () => {
+test('skills stays the T11 placeholder; mcp is the file editor with no fabricated data', () => {
   const html = renderToStaticMarkup(
     createElement(AgentDetailPanel, { agent: agent({ id: AGENT_ID, display_name: '阿蓝' }), locale: 'zh-CN' }),
   );
 
-  for (const name of ['skills', 'mcp']) {
-    const region = panelRegion(html, name);
-    assert.ok(region.includes('依赖规格 T11（M2）'), `${name} states its dependency`);
-    assert.doesNotMatch(region, /<(button|input|textarea|select)\b/, `${name} must not carry a control`);
-    for (const value of ['engineer', 'openai:gpt-5', '你是一名负责实现的工程师。']) {
-      assert.ok(!region.includes(value), `${name} must not fabricate ${value}`);
-    }
+  const skills = panelRegion(html, 'skills');
+  assert.ok(skills.includes('依赖规格 T11（M2）'), 'skills states its dependency');
+  assert.doesNotMatch(skills, /<(button|input|textarea|select)\b/, 'skills must not carry a control');
+
+  // mcp is now the #47 file editor: structured + raw blocks read the same file.
+  const mcp = panelRegion(html, 'mcp');
+  assert.match(mcp, /data-mcp-block="entries"/);
+  assert.match(mcp, /data-mcp-block="raw"/);
+  for (const value of ['engineer', 'openai:gpt-5', '你是一名负责实现的工程师。']) {
+    assert.ok(!skills.includes(value), `skills must not fabricate ${value}`);
   }
 });
 

@@ -1,4 +1,5 @@
 import type {
+  AgentMcpView,
   AgentView,
   ApprovalDecisionInput,
   ApprovalView,
@@ -93,6 +94,29 @@ export async function saveAgentConfig(
     body: JSON.stringify(patch),
   });
   return readJson<AgentView>(response, `PATCH agent ${agentId}`);
+}
+
+/** `GET /api/agents/{id}/mcp` (#47): the same file runtime assembly reads. */
+export async function readAgentMcp(
+  fetchImpl: typeof fetch,
+  agentId: string,
+): Promise<AgentMcpView> {
+  const response = await fetchImpl(`/api/agents/${encodeURIComponent(agentId)}/mcp`);
+  return readJson<AgentMcpView>(response, `GET agent ${agentId} mcp`);
+}
+
+/** The one management write: exactly one of `entries` / `raw` in the body. */
+export async function saveAgentMcp(
+  fetchImpl: typeof fetch,
+  agentId: string,
+  body: { entries: import('@allibot/shared').McpServerEntry[] } | { raw: string },
+): Promise<AgentMcpView> {
+  const response = await fetchImpl(`/api/agents/${encodeURIComponent(agentId)}/mcp`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return readJson<AgentMcpView>(response, `PUT agent ${agentId} mcp`);
 }
 
 export async function deleteAgent(

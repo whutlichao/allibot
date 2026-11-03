@@ -2,6 +2,8 @@ import {
   AGENT_PROVIDERS,
   type AgentProvider,
   type CredentialStatus,
+  type RemoteConsentScopeKind,
+  type RemoteConsentScopeView,
   type RemoteConsentView,
   type RemoteDataFlowReadView,
   type RemoteDataFlowView,
@@ -163,19 +165,87 @@ export function confirmProviderConsent(
   db: Database.Database,
   provider: AgentProvider,
 ): RemoteConsentView {
+  const consent = confirmRemoteConsent(db, 'model', provider);
+  return { provider, confirmed_at: consent.confirmed_at };
+}
+
+/**
+ * 通用一次性确认 (#47 / D2.3): the same `remote_consent_scope` row M1's model
+ * entry writes, for the three remote data-flow kinds. Repeating the same scope
+ * is the same fact and keeps the first time. Only the scope and the instant
+ * are stored — never a URL, command, env value or credential.
+ */
+export function confirmRemoteConsent(
+  db: Database.Database,
+  scopeKind: RemoteConsentScopeKind,
+  scopeId: string,
+): RemoteConsentScopeView {
   const confirm = db.transaction((): string => {
-    const existing = readProviderConsent(db, provider);
-    if (existing !== null) {
-      return existing;
+    const existing = db
+      .prepare(
+        `SELECT confirmed_at FROM remote_consent_scope
+          WHERE scope_kind = ? AND scope_id = ?`,
+      )
+      .get(scopeKind, scopeId) as { confirmed_at: string } | undefined;
+    if (existing !== undefined) {
+      return existing.confirmed_at;
     }
     const confirmedAt = new Date().toISOString();
     db.prepare(
       `INSERT INTO remote_consent_scope (scope_kind, scope_id, confirmed_at)
-       VALUES ('model', ?, ?)`,
-    ).run(provider, confirmedAt);
+       VALUES (?, ?, ?)`,
+    ).run(scopeKind, scopeId, confirmedAt);
     return confirmedAt;
   });
-  return { provider, confirmed_at: confirm() };
+  return { scope_kind: scopeKind, scope_id: scopeId, confirmed_at: confirm() };
+}
+
+/** Parse the generic consent body `{scope_kind, scope_id}` (D2.3). */
+export function parseConsentScope(body: unknown): {
+  scopeKind: RemoteConsentScopeKind;
+  scopeId: string;
+} {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw ApiFailure.validation('请求体必须是对象');
+  }
+  const record = body as Record<string, unknown>;
+  const unknown = Object.keys(record).find(
+    (key) => key !== 'scope_kind' && key !== 'scope_id',
+  );
+  if (unknown !== undefined) {
+    throw ApiFailure.validation(`未知字段：${unknown}`, { field: unknown });
+  }
+  const scopeKind = record['scope_kind'];
+  if (scopeKind !== 'model' && scopeKind !== 'mcp' && scopeKind !== 'docker') {
+    throw ApiFailure.validation('scope_kind 必须是 model / mcp / docker', {
+      field: 'scope_kind',
+    });
+  }
+  const scopeId = record['scope_id'];
+  if (typeof scopeId !== 'string' || scopeId.length === 0) {
+    throw ApiFailure.validation('scope_id 必须是非空字符串', { field: 'scope_id' });
+  }
+  if (scopeKind === 'model' && !(AGENT_PROVIDERS as readonly string[]).includes(scopeId)) {
+    throw ApiFailure.validation('model 的 scope_id 必须是 anthropic / openai', {
+      field: 'scope_id',
+    });
+  }
+  return { scopeKind, scopeId };
+}
+
+/** Every confirmed row of one kind, scope + time only. */
+export function readConsentScopes(
+  db: Database.Database,
+  scopeKind: RemoteConsentScopeKind,
+): RemoteConsentScopeView[] {
+  const rows = db
+    .prepare(
+      `SELECT scope_kind, scope_id, confirmed_at FROM remote_consent_scope
+        WHERE scope_kind = ?
+        ORDER BY scope_id`,
+    )
+    .all(scopeKind) as RemoteConsentScopeView[];
+  return rows;
 }
 
 /**
@@ -203,5 +273,7 @@ export function remoteDataFlowView(
       tFromDb(db, 'remoteFlow.surface.receiver'),
     ],
     providers,
+    mcp_consents: readConsentScopes(db, 'mcp'),
+    docker_consents: readConsentScopes(db, 'docker'),
   };
 }

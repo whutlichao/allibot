@@ -26,6 +26,7 @@ import {
   SSE_ROTATE_EVENT,
 } from './events.js';
 import { readAgentRules } from './agent-home.js';
+import { readAgentMcp, replaceAgentMcp } from './mcp-file.js';
 import {
   archiveChannel,
   assertChannelReadable,
@@ -47,6 +48,8 @@ import { createDm, listDms } from './dms.js';
 import { appendMessageAndDispatch, listMessages, parseMessageRequest, parsePageQuery } from './messages.js';
 import {
   confirmProviderConsent,
+  confirmRemoteConsent,
+  parseConsentScope,
   parseProviderParam,
   remoteDataFlowView,
 } from './providers.js';
@@ -577,6 +580,16 @@ const ROUTES: readonly Route[] = [
     },
   },
   {
+    // 通用一次性确认 (#47 / D2.3): model / mcp / docker all write the same
+    // `remote_consent_scope` row and keep the first confirmation time.
+    method: 'POST',
+    pattern: /^\/api\/remote-data-flow\/consent$/,
+    handle: async (request, response, { db }) => {
+      const scope = parseConsentScope(await readJsonBody(request));
+      sendJson(response, 200, confirmRemoteConsent(db, scope.scopeKind, scope.scopeId));
+    },
+  },
+  {
     method: 'POST',
     pattern: /^\/api\/remote-data-flow\/([^/]+)\/consent$/,
     handle: async (_request, response, { db }, ...params) => {
@@ -673,6 +686,34 @@ const ROUTES: readonly Route[] = [
     handle: async (request, response, { db, env, orchestration }) => {
       const agent = createAgent(db, await readJsonBody(request), env, orchestration.inFlight);
       sendJson(response, 201, agent);
+    },
+  },
+  {
+    // mcp.json 管理面 (#47 / D2.3 / D6.1): both blocks read and replace the one
+    // Agent-home file the runtime assembles from. The body is exactly one of
+    // `entries` (structured form) or `raw` (textarea); the file write is atomic
+    // and a same-content replay does not touch mtime.
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/mcp$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      sendJson(response, 200, readAgentMcp(db, id, env));
+    },
+  },
+  {
+    method: 'PUT',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/mcp$`),
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      sendJson(response, 200, replaceAgentMcp(db, id, await readJsonBody(request), env));
     },
   },
   {

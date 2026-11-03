@@ -1,5 +1,6 @@
 import {
   t,
+  type AgentMcpView,
   type AgentRulesView,
   type ApprovalDecisionInput,
   type ApprovalView,
@@ -49,6 +50,13 @@ export interface AppProps {
   /** Effective rules per Agent id, keyed by Agent. */
   agentRules?: Record<string, AgentRulesView>;
   onAgentRulesNeeded?: (agentId: string, channelId: string | null) => void;
+  /** Agent-home mcp.json readings, keyed by Agent. */
+  agentMcp?: Record<string, AgentMcpView>;
+  onAgentMcpNeeded?: (agentId: string) => void;
+  onAgentMcpChange?: (
+    agentId: string,
+    body: { entries: import('@allibot/shared').McpServerEntry[] } | { raw: string },
+  ) => void | Promise<AgentMcpView | void>;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
   onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
@@ -91,6 +99,9 @@ export function App({
   permissionRules,
   agentRules,
   onAgentRulesNeeded,
+  agentMcp,
+  onAgentMcpNeeded,
+  onAgentMcpChange,
   onSelectTarget,
   onTaskTransition,
   onJoinMember,
@@ -119,6 +130,9 @@ export function App({
       permissionRules,
       agentRules,
       onAgentRulesNeeded,
+      agentMcp,
+      onAgentMcpNeeded,
+      onAgentMcpChange,
       onSelectTarget,
       onTaskTransition,
       onSettingsChange,

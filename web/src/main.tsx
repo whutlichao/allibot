@@ -1,5 +1,6 @@
 import {
   t,
+  type AgentMcpView,
   type AgentRulesView,
   type ApprovalDecisionInput,
   type ApprovalView,
@@ -60,8 +61,10 @@ import {
   patchChannelConfig,
   readApprovals,
   readPermissionRules,
+  readAgentMcp,
   readTargetMembers,
   saveAgentConfig,
+  saveAgentMcp,
   savePermissionRules,
   startSopRun,
   submitApprovalDecision,
@@ -107,6 +110,8 @@ let currentSopDefinitions: Record<string, readonly SopDefinitionView[]> = {};
 let currentSopRuns: Record<string, readonly SopRunView[]> = {};
 /** Agent 家目录 / 规则读数 (#43)：打开详情时按需读，不猜三段内容。 */
 let currentAgentRules: Record<string, AgentRulesView> = {};
+/** mcp.json 读数 (#47)：结构与原文共用这一份，打开详情时按需读。 */
+let currentAgentMcp: Record<string, AgentMcpView> = {};
 
 async function loadTargetMembers(targetId: string): Promise<void> {
   currentChannelMembers = {
@@ -152,6 +157,21 @@ async function loadPermissionRules(workspace: WorkspaceView): Promise<void> {
 async function loadAgentRules(agentId: string, channelId: string | null): Promise<void> {
   const rules = await readAgentRules(fetch, agentId, channelId);
   currentAgentRules = { ...currentAgentRules, [agentId]: rules };
+}
+
+async function loadAgentMcp(agentId: string): Promise<void> {
+  const reading = await readAgentMcp(fetch, agentId);
+  currentAgentMcp = { ...currentAgentMcp, [agentId]: reading };
+}
+
+/** The one mcp.json write; the returned reading refreshes both blocks. */
+async function changeAgentMcp(
+  agentId: string,
+  body: { entries: import('@allibot/shared').McpServerEntry[] } | { raw: string },
+): Promise<AgentMcpView> {
+  const reading = await saveAgentMcp(fetch, agentId, body);
+  currentAgentMcp = { ...currentAgentMcp, [agentId]: reading };
+  return reading;
 }
 
 async function loadPlans(targetId: string): Promise<void> {
@@ -309,6 +329,7 @@ function render(saveFailed = false): void {
         approvals={currentApprovals}
         permissionRules={currentPermissionRules}
         agentRules={currentAgentRules}
+        agentMcp={currentAgentMcp}
         onAgentRulesNeeded={(agentId, channelId) => {
           void loadAgentRules(agentId, channelId)
             .then(() => render())
@@ -316,6 +337,14 @@ function render(saveFailed = false): void {
               console.error('Agent rules read failed', error);
             });
         }}
+        onAgentMcpNeeded={(agentId) => {
+          void loadAgentMcp(agentId)
+            .then(() => render())
+            .catch((error: unknown) => {
+              console.error('Agent mcp read failed', error);
+            });
+        }}
+        onAgentMcpChange={changeAgentMcp}
         saveFailed={saveFailed}
         onSelectTarget={(targetId) => {
           currentTargetId = targetId;
