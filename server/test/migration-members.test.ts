@@ -89,7 +89,7 @@ test('migrating an empty data dir creates member and agent_config with exactly o
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 11);
     const tables = tableNames(dataDir);
     assert.ok(tables.includes('member'), `member table is missing; tables: ${tables.join(', ')}`);
     assert.ok(
@@ -134,7 +134,7 @@ test('migrating an empty data dir creates member and agent_config with exactly o
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 9);
+    assert.equal(entries[0]?.['to'], 11);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -154,7 +154,7 @@ test('a version 1 data dir is backed up and upgraded through the production chai
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 11);
     assert.ok(tableNames(dataDir).includes('member'));
     assert.ok(tableNames(dataDir).includes('agent_config'));
 
@@ -186,7 +186,7 @@ test('a version 1 data dir is backed up and upgraded through the production chai
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], 1);
-    assert.equal(entries[0]?.['to'], 9);
+    assert.equal(entries[0]?.['to'], 11);
     assert.equal(entries[0]?.['result'], 'ok');
     assert.equal(entries[0]?.['backup_path'], backupPath);
   } finally {

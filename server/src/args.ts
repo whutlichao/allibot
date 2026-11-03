@@ -4,15 +4,27 @@ import { SCRIPTED_BEHAVIORS, type ScriptedBehavior } from './scripted-provider.j
 
 export type CliCommand = 'serve' | 'migrate';
 
+/**
+ * The member-face adapter the server runs. `scripted` is the test double
+ * injected through `--scripted-provider` (D4.3); `model` is the real provider
+ * adapter, selected explicitly so no production path ever falls into a double.
+ */
+export type ProviderMode = 'scripted' | 'model';
+
 export interface CliOptions {
   command: CliCommand;
   dataDir: string | undefined;
   port: number;
   /**
-   * The member-face adapter injected through startup (D4.3). The scripted
-   * double is the only adapter this ticket ships; a real provider adapter is
-   * a later ticket's selection at this same place, never a production branch
-   * on a test environment variable.
+   * Which member-face adapter is live. The scripted double stays the default so
+   * every behaviour test runs with no network and no model cost; a real
+   * deployment passes `--provider model`.
+   */
+  providerMode: ProviderMode;
+  /**
+   * The scripted double's behaviour. It only matters when the scripted adapter
+   * is selected; the startup line always names the adapter that is actually
+   * live.
    */
   scriptedProvider: ScriptedBehavior;
   /** How long the scripted `delay` behaviour holds one round. */
@@ -24,6 +36,12 @@ export interface CliOptions {
    */
   scriptedReplies: readonly string[];
   /**
+   * Have the scripted reply carry the system prompt the round was handed. The
+   * double is where a test observes the prompt; it is an adapter capability,
+   * not a production branch.
+   */
+  scriptedEchoPrompt: boolean;
+  /**
    * How long one `/api/events` connection lives before the server sends the
    * rotate frame and closes it. Production keeps the 30-minute default; a test
    * injects a short value instead of waiting.
@@ -33,17 +51,21 @@ export interface CliOptions {
 
 const DEFAULT_PORT = 3000;
 /**
- * Until the real provider adapter lands (D4.3), the only member-face adapter is
- * the scripted double. Its default is `ignore`: a server started without an
- * explicit `--scripted-provider` runs every round exactly once and lands no
- * invented reply. The startup line names the adapter, so the choice is visible.
+ * The scripted double is the default member-face adapter. Its default behaviour
+ * is `ignore`: a server started without an explicit `--scripted-provider` runs
+ * every round exactly once and lands no invented reply. The startup line names
+ * the adapter, so the choice is always visible; a real provider is selected
+ * with `--provider model`.
  */
+const DEFAULT_PROVIDER_MODE: ProviderMode = 'scripted';
+const PROVIDER_MODES: readonly ProviderMode[] = ['scripted', 'model'];
 const DEFAULT_SCRIPTED_PROVIDER: ScriptedBehavior = 'ignore';
 const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
   'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay>] [--scripted-delay-ms <ms>] ' +
-  '[--scripted-reply <body>]... [--sse-lifetime-ms <ms>]';
+  '[--provider <scripted|model>] ' +
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body>] [--scripted-delay-ms <ms>] ' +
+  '[--scripted-reply <body>] [--scripted-echo-prompt] [--sse-lifetime-ms <ms>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -55,9 +77,11 @@ export function parseCliArgs(
       'data-dir': { type: 'string' },
       port: { type: 'string' },
       migrate: { type: 'boolean' },
+      provider: { type: 'string' },
       'scripted-provider': { type: 'string' },
       'scripted-delay-ms': { type: 'string' },
       'scripted-reply': { type: 'string', multiple: true },
+      'scripted-echo-prompt': { type: 'boolean' },
       'sse-lifetime-ms': { type: 'string' },
     },
     strict: true,
@@ -72,11 +96,26 @@ export function parseCliArgs(
     command: resolveCommand(values.migrate === true, positionals[0]),
     dataDir: values['data-dir'] ?? env.allibot_DATA_DIR,
     port: parsePort(values.port ?? String(DEFAULT_PORT)),
+    providerMode: parseProviderMode(values.provider),
     scriptedProvider: parseScriptedProvider(values['scripted-provider']),
     scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
     scriptedReplies: parseScriptedReplies(values['scripted-reply']),
+    scriptedEchoPrompt: values['scripted-echo-prompt'] === true,
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
   };
+}
+
+function parseProviderMode(raw: string | undefined): ProviderMode {
+  if (raw === undefined) {
+    return DEFAULT_PROVIDER_MODE;
+  }
+  const mode = PROVIDER_MODES.find((candidate) => candidate === raw);
+  if (mode === undefined) {
+    throw new Error(
+      `invalid --provider value: ${raw}; expected one of ${PROVIDER_MODES.join(', ')}`,
+    );
+  }
+  return mode;
 }
 
 function resolveCommand(migrate: boolean, positional: string | undefined): CliCommand {

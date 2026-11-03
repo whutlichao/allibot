@@ -6,12 +6,13 @@
  * injected through `--scripted-provider` is the only implementation this
  * ticket ships, and the real provider adapter arrives behind the same
  * interface without changing it. Nothing here knows about HTTP, SQLite or the
- * scripted double's four behaviours.
+ * scripted double's chosen behaviour.
  *
- * Long-term memory (#17) extends the input side only: a round now also carries
- * the memory cards recalled for it and the assembled system prompt, the same
- * way a task-thread round carries task context. The output shape — zero or
- * more pending replies plus one round result — is unchanged.
+ * Long-term memory (#17) and response judgment (#15) both extend the input
+ * side only: a round now also carries the memory cards recalled for it and the
+ * assembled system prompt, the same way a task-thread round carries task
+ * context. The output shape — zero or more pending replies plus one round
+ * result — is unchanged.
  */
 
 /**
@@ -21,6 +22,9 @@
  */
 export const WAKE_REASONS = ['channel-message', 'mention', 'claim', 'continue'] as const;
 export type WakeReason = (typeof WAKE_REASONS)[number];
+
+/** The three target kinds; a DM round reads its own one-to-one prompt. */
+export type RoundTargetKind = 'channel' | 'dm' | 'task';
 
 /** What the round is allowed to know about the member it runs for. */
 export interface RoundMember {
@@ -44,13 +48,32 @@ export interface RoundMessage {
   body: string;
 }
 
-/** The round's input: the member, the context it reads, and the wake reason. */
+/**
+ * The response discipline (回应判断) computed from the triggering message, not
+ * from the wake reason: the reason is readable diagnostics only, and a merged
+ * wake keeps the reason of whichever arrived first.
+ *
+ * `definite` is true for the M1 definite signals: a personal mention, a claim
+ * wake, a human message the round is woken by, and an auto-continue wake. It
+ * is the stored rule the adapter reads from its input, never something the
+ * adapter infers back from the reason's text.
+ */
+export interface RoundDiscipline {
+  definite: boolean;
+  /** The definite signal that fired; `null` when `definite` is false. */
+  signal: 'mention' | 'claim' | 'human-message' | 'continue' | null;
+}
+
+/** The round's input: the member, the context it reads, and its discipline. */
 export interface RoundInput {
   member: RoundMember;
   targetId: string;
+  /** The kind of target this round runs in; a DM reads a one-to-one prompt. */
+  targetKind: RoundTargetKind;
   /** The seq of the message that triggered this wake. */
   baseSeq: number;
   reason: WakeReason;
+  discipline: RoundDiscipline;
   /** The target's messages from `baseSeq` on, oldest first, read at round start. */
   messages: readonly RoundMessage[];
   /**
@@ -62,9 +85,10 @@ export interface RoundInput {
   memories: readonly RoundMemory[];
   /**
    * The assembled system prompt the adapter hands the model: the stored
-   * `agent_config.system_prompt` plus the memory section when this round
-   * recalled cards. The round input carries it so the seam stays the one prompt
-   * assembly path.
+   * `agent_config.system_prompt`, the target's response discipline, the
+   * mandatory answer sentence where the round must answer, and the memory
+   * section when this round recalled cards. The round input carries it so the
+   * seam stays the one prompt assembly path.
    */
   systemPrompt: string;
 }
@@ -77,8 +101,15 @@ export interface RoundMemory {
   matched_keywords: readonly string[];
 }
 
-/** The three verdicts a member round can reach in this ticket. */
-export type RoundVerdict = 'replied' | 'ignored' | 'failed';
+/**
+ * What one member round concluded. `silent` is the deliberate silence (沉默):
+ * a structured verdict the adapter states, never a message kind and never
+ * derived from the readable text. `ignored` is the ordinary self-judged skip.
+ * Both are normal protocol results on their own; under a definite signal the
+ * round closes as `failed` (回应判断), which is the round write path's rule,
+ * not the adapter's.
+ */
+export type RoundVerdict = 'replied' | 'ignored' | 'silent' | 'failed';
 
 /**
  * The seam's output. `replies` holds zero or more bodies the adapter wants

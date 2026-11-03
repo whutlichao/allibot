@@ -1,14 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type {
+  RoundDiscipline,
   RoundInput,
   RoundMember,
   RoundMemory,
   RoundMessage,
   RoundProvider,
   RoundResult,
+  RoundTargetKind,
   WakeReason,
 } from './agent-seam.js';
+import { budgetExhaustedReason, tryConsumeJump, type BudgetRow } from './budget.js';
 import { tFromDb } from './copy.js';
 import { publishMessageCreated, publishRoundOutcome } from './events.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
@@ -38,9 +41,9 @@ function wakeText(db: Database.Database, reason: WakeReason): string {
 }
 
 /**
- * The seam verdict's readable text. A `replied` verdict whose body cannot be
- * committed is stated as such, not judged: whether that is a failure under a
- * definite signal is the response-judgement ticket's rule.
+ * The seam verdict's readable text. Whether a silent / ignored / body-less
+ * verdict closes as a failure is the response judgement's rule (回应判断),
+ * which is applied on top of this text, never derived from it.
  */
 function verdictText(db: Database.Database, verdict: RoundResult['verdict']): string {
   switch (verdict) {
@@ -48,8 +51,32 @@ function verdictText(db: Database.Database, verdict: RoundResult['verdict']): st
       return tFromDb(db, 'round.replied');
     case 'ignored':
       return tFromDb(db, 'round.ignored');
+    case 'silent':
+      return tFromDb(db, 'round.silent');
     case 'failed':
       return tFromDb(db, 'round.failed');
+  }
+}
+
+/**
+ * The readable text of the definite signal that woke the round. Each signal
+ * picks its own key: a claim round never borrows the human-message copy, and a
+ * mention round never borrows the claim copy — that would state a fact that
+ * did not happen.
+ */
+function mandatoryText(
+  db: Database.Database,
+  signal: NonNullable<RoundDiscipline['signal']>,
+): string {
+  switch (signal) {
+    case 'mention':
+      return tFromDb(db, 'round.mandatory.mention');
+    case 'claim':
+      return tFromDb(db, 'round.mandatory.claim');
+    case 'human-message':
+      return tFromDb(db, 'round.mandatory.humanMessage');
+    case 'continue':
+      return tFromDb(db, 'round.mandatory.continue');
   }
 }
 
@@ -224,12 +251,23 @@ export function createInFlightRounds(): InFlightRounds {
  * write request waits for them, which keeps the observable order stable). A
  * deferred adapter (the scripted `delay` behaviour today) is started and left
  * to settle on its own: the write request answers immediately.
+ *
+ * An Agent-authored message is relayed under the response budget: it either
+ * lands as one jump (at least one wake is delivered to another member) or the
+ * epoch is exhausted and no wake is delivered at all. A wake that folds into a
+ * running round on the same target is delivered to that round (the member gets
+ * the message) and does not start a second round; only the case where every
+ * wake folds — zero delivery — is not a jump.
+ *
+ * `messageKind` is the kind of the message the wakes belong to; `null` means the
+ * wakes did not come from a message write (nothing to charge a jump to).
  */
 export async function dispatchWakes(
   db: Database.Database,
   provider: RoundProvider,
   wakes: readonly Wake[],
   inFlight: InFlightRounds,
+  messageKind: string | null = null,
   onError: (error: unknown, wake: Wake) => void = (error, wake) => {
     // Failure isolation: one member's round must not fail the message write or
     // another member's round. The message is already committed; an adapter
@@ -238,17 +276,71 @@ export async function dispatchWakes(
     console.error(`allibot: round for member ${wake.memberId} failed:`, error);
   },
 ): Promise<void> {
+  if (wakes.length === 0) {
+    return;
+  }
+  const delivering = wakes.filter((wake) => !foldsIntoInFlight(inFlight, wake));
+  const relayed =
+    messageKind === 'agent' && delivering.length > 0
+      ? tryConsumeJump(db, wakes[0]!.targetId)
+      : null;
+  const delivered = relayed !== null && relayed.consumed;
+  if (relayed !== null && !delivered) {
+    await suppressWakes(db, wakes, relayed.budget);
+    return;
+  }
+  const jump = delivered ? 1 : 0;
   for (const wake of wakes) {
     if (provider.deferred) {
-      void runRound(db, provider, wake, inFlight).catch((error: unknown) => onError(error, wake));
+      void runRound(db, provider, wake, inFlight, jump).catch((error: unknown) => onError(error, wake));
       continue;
     }
     try {
-      await runRound(db, provider, wake, inFlight);
+      await runRound(db, provider, wake, inFlight, jump);
     } catch (error) {
       onError(error, wake);
     }
   }
+}
+
+/**
+ * A wake folds into a running round when the same member already runs one on
+ * the same target: it is delivered to that round (as a `merged` row) and never
+ * starts a second round. A wake for another target is deferred rather than
+ * folded and does reach the member once the running round closes, so it still
+ * counts as a delivery.
+ */
+function foldsIntoInFlight(inFlight: InFlightRounds, wake: Wake): boolean {
+  const active = inFlight.get(wake.memberId);
+  return active !== undefined && active.targetId === wake.targetId;
+}
+
+/**
+ * Suppress every wake of an exhausted message: the message stays in the
+ * target, no wake is delivered, and each member that would have been woken
+ * gets one `budget-exhausted` round outcome. It is not an error (the status
+ * point stays idle) and it is not a silent drop (the row is the evidence).
+ */
+async function suppressWakes(
+  db: Database.Database,
+  wakes: readonly Wake[],
+  budget: BudgetRow,
+): Promise<void> {
+  const now = new Date().toISOString();
+  const write = db.transaction((): void => {
+    for (const wake of wakes) {
+      insertOutcome(db, {
+        wake,
+        baseSeq: wake.fromSeq,
+        status: 'budget-exhausted',
+        reason: budgetExhaustedReason(db, budget),
+        merged: 0,
+        startedAt: now,
+        finishedAt: now,
+      });
+    }
+  });
+  write();
 }
 
 /**
@@ -259,12 +351,20 @@ export async function dispatchWakes(
  *
  * A penetrated member that replies joins the channel first (a system join
  * event, then the reply); one that does not reply never joins.
+ *
+ * A landed reply is itself an Agent message, so it relays to the other members
+ * under the same response budget: this call delivers that message's wakes, and
+ * the next members' rounds run inside it. The relay runs depth first (the
+ * next round closes before this call returns) so the chain is observable in
+ * seq order on the synchronous adapter, and the budget stops it at the epoch
+ * ceiling.
  */
 export async function runRound(
   db: Database.Database,
   provider: RoundProvider,
   wake: Wake,
   inFlight: InFlightRounds,
+  budgetConsumed = 0,
 ): Promise<RoundOutcomeRow | null> {
   const active = inFlight.get(wake.memberId);
   if (active !== undefined) {
@@ -280,11 +380,14 @@ export async function runRound(
   inFlight.set(wake.memberId, turn);
   const startedAt = new Date().toISOString();
 
+  // The response discipline is computed once, from the data the wake points
+  // at. A read failure leaves it undefined, which judges as non-definite: an
+  // unreadable round has no definite signal to enforce.
+  let input: RoundInput | undefined;
   let result: RoundResult;
-  let roundInput: RoundInput | null = null;
   try {
-    roundInput = readRoundInput(db, wake);
-    result = await provider.runRound(roundInput);
+    input = readRoundInput(db, wake);
+    result = await provider.runRound(input);
   } catch (error) {
     // A wake that arrived after the adapter settled but before this round's
     // transaction commits still folds into this round; a crash here must not
@@ -292,9 +395,9 @@ export async function runRound(
     result = { verdict: 'failed', replies: [], detail: errorMessage(error) };
   }
 
-  let committed: RoundCommit;
+  let committed: CommittedRound;
   try {
-    committed = commitRound(db, wake, turn, startedAt, result, roundInput);
+    committed = commitRound(db, wake, turn, startedAt, result, input, budgetConsumed);
   } finally {
     inFlight.delete(wake.memberId);
   }
@@ -307,19 +410,41 @@ export async function runRound(
     publishRoundOutcome(outcome);
   }
   // The other-target wakes wait here rather than running in parallel: one
-  // member still has at most one round in flight.
+  // member still has at most one round in flight. They were deferred into this
+  // round's turn, not delivered to another member, so they carry no jump.
   for (const deferred of turn.deferred) {
     await runRound(db, provider, deferred, inFlight);
   }
+  // The reply is itself an Agent message, so it relays to the other members
+  // under the same response budget: its wakes are charged as one more jump, or
+  // suppressed when the epoch is exhausted. Depth first, so the next members'
+  // rounds close before this one returns and the chain is observable in seq
+  // order on the synchronous adapter.
+  if (committed.replySeq !== null) {
+    const replyWakes = collectWakes(db, {
+      targetId: wake.targetId,
+      authorMemberId: wake.memberId,
+      kind: 'agent',
+      seq: committed.replySeq,
+    });
+    await dispatchWakes(db, provider, replyWakes, inFlight, 'agent');
+  }
   return committed.outcome;
 }
+
+/**
+ * The commit of one round. The reply seq travels back with the outcome so the
+ * caller can relay that message under the response budget; `null` means the
+ * round landed no message (ignored, failed, or a reply with no committable
+ * body), so there is nothing to relay.
+ */
 
 export interface RoundOutcomeRow {
   id: string;
   member_id: string;
   target_id: string;
   base_seq: number;
-  status: string;
+  status: RoundOutcomeStatus;
   reason: string;
   finished_reason: string | null;
   started_at: string;
@@ -360,38 +485,120 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     body: row.body,
   }));
 
+  const targetKind = readTargetKindOf(db, wake.targetId);
+  const triggeredByHuman = wokeByHuman(db, wake);
+  const discipline = readDiscipline(db, wake, triggeredByHuman);
   // Recall happens before the round runs and only informs its understanding
-  // (D5.2): it reads this round's input (the new messages, the task title and
-  // the recent context) and never writes, wakes or spends budget.
+  // (D5.2): it reads this round's input and never writes, wakes or spends
+  // budget.
   const memories = recallForRound(db, member.id, wake.targetId, messages);
-  const systemPrompt = assembleSystemPrompt(db, member, memories);
-
   return {
     member,
     targetId: wake.targetId,
+    targetKind,
     baseSeq: wake.fromSeq,
     reason: wake.reason,
+    discipline,
     messages,
     memories,
-    systemPrompt,
+    systemPrompt: composeSystemPrompt(db, member, targetKind, triggeredByHuman, memories),
   };
 }
 
 /**
- * The one prompt assembly path on the seam: the stored
- * `agent_config.system_prompt`, then the memory section when this round
- * recalled cards. The memory section is appended only — it never replaces the
- * stored prompt, so a member without recall reads exactly as it did before.
+ * 回应判断 (Response Judgment) for one round. The signals are read from the
+ * data the wake points at, never from the wake reason's text: a merged wake
+ * keeps whichever reason arrived first, and the reason is diagnostics only.
+ *
+ * M1's four definite signals — a personal mention, a claim wake, a human
+ * message that woke the round, and an auto-continue wake — must be answered.
+ * `channel-message` is the ordinary wake and stays a self-judged round: a
+ * conversation between others, without a mention, is legitimately ignored.
+ * A mention overrides the human-message signal (both must answer; the mention
+ * is the more specific copy). The team leader's task-change signal is T10 and
+ * deliberately absent.
  */
-function assembleSystemPrompt(
+function readDiscipline(
+  db: Database.Database,
+  wake: Wake,
+  triggeredByHuman: boolean,
+): RoundDiscipline {
+  switch (wake.reason) {
+    case 'claim':
+      return { definite: true, signal: 'claim' };
+    case 'continue':
+      return { definite: true, signal: 'continue' };
+    case 'mention':
+      return { definite: true, signal: 'mention' };
+    case 'channel-message':
+      if (mentionsMember(db, wake)) {
+        return { definite: true, signal: 'mention' };
+      }
+      return triggeredByHuman
+        ? { definite: true, signal: 'human-message' }
+        : { definite: false, signal: null };
+  }
+}
+
+/** The write-time mention snapshot of the triggering message names this member. */
+function mentionsMember(db: Database.Database, wake: Wake): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM message_mention mm
+         JOIN message msg ON msg.id = mm.message_id
+        WHERE msg.target_id = ? AND msg.seq = ? AND mm.member_id = ?`,
+    )
+    .get(wake.targetId, wake.fromSeq, wake.memberId);
+  return row !== undefined;
+}
+
+/** The message the wake points at is a human message (message.kind == human). */
+function wokeByHuman(db: Database.Database, wake: Wake): boolean {
+  const row = db
+    .prepare('SELECT kind FROM message WHERE target_id = ? AND seq = ?')
+    .get(wake.targetId, wake.fromSeq) as { kind: string } | undefined;
+  return row?.kind === 'human';
+}
+
+/**
+ * The system prompt a round is handed: the stored Agent prompt, the target's
+ * response discipline, the mandatory-answer sentence, and the memory section
+ * when this round recalled cards.
+ *
+ * A DM is stated one-to-one with an explicit mandatory answer (the glossary's
+ * "一对一口径 + 显式必答句") instead of the channel rubric: a DM never claims
+ * to be a multi-member channel and has no "not mentioned therefore silent"
+ * case. A channel keeps the silence rubric verbatim; a human-message round
+ * appends the human-message mandatory sentence as its own paragraph, and no
+ * other channel round gets that copy. The memory section is appended only — it
+ * never replaces the stored prompt (D5.2).
+ */
+function composeSystemPrompt(
   db: Database.Database,
   member: RoundMember,
+  targetKind: RoundTargetKind,
+  triggeredByHuman: boolean,
   memories: readonly RoundMemory[],
 ): string {
+  const sections = [member.system_prompt.trim()];
+  if (targetKind === 'dm') {
+    sections.push(tFromDb(db, 'prompt.dm.oneToOne'));
+    sections.push(
+      triggeredByHuman
+        ? tFromDb(db, 'prompt.humanMessage.mandatory')
+        : tFromDb(db, 'prompt.dm.mandatory'),
+    );
+  } else {
+    sections.push(tFromDb(db, 'prompt.channel.rubric'));
+    if (triggeredByHuman) {
+      sections.push(tFromDb(db, 'prompt.humanMessage.mandatory'));
+    }
+  }
   const memorySection = memoryPromptSection(db, memories);
-  return [member.system_prompt.trim(), ...(memorySection === null ? [] : [memorySection])]
-    .filter((section) => section.length > 0)
-    .join('\n\n');
+  if (memorySection !== null) {
+    sections.push(memorySection);
+  }
+  return sections.filter((section) => section.length > 0).join('\n\n');
 }
 
 /**
@@ -409,11 +616,13 @@ function commitRound(
   turn: Turn,
   startedAt: string,
   result: RoundResult,
-  roundInput: RoundInput | null,
-): RoundCommit {
+  roundInput: RoundInput | undefined,
+  budgetConsumed: number,
+): CommittedRound {
+  const signal = roundInput?.discipline ?? { definite: false, signal: null };
   const messages: WrittenMessage[] = [];
   const outcomes: RoundOutcomeRow[] = [];
-  const write = db.transaction((): RoundOutcomeRow => {
+  const write = db.transaction((): { outcome: RoundOutcomeRow; replySeq: number | null } => {
     const joinedSeq = commitJoin(db, wake, result, messages);
     const reply = commitReply(db, wake, result, messages);
     const finishedAt = new Date().toISOString();
@@ -423,7 +632,7 @@ function commitRound(
     // "no reply" wording for an ignored / failed round. It never calls a model
     // and has no switch; a round whose input could not even be read writes no
     // card, because nothing was understood.
-    if (roundInput !== null) {
+    if (roundInput !== undefined) {
       writeRoundMemoryCard(db, {
         memberId: wake.memberId,
         targetId: wake.targetId,
@@ -449,22 +658,26 @@ function commitRound(
       );
     }
 
-    const finishedReason: FinishedReason = result.verdict === 'failed' ? 'error' : 'completed';
+    const judged = judgeRound(signal, result, reply?.seq ?? null);
     const outcome = insertOutcome(db, {
       wake,
       baseSeq: wake.fromSeq,
-      status: result.verdict,
-      reason: roundReason(db, wake, result, joinedSeq, reply?.seq ?? null),
+      status: judged.status,
+      reason: roundReason(db, wake, signal, result, judged, joinedSeq, reply?.seq ?? null),
       merged: 0,
       startedAt,
       finishedAt,
-      finishedReason,
+      finishedReason: judged.finishedReason,
+      // The row-level marker of "this round was delivered by a counted jump".
+      // A folded reply lands here too, so the row count never decides the hop
+      // count (the ledger does); one jump marks every member it was delivered to.
+      budgetConsumed,
     });
     outcomes.push(outcome);
-    return outcome;
+    return { outcome, replySeq: reply?.seq ?? null };
   });
-  const outcome = write();
-  return { outcome, messages, outcomes };
+  const { outcome, replySeq } = write();
+  return { outcome, replySeq, messages, outcomes };
 }
 
 /** One target message a round committed, as the subscription relays it. */
@@ -473,12 +686,69 @@ interface WrittenMessage {
   seq: number;
 }
 
-interface RoundCommit {
-  /** The row this wake produced; the merged rows are in `outcomes`. */
+/** One target message a round committed, as the subscription relays it. */
+interface WrittenMessage {
+  id: string;
+  seq: number;
+}
+
+/**
+ * The round's committed rows: its outcome, the seq of the reply it landed
+ * (`null` when it landed no message), and everything the subscription relays.
+ */
+interface CommittedRound {
   outcome: RoundOutcomeRow;
+  replySeq: number | null;
   messages: WrittenMessage[];
   /** Every outcome row written by this round, in write order. */
   outcomes: RoundOutcomeRow[];
+}
+
+/**
+ * The stored round-outcome status vocabulary (轮次结果). This ticket produces
+ * replied / ignored / failed / merged / silent; `budget-exhausted` arrives with
+ * the budget ticket.
+ */
+export type RoundOutcomeStatus =
+  | 'replied'
+  | 'ignored'
+  | 'failed'
+  | 'merged'
+  | 'budget-exhausted'
+  | 'silent';
+
+/**
+ * 回应判断 (Response Judgment) applied to one round's adapter verdict.
+ *
+ * Under a definite signal — a personal mention, a claim wake, a human message,
+ * an auto-continue wake — a round that stays silent (`ignored` or the
+ * structured `silent`) or that answers without a committable body closes as
+ * `failed`. That is the response discipline's rule; the adapter's own verdict
+ * is still stated in the readable reason, so the row shows both facts. Under
+ * no definite signal, `ignored` and `silent` stay what they are: normal
+ * protocol results, not failures — a body-less reply keeps the adapter's own
+ * `replied` verdict and only the reason says it landed nothing.
+ *
+ * The stored status is computed from the structured verdict, never from the
+ * reason text, so the text can gain clauses without changing what is recorded.
+ */
+function judgeRound(
+  discipline: RoundDiscipline,
+  result: RoundResult,
+  replySeq: number | null,
+): { status: RoundOutcomeStatus; finishedReason: FinishedReason } {
+  if (result.verdict === 'failed') {
+    return { status: 'failed', finishedReason: 'error' };
+  }
+  if (result.verdict === 'replied') {
+    return replySeq === null && discipline.definite
+      ? { status: 'failed', finishedReason: 'completed' }
+      : { status: 'replied', finishedReason: 'completed' };
+  }
+  if (discipline.definite) {
+    return { status: 'failed', finishedReason: 'completed' };
+  }
+  return { status: result.verdict, finishedReason: 'completed' };
 }
 
 /**
@@ -538,6 +808,12 @@ function readTargetKind(db: Database.Database, targetId: string): string {
     | { kind: string }
     | undefined;
   return row?.kind ?? '';
+}
+
+/** The same row, narrowed for the round input; a target row always exists here. */
+function readTargetKindOf(db: Database.Database, targetId: string): RoundTargetKind {
+  const kind = readTargetKind(db, targetId);
+  return kind === 'dm' || kind === 'task' ? kind : 'channel';
 }
 
 function commitReply(
@@ -601,21 +877,41 @@ function ownerId(db: Database.Database): string {
   return row.id;
 }
 
+/**
+ * The readable round reason. The verdict clause states what the adapter
+ * concluded; the response-judgement clause states what the discipline made of
+ * it — each definite signal with its own key, and the "normal protocol
+ * result" wording only where nothing forced an answer. The text never decides
+ * the stored status (judgeRound does, from the structured verdict).
+ */
 function roundReason(
   db: Database.Database,
   wake: Wake,
+  discipline: RoundDiscipline,
   result: RoundResult,
+  judged: { status: RoundOutcomeStatus; finishedReason: FinishedReason },
   joinedSeq: number | null,
   replySeq: number | null,
 ): string {
   const parts: string[] = [wakeText(db, wake.reason)];
   if (result.verdict === 'replied' && replySeq === null) {
-    // A reply verdict with no committable body is still the adapter's own
-    // verdict; the response-judgement ticket decides whether that is a
-    // failure under a definite signal. Here it is only stated, not judged.
     parts.push(tFromDb(db, 'round.noBody'));
   } else {
     parts.push(verdictText(db, result.verdict));
+  }
+  if (discipline.definite && discipline.signal !== null) {
+    parts.push(mandatoryText(db, discipline.signal));
+  }
+  if (judged.status === 'failed' && result.verdict !== 'failed') {
+    // Only a definite signal is what turned this round into a failure; a
+    // body-less reply is failed on its own and must not claim otherwise.
+    if (discipline.definite) {
+      parts.push(tFromDb(db, 'round.mandatory.closed'));
+    }
+  } else if (judged.status === 'silent') {
+    parts.push(tFromDb(db, 'round.silent.allowed'));
+  } else if (judged.status === 'ignored' && result.verdict === 'ignored') {
+    parts.push(tFromDb(db, 'round.ignored.allowed'));
   }
   if (result.detail !== undefined && result.detail.length > 0) {
     parts.push(result.detail);
@@ -629,23 +925,31 @@ function roundReason(
 interface InsertOutcomeInput {
   wake: Wake;
   baseSeq: number;
-  status: string;
+  status: RoundOutcomeStatus;
   reason: string;
   merged: number;
   startedAt: string;
   finishedAt: string;
   finishedReason?: FinishedReason;
+  /**
+   * 1 when the row was delivered by a counted agent-to-agent jump, 0 otherwise.
+   * It is a row-level marker, not a hop counter: a suppressed wake is always 0
+   * (nothing was delivered) and a folded reply keeps the marker of the delivery
+   * it belonged to, so summing rows would over-count a fan-out jump.
+   */
+  budgetConsumed?: number;
 }
 
 function insertOutcome(db: Database.Database, input: InsertOutcomeInput): RoundOutcomeRow {
   const id = randomUUID();
+  const budgetConsumed = input.budgetConsumed ?? 0;
   const finishedReason =
     input.finishedReason === undefined ? null : finishedReasonText(db, input.finishedReason);
   db.prepare(
     `INSERT INTO round_outcome
        (id, member_id, target_id, base_seq, status, reason, finished_reason,
         started_at, finished_at, budget_consumed, merged)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.wake.memberId,
@@ -656,6 +960,7 @@ function insertOutcome(db: Database.Database, input: InsertOutcomeInput): RoundO
     finishedReason,
     input.startedAt,
     input.finishedAt,
+    budgetConsumed,
     input.merged,
   );
   return {
@@ -668,7 +973,7 @@ function insertOutcome(db: Database.Database, input: InsertOutcomeInput): RoundO
     finished_reason: finishedReason,
     started_at: input.startedAt,
     finished_at: input.finishedAt,
-    budget_consumed: 0,
+    budget_consumed: budgetConsumed,
     merged: input.merged,
   };
 }

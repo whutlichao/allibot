@@ -90,7 +90,7 @@ test('a legacy ~/allibot directory is used read-in-place with a visible warning 
     const defaultDir = path.join(home, '.allibot', 'data');
     await mkdir(legacyDir, { recursive: true });
 
-    const result = runCli(['serve'], { env: { HOME: home }, timeoutMs: 2_000 });
+    const result = runCli(['serve'], { env: { HOME: home } });
 
     assert.notEqual(result.exitCode, 0, `serve without a database must fail; output: ${result.output}`);
     assert.match(result.stderr, /旧数据目录/);

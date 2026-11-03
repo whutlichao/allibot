@@ -232,8 +232,11 @@ test('a replied round writes back one memory card with both excerpts and keyword
 });
 
 test('an ignored or failed round still writes one card: trigger excerpt, no reply, no model call', async () => {
+  // A human message is a definite signal (#15), so the double's self-judged
+  // ignore closes as `failed`; either way the round wrote no reply and its
+  // card records that.
   for (const [behavior, expectedStatus] of [
-    ['ignore', 'ignored'],
+    ['ignore', 'failed'],
     ['fail', 'failed'],
   ] as const) {
     const dataDir = await makeTempDir(`allibot-memory-${behavior}-`);
@@ -463,7 +466,7 @@ test('memory survives a restart and rides along with a whole data directory rest
     }
     const migration = runCli(['--migrate', '--data-dir', restoredDir]);
     assert.equal(migration.exitCode, 0, `the restored copy is current: ${migration.output}`);
-    assert.match(migration.stdout, /已是 Schema 版本 9/);
+    assert.match(migration.stdout, /已是 Schema 版本 11/);
 
     restored = await startServer(restoredDir, { args: [...PROVIDER_ARGS] });
     const restoredBase = `http://127.0.0.1:${restored.port}`;

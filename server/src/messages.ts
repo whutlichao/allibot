@@ -8,6 +8,7 @@ import type Database from 'better-sqlite3';
 import type { RoundProvider } from './agent-seam.js';
 import { ApiFailure } from './api-error.js';
 import { listAttachmentsForMessages } from './attachments.js';
+import { openEpoch } from './budget.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
@@ -115,7 +116,13 @@ export function appendMessage(
 
     // One row insert for every message path: the author snapshot, MAX(seq)+1,
     // the mention ranges and the attachment binding all live there.
-    return { ...insertMessageRow(db, input), created: true };
+    const inserted = insertMessageRow(db, input);
+    // A human message is one of the three epoch openers (D1.13), and its own
+    // seq is the epoch identity: the row and the epoch share this transaction.
+    if (input.kind === 'human') {
+      openEpoch(db, input.targetId, inserted.seq);
+    }
+    return { ...inserted, created: true };
   });
   const appended = write();
   // A stored message is the fact the global subscription relays. A replay
@@ -151,7 +158,13 @@ export async function appendMessageAndDispatch(
       kind: input.kind,
       seq: appended.seq,
     });
-    await dispatchWakes(db, orchestration.provider, wakes, orchestration.inFlight);
+    await dispatchWakes(
+      db,
+      orchestration.provider,
+      wakes,
+      orchestration.inFlight,
+      input.kind,
+    );
   }
   return { id: appended.id, seq: appended.seq };
 }

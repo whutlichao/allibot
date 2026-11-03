@@ -56,7 +56,23 @@ export const ZH_CN = {
   'round.replied': { text: '已回复', params: [] },
   'round.ignored': { text: '自判忽略：本轮没有需要回应的话', params: [] },
   'round.failed': { text: '处理失败，需要排查', params: [] },
+  'round.silent': { text: '本轮经结构化声明保持沉默', params: [] },
   'round.noBody': { text: '本轮没有产出可落库的正文', params: [] },
+  // 回应判断的可读文案按信号来源选键：确定信号各自一句，不复用未发生的
+  // 信号文案；不改变落库状态的那两种只陈述事实。
+  'round.mandatory.mention': { text: '本轮由个人提及唤醒：这是确定信号，必须回应', params: [] },
+  'round.mandatory.claim': { text: '本轮由认领唤醒：这是确定信号，必须回应', params: [] },
+  'round.mandatory.humanMessage': { text: '本轮由人类消息唤醒：这是确定信号，必须回应', params: [] },
+  'round.mandatory.continue': { text: '本轮由自动续跑唤醒：这是确定信号，必须回应', params: [] },
+  'round.silent.allowed': {
+    text: '本轮不是确定信号：结构化沉默是正常协议结果，不按失败收口',
+    params: [],
+  },
+  'round.ignored.allowed': {
+    text: '本轮不是确定信号：自判忽略是正常协议选择，不按失败收口',
+    params: [],
+  },
+  'round.mandatory.closed': { text: '确定信号下不回应，按失败收口', params: [] },
   'round.penetrationSuffix': {
     text: '本轮是被点名的穿透唤醒，回复时顺带加入频道，加入事件 seq={seq}',
     params: ['seq'],
@@ -67,11 +83,35 @@ export const ZH_CN = {
       '以最大 seq #{largest} 为准；不排队、不重放',
     params: ['count', 'largest'],
   },
+  // 预算耗尽不是错误：消息已落库、零唤醒，本轮被压制。
+  'round.budgetExhausted': {
+    text: '预算耗尽：本世代已用 {used}/{limit} 跳，本条消息的唤醒被压制（消息照常落库）',
+    params: ['used', 'limit'],
+  },
   'round.finished.completed': { text: '正常完成', params: [] },
   'round.finished.error': { text: '错误', params: [] },
   'system.member.piercedJoin': {
     text: '{name} 加入了频道：它被点名时并不在频道里，回复时顺带加入（成员变化只随真实回复发生）',
     params: ['name'],
+  },
+
+  // 本轮 system prompt 的两段纪律：频道轮逐字使用 channel rubric（多成员口径），
+  // DM 轮是一对一口径；人类消息必答句永远另起一段。提示是输入面，不是消息。
+  'prompt.channel.rubric': {
+    text: '这是一个多成员频道：先读上下文，判断其中是否有需要你回应的话；未被点名时可以沉默（自判忽略）。',
+    params: [],
+  },
+  'prompt.dm.oneToOne': {
+    text: '这是一对一私信：对话只在 owner 与你之间进行，没有「未被点名」的情形。',
+    params: [],
+  },
+  'prompt.dm.mandatory': {
+    text: '一对一的对话里，对方的话你必须回应。',
+    params: [],
+  },
+  'prompt.humanMessage.mandatory': {
+    text: '这条消息来自人类（owner）：人类消息是确定信号，必须回应。',
+    params: [],
   },
 
   // 示例文案：用来看消息密度在壳里的呈现。
@@ -121,4 +161,31 @@ export const ZH_CN = {
     params: ['count'],
   },
   'memory.prompt.card': { text: '- {content}', params: ['content'] },
+
+  // 远端数据流告知（Remote Data Flow Consent，D4.2 / R1 词条 35）：清单逐条列出
+  // 会离开本机的数据面与接收方，取得一次确认；未确认时绝不发起远端调用。
+  // 本仓不做应用层端到端加密，文案不声称 E2EE。
+  'remoteFlow.surface.messageBody': { text: '消息正文', params: [] },
+  'remoteFlow.surface.authorName': { text: '发送者显示名', params: [] },
+  'remoteFlow.surface.targetName': {
+    text: 'target 的显示名（频道名称与描述、DM 对方显示名、任务标题）',
+    params: [],
+  },
+  'remoteFlow.surface.mentionedNames': { text: '被点名成员的显示名', params: [] },
+  'remoteFlow.surface.receiver': { text: '接收方（模型 provider 的远端端点）', params: [] },
+  // 轮次 reason 里的三种不可用键：未确认远端告知（consent）、缺凭证
+  // （credential）与未配置模型（model）各自可读，且都声明「零远端调用」。
+  'round.consent.missing': {
+    text: '未确认远端数据流告知（consent，模型 provider：{provider}）：本轮不发起任何远端调用，也没有回复',
+    params: ['provider'],
+  },
+  'round.credential.missing': {
+    text: '缺凭证（credential，环境变量 {env} 未设置）：本轮不发起任何远端调用，也没有回复',
+    params: ['env'],
+  },
+  'round.model.missing': {
+    text: '未配置模型（model，没有 provider:model 可解析）：本轮不发起任何远端调用，也没有回复',
+    params: [],
+  },
+  'provider.call.failed': { text: '模型调用失败：{message}', params: ['message'] },
 } as const satisfies Record<string, CatalogEntry>;
