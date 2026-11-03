@@ -131,6 +131,44 @@ function ownerId(fixture: DmFixture): string {
   return owner.id;
 }
 
+/**
+ * Write one Agent-authored message through the production entry point (the
+ * test-only fixture is another caller of `appendMessageAndDispatch`, not a
+ * second orchestration path).
+ */
+function runAgentMessage(
+  fixture: DmFixture,
+  input: { targetId: string; authorMemberId: string; body: string; behavior: 'reply' | 'ignore' },
+): void {
+  const result = runNodeScript(path.join(REPO_ROOT, 'server', 'test', 'fixtures', 'agent-message.mjs'), [
+    JSON.stringify({
+      dataDir: fixture.dataDir,
+      targetId: input.targetId,
+      authorMemberId: input.authorMemberId,
+      body: input.body,
+      behavior: input.behavior,
+    }),
+  ]);
+  const parsed = JSON.parse(result.stdout.trim()) as { ok: boolean; message?: string };
+  assert.equal(parsed.ok, true, `agent-message fixture reported: ${JSON.stringify(parsed)}`);
+}
+
+interface BudgetRow {
+  epoch_seq: number;
+  used: number;
+  limit_value: number;
+}
+
+function budgetRow(fixture: DmFixture, targetId: string): BudgetRow {
+  const rows = queryAll<BudgetRow>(
+    fixture.dataDir,
+    'SELECT epoch_seq, used, limit_value FROM target_budget WHERE target_id = ?',
+    [targetId],
+  );
+  assert.equal(rows.length, 1, 'the DM keeps exactly one budget row per target');
+  return rows[0]!;
+}
+
 test('POST /api/dms creates one two-member DM per Agent and reuses it on repeat', async () => {
   const fixture = await startDmFixture('allibot-dm-create-');
   try {
@@ -242,6 +280,12 @@ test('owner speaks and the peer answers; the peer reply wakes nobody', async () 
         ['agent', peer],
       ],
       'the owner message wakes the peer; the peer reply lands and wakes nobody',
+    );
+
+    assert.deepEqual(
+      budgetRow(fixture, dm.id),
+      { epoch_seq: 1, used: 0, limit_value: 3 },
+      'the DM gets its own budget row, opened by the first human message, and a reply does not spend a jump',
     );
 
     const outcomes = queryAll<{ member_id: string; status: string; reason: string }>(
@@ -366,6 +410,101 @@ test('an Agent reply in a DM wakes nobody, so the peer never answers its own men
       ).length,
       2,
       'the DM membership is still the two rows written at creation',
+    );
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('a pierced delivery in a DM spends one jump even though the member surface is silent', async () => {
+  const fixture = await startDmFixture('allibot-dm-penetration-budget-');
+  try {
+    const peer = await createAgent(fixture, '私信对象');
+    const third = await createAgent(fixture, '三号');
+    const dm = await createDm(fixture, peer);
+
+    // The DM peer authors the message and names a third Agent that is not a
+    // member: the member surface wakes nobody on a DM, but the pierced mention
+    // is one delivery, so the ledger counts one jump.
+    runAgentMessage(fixture, {
+      targetId: dm.id,
+      authorMemberId: peer,
+      body: '私信对象 写的一条，点名 @三号',
+      behavior: 'ignore',
+    });
+
+    assert.deepEqual(
+      budgetRow(fixture, dm.id),
+      { epoch_seq: 0, used: 1, limit_value: 3 },
+      'a pierced delivery is charged one jump on the DM ledger',
+    );
+    assert.deepEqual(
+      queryAll<{ member_id: string; status: string }>(
+        fixture.dataDir,
+        'SELECT member_id, status FROM round_outcome WHERE target_id = ? ORDER BY rowid',
+        [dm.id],
+      ),
+      // A mention is a definite signal, so an ignored pierce closes as failed:
+      // that is the response-judgment rule (#15), not a budget fact.
+      [{ member_id: third, status: 'failed' }],
+      'only the pierced third Agent ran a round',
+    );
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('a pierced delivery at the DM ceiling wakes nobody and records budget-exhausted', async () => {
+  const fixture = await startDmFixture('allibot-dm-penetration-ceiling-');
+  try {
+    const peer = await createAgent(fixture, '私信对象');
+    const third = await createAgent(fixture, '三号');
+    const dm = await createDm(fixture, peer);
+
+    // Burn the DM's built-in ceiling through pierced deliveries: each Agent
+    // message from the peer delivers exactly one mention wake to the third.
+    for (let index = 1; index <= 3; index += 1) {
+      runAgentMessage(fixture, {
+        targetId: dm.id,
+        authorMemberId: peer,
+        body: `第 ${index} 条，点名 @三号`,
+        behavior: 'ignore',
+      });
+    }
+    assert.deepEqual(
+      budgetRow(fixture, dm.id),
+      { epoch_seq: 0, used: 3, limit_value: 3 },
+      'the DM ledger stops exactly at the built-in ceiling',
+    );
+
+    runAgentMessage(fixture, {
+      targetId: dm.id,
+      authorMemberId: peer,
+      body: '第 4 条，点名 @三号',
+      behavior: 'ignore',
+    });
+
+    assert.deepEqual(
+      budgetRow(fixture, dm.id),
+      { epoch_seq: 0, used: 3, limit_value: 3 },
+      'the suppressed message spends no further jump',
+    );
+    const outcomes = queryAll<{ base_seq: number; status: string; reason: string }>(
+      fixture.dataDir,
+      'SELECT base_seq, status, reason FROM round_outcome WHERE target_id = ? ORDER BY rowid',
+      [dm.id],
+    );
+    const suppressed = outcomes.filter((row) => row.status === 'budget-exhausted');
+    assert.equal(suppressed.length, 1, 'one budget-exhausted row for the suppressed pierce');
+    assert.equal(suppressed[0]?.base_seq, 4, 'the fourth Agent message is the suppressed one');
+    assert.ok(
+      suppressed[0]?.reason.startsWith('预算耗尽'),
+      `the reason is the readable budget-exhausted copy: ${suppressed[0]?.reason}`,
+    );
+    assert.deepEqual(
+      (await listMessages(fixture, dm.id)).map((message) => message['seq']),
+      [1, 2, 3, 4],
+      'the suppressed message still lands as a row; only its wake is suppressed',
     );
   } finally {
     await fixture.stop();
