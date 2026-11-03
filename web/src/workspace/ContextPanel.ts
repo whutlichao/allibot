@@ -1,6 +1,13 @@
-import { t, type Locale, type WorkspaceView } from '@allibot/shared';
+import {
+  t,
+  type ChannelConfigPatch,
+  type Locale,
+  type TargetMemberView,
+  type WorkspaceView,
+} from '@allibot/shared';
 import { createElement, type ReactNode } from 'react';
-import { readTargetContext, type TargetKind } from './model.ts';
+import { ChannelConfigPanel } from './ChannelConfigPanel.ts';
+import { readChannel, readTargetContext, type TargetKind } from './model.ts';
 import type { WorkspacePanel } from './shell-state.ts';
 import { taskStatusLabel } from './status-label.ts';
 
@@ -8,6 +15,10 @@ export interface ContextPanelProps {
   workspace: WorkspaceView;
   targetId: string | null;
   locale: Locale;
+  /** The selected channel's member table; the leader control reads it. */
+  channelMembers?: readonly TargetMemberView[];
+  /** The team-config write; mode and leader both use the one channel PATCH. */
+  onChannelConfigChange?: (patch: ChannelConfigPatch) => void | Promise<void>;
   onOpenPanel?: (panel: WorkspacePanel) => void;
 }
 
@@ -30,8 +41,16 @@ function kindLabel(locale: Locale, kind: TargetKind): string {
  * 这里用 createElement 而不是 JSX：Node 的类型剥离不处理 JSX，
  * 组件级 SSR 契约测试需要直接 import 本文件。
  */
-export function ContextPanel({ workspace, targetId, locale, onOpenPanel }: ContextPanelProps) {
+export function ContextPanel({
+  workspace,
+  targetId,
+  locale,
+  channelMembers,
+  onChannelConfigChange,
+  onOpenPanel,
+}: ContextPanelProps) {
   const context = readTargetContext(workspace, targetId);
+  const channel = readChannel(workspace, targetId);
 
   function panelButton(panel: WorkspacePanel, label: string): ReactNode {
     return createElement(
@@ -81,6 +100,15 @@ export function ContextPanel({ workspace, targetId, locale, onOpenPanel }: Conte
           context.description === null
             ? null
             : createElement('p', { className: 'context-panel__description' }, context.description),
+          // 频道配置区只属于频道：DM / 任务线程没有 mode 控件。
+          channel === null
+            ? null
+            : createElement(ChannelConfigPanel, {
+                channel,
+                members: channelMembers,
+                locale,
+                onTeamConfigChange: onChannelConfigChange,
+              }),
           context.taskStatus === null
             ? null
             : createElement(

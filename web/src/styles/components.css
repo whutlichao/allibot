@@ -536,6 +536,69 @@
   margin: 0 0 8px;
   font-size: 15px;
 }
+
+/*
+ * 频道配置区（#37）：模式 / 队长两个控件与配置无效原因。只消费既有 token，
+ * 不引入新的色值；无效原因用状态点的 error 色表达后端事实。
+ */
+.channel-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-block-start: 4px;
+  padding-block-start: 8px;
+  border-block-start: 1px solid var(--border);
+}
+
+.channel-config__title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.channel-config__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-config__label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.channel-config__select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 8px;
+}
+
+.channel-config__invalid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--error);
+}
+
+.channel-config__invalid-title {
+  font-weight: 600;
+}
+
+.channel-config__hint,
+.channel-config__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.channel-config__error {
+  color: var(--error);
+}
 /*
  * 任务看板（Task Board）：按任务状态分列的呈现面。卡片状态色只消费既有
  * 角色族 / 状态点 token（由内联 var() 指定），这里不声明新的色值；列名是

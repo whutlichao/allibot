@@ -163,7 +163,7 @@ export function publishTaskChanged(change: {
  * assembling a reading from frames.
  */
 export function publishWorkspaceChanged(change: {
-  source: 'channel' | 'dm' | 'settings' | 'agent';
+  source: 'channel' | 'dm' | 'settings' | 'agent' | 'team';
 }): void {
   eventHub.publish({
     event: 'workspace.changed',

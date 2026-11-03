@@ -7,7 +7,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 export interface MigrationStep {
   readonly to: number;
@@ -524,6 +524,45 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
       `);
     },
   },
+  {
+    // The team-mode ticket (#37 / T13) rebuilds `channel` so the mode CHECK
+    // widens to `autonomous` / `team` and the leader column exists. The order
+    // is new table -> copy every row -> drop the old table -> rename; the
+    // migration runner turns foreign keys off before BEGIN and checks them
+    // before COMMIT, because SQLite cannot toggle the pragma inside a
+    // transaction. Existing rows are copied verbatim with a NULL leader.
+    to: 14,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE channel_rebuild (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          mode TEXT NOT NULL DEFAULT 'autonomous' CHECK (mode IN ('autonomous', 'team')),
+          team_leader_member_id TEXT REFERENCES member (id),
+          response_budget_limit INTEGER NOT NULL DEFAULT 3 CHECK (
+            response_budget_limit IN (3, 5, 10)
+          ),
+          archived_at TEXT,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK (mode = 'team' OR team_leader_member_id IS NULL),
+          CHECK (mode = 'autonomous' OR team_leader_member_id IS NOT NULL)
+        );
+
+        INSERT INTO channel_rebuild
+          (id, name, description, mode, team_leader_member_id, response_budget_limit,
+           archived_at, deleted_at, created_at, updated_at)
+        SELECT id, name, description, mode, NULL, response_budget_limit,
+               archived_at, deleted_at, created_at, updated_at
+          FROM channel;
+
+        DROP TABLE channel;
+        ALTER TABLE channel_rebuild RENAME TO channel;
+      `);
+    },
+  },
 ];
 
 export type MigrationOutcome =
@@ -594,12 +633,23 @@ export function runMigrations(
 
     const db = new Database(dbPath);
     try {
-      db.transaction(() => {
-        for (const step of pendingSteps) {
-          step.apply(db);
-        }
-        db.prepare('UPDATE schema_meta SET schema_version = ?').run(targetVersion);
-      })();
+      // SQLite cannot toggle foreign_keys inside a transaction, and a
+      // table-rebuild step (v14 / v21) drops a parent table that child rows
+      // still reference. The pragma therefore flips outside the transaction,
+      // the steps run inside it, and `PRAGMA foreign_key_check` before COMMIT
+      // is the backstop: any dangling child row throws and rolls back.
+      db.pragma('foreign_keys = OFF');
+      try {
+        db.transaction(() => {
+          for (const step of pendingSteps) {
+            step.apply(db);
+          }
+          assertNoForeignKeyViolations(db);
+          db.prepare('UPDATE schema_meta SET schema_version = ?').run(targetVersion);
+        })();
+      } finally {
+        db.pragma('foreign_keys = ON');
+      }
     } finally {
       db.close();
     }
@@ -687,6 +737,26 @@ function readSchemaVersion(dbPath: string): number | null {
     return row.schema_version;
   } finally {
     db.close();
+  }
+}
+
+/**
+ * The backstop for a table rebuild: run inside the migration transaction,
+ * before COMMIT. `PRAGMA foreign_key_check` reports one row per child row whose
+ * parent is gone; any row aborts the whole chain.
+ */
+function assertNoForeignKeyViolations(db: Database.Database): void {
+  const violations = db.pragma('foreign_key_check') as {
+    table: string;
+    rowid: number | null;
+    parent: string;
+    fkid: number;
+  }[];
+  const first = violations[0];
+  if (first !== undefined) {
+    throw new Error(
+      `foreign_key_check failed after migration: table=${first.table} rowid=${String(first.rowid)} parent=${first.parent}`,
+    );
   }
 }
 

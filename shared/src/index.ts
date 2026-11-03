@@ -129,6 +129,34 @@ export interface RemoteConsentView {
 }
 
 /**
+ * The two channel topologies. `team` is an explicit opt-in (D3.1): a DM has no
+ * mode field and is always autonomous.
+ */
+export const CHANNEL_MODES = ['autonomous', 'team'] as const;
+export type ChannelMode = (typeof CHANNEL_MODES)[number];
+
+/**
+ * The team reading of a channel: the configured leader and whether that
+ * configuration is currently usable. `reason` is the same readable reason the
+ * round side would use; `status='invalid'` never falls back to autonomous.
+ * Autonomous channels carry `leader_member_id: null` and a valid status.
+ */
+export interface ChannelTeamView {
+  leader_member_id: string | null;
+  status: 'valid' | 'invalid';
+  reason: string | null;
+}
+
+/**
+ * The team configuration write body. Omitted fields mean "unchanged"; an
+ * explicit `null` leader is the only nullable value and only clears the leader.
+ */
+export interface ChannelConfigPatch {
+  mode?: ChannelMode;
+  team_leader_member_id?: string | null;
+}
+
+/**
  * A channel as the human face returns it. `archived_at` lets the client split
  * the active segment from the archived one; a deleted channel never appears.
  */
@@ -136,7 +164,9 @@ export interface ChannelView {
   id: string;
   name: string;
   description: string;
-  mode: string;
+  mode: ChannelMode;
+  /** The team reading; present on autonomous channels too (with no leader). */
+  team: ChannelTeamView;
   response_budget_limit: number;
   archived_at: string | null;
   deleted_at: string | null;
@@ -254,6 +284,11 @@ export interface TaskView {
   claimed_at: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * The owning channel's mode, derived on read. `mode` is not copied into the
+   * task row (D3.1); a task resolves its topology through its channel.
+   */
+  channel_mode: ChannelMode;
   allowed_transitions: TaskStatus[];
   message_count: number;
   unread_count: number;

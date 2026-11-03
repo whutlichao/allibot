@@ -35,7 +35,7 @@ export function readWorkspace(
   return {
     owner,
     agents,
-    channels: listChannels(db),
+    channels: listChannels(db, env),
     dms: listDms(db),
     tasks: listTasks(db, {}),
     unread_total: unread.unread_total,

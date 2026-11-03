@@ -1,4 +1,4 @@
-import type { TaskStatus, WorkspaceView } from '@allibot/shared';
+import type { ChannelView, TaskStatus, WorkspaceView } from '@allibot/shared';
 
 /**
  * The shell's read-only view of the one workspace reading (#27). Everything
@@ -109,6 +109,18 @@ export function targetKind(workspace: WorkspaceView, targetId: string): TargetKi
   return allNavEntries(buildWorkspaceNav(workspace)).find(
     (entry) => entry.targetId === targetId,
   )?.kind ?? null;
+}
+
+/**
+ * The selected channel row, or null when the target is not a channel. The
+ * channel config area reads the same row the navigation does; it is not a
+ * second reading.
+ */
+export function readChannel(workspace: WorkspaceView, targetId: string | null): ChannelView | null {
+  if (targetId === null) {
+    return null;
+  }
+  return workspace.channels.find((row) => row.id === targetId) ?? null;
 }
 
 /** The right context column's reading for the selected target. */
