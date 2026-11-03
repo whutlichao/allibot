@@ -28,6 +28,7 @@ const provider = createScriptedProvider({
   behavior: input.behavior,
   delayMs: 0,
   echoPrompt: input.echoPrompt === true,
+  reportContext: input.reportContext === true,
 });
 
 const db = new Database(`${input.dataDir}/allibot.db`);

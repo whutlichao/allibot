@@ -18,8 +18,23 @@ import type { RoundInput, RoundProvider, RoundResult } from './agent-seam.js';
  * `echoPrompt` appends the system prompt the round was handed to the reply,
  * because the reply message is the only face a process-level test can read
  * that input from. It is a capability of the double, not a production branch.
+ *
+ * `reportContext` appends a report of the context window the round actually
+ * read: `ctx:<count>` for how many messages, `ctxfirst` / `ctxlast` for the
+ * window's boundary seqs, and `reread:<true|false>` — true once the window
+ * still carries a message older than the triggering one that this member's
+ * consumption cursor has not passed, i.e. the message an earlier failed round
+ * did not consume. Like the prompt echo, it is how a process-level test
+ * observes an input through the ordinary reply message.
  */
-export type ScriptedBehavior = 'reply' | 'ignore' | 'fail' | 'delay' | 'silent' | 'no-body';
+export type ScriptedBehavior =
+  | 'reply'
+  | 'ignore'
+  | 'fail'
+  | 'delay'
+  | 'silent'
+  | 'no-body'
+  | 'iteration-limit';
 
 export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'reply',
@@ -28,6 +43,7 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'delay',
   'silent',
   'no-body',
+  'iteration-limit',
 ];
 
 export interface ScriptedProviderOptions {
@@ -42,6 +58,13 @@ export interface ScriptedProviderOptions {
    * round was handed, and it observes it through the ordinary reply message.
    */
   echoPrompt?: boolean;
+  /**
+   * Append the captured context window to the reply: `ctx:<count>`,
+   * `ctxfirst:<seq>`, `ctxlast:<seq>` and `reread:<true|false>`. The double
+   * reads all of them from the round input it was handed, so a test observes
+   * the real window, not a recomputation of it.
+   */
+  reportContext?: boolean;
 }
 
 /** The default scripted reply: deterministic, readable and free of model calls. */
@@ -83,6 +106,14 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
           return { verdict: 'replied', replies: ['   '] };
         case 'fail':
           return { verdict: 'failed', replies: [], detail: '脚本化 provider：本轮被设定为失败' };
+        case 'iteration-limit':
+          // The round stopped because the iteration budget ran out, not because
+          // it had concluded: the partial conclusion it did produce is landed,
+          // and the round states the iteration-limit finished reason.
+          return {
+            ...replyResult(input, options),
+            finishedReason: 'iteration-limit',
+          };
         case 'delay':
           await delay(options.delayMs);
           return replyResult(input, options);
@@ -98,14 +129,31 @@ function replyResult(input: RoundInput, options: ScriptedProviderOptions): Round
   // ordinary read path — the triggering seq — so the round is observably a
   // real round rather than a canned string.
   const bodies = options.replies ?? [defaultScriptedReply(input)];
-  if (options.echoPrompt !== true) {
-    return { verdict: 'replied', replies: [...bodies] };
-  }
-  // The captured prompt rides the first body: the reply message is the only
-  // face a test can read the composed system prompt from.
+  // Each capture rides the first body: the reply message is the only face a
+  // test can read the round's input from.
   const [first, ...rest] = bodies;
-  return {
-    verdict: 'replied',
-    replies: [`${first} [system-prompt] ${input.systemPrompt}`, ...rest],
-  };
+  const sections = [`${first}${contextReport(input, options)}`];
+  if (options.echoPrompt === true) {
+    sections[0] = `${sections[0]} [system-prompt] ${input.systemPrompt}`;
+  }
+  return { verdict: 'replied', replies: [...sections, ...rest] };
+}
+
+/**
+ * The double's report of the window it was handed. `reread` is true once the
+ * window still carries a message older than the trigger that this member's
+ * cursor has not passed — the message an earlier failed round read but did not
+ * consume, so this round reads it again. Nothing about the window is derived
+ * here beyond what the input states.
+ */
+function contextReport(input: RoundInput, options: ScriptedProviderOptions): string {
+  if (options.reportContext !== true) {
+    return '';
+  }
+  const reread = input.messages.some(
+    (message) => message.seq < input.baseSeq && message.seq > input.consumedSeq,
+  );
+  const first = input.messages[0]?.seq ?? 0;
+  const last = input.messages[input.messages.length - 1]?.seq ?? 0;
+  return `\nctx:${input.messages.length}\nctxfirst:${first}\nctxlast:${last}\nreread:${String(reread)}`;
 }

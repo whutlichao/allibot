@@ -12,6 +12,12 @@ import type {
   WakeReason,
 } from './agent-seam.js';
 import { budgetExhaustedReason, tryConsumeJump, type BudgetRow } from './budget.js';
+import {
+  advanceConsumedSeq,
+  readConsumedSeq,
+  readContextWindow,
+  type ContextScope,
+} from './context-window.js';
 import { tFromDb } from './copy.js';
 import { publishMessageCreated, publishRoundOutcome } from './events.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
@@ -82,16 +88,26 @@ function mandatoryText(
 
 /**
  * The round finished reason (轮次结束原因) is a separate fact from the round
- * status. This ticket only produces normal completion and error; a merged row
- * has no round of its own, so its finished reason stays unknown (NULL).
+ * status: a normal completion, a human interrupt, an iteration limit and an
+ * error are four different ways for a round to end. Only some rounds have a
+ * round of their own to finish: a merged row folds into another round and a
+ * suppressed wake runs no round at all, so both keep `NULL` — the unknown
+ * reading the spec asks old rows to keep.
  */
-export type FinishedReason = 'completed' | 'error';
+export type FinishedReason = 'completed' | 'human-interrupt' | 'iteration-limit' | 'error';
 
 /** The readable finished-reason value stored in `round_outcome`. */
 export function finishedReasonText(db: Database.Database, reason: FinishedReason): string {
-  return reason === 'completed'
-    ? tFromDb(db, 'round.finished.completed')
-    : tFromDb(db, 'round.finished.error');
+  switch (reason) {
+    case 'completed':
+      return tFromDb(db, 'round.finished.completed');
+    case 'human-interrupt':
+      return tFromDb(db, 'round.finished.humanInterrupt');
+    case 'iteration-limit':
+      return tFromDb(db, 'round.finished.iterationLimit');
+    case 'error':
+      return tFromDb(db, 'round.finished.error');
+  }
 }
 
 /**
@@ -488,27 +504,17 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     throw new Error(`round member not found: ${wake.memberId}`);
   }
 
-  const rows = db
-    .prepare(
-      `SELECT seq, kind, author_member_id, author_display_name, body
-         FROM message WHERE target_id = ? AND seq >= ? ORDER BY seq`,
-    )
-    .all(wake.targetId, wake.fromSeq) as {
-    seq: number;
-    kind: string;
-    author_member_id: string;
-    author_display_name: string;
-    body: string;
-  }[];
-  const messages: RoundMessage[] = rows.map((row) => ({
-    seq: row.seq,
-    kind: row.kind as RoundMessage['kind'],
-    author_member_id: row.author_member_id,
-    author_display_name: row.author_display_name,
-    body: row.body,
-  }));
-
   const targetKind = readTargetKindOf(db, wake.targetId);
+  const consumedSeq = readConsumedSeq(db, member.id, wake.targetId);
+  // 上下文窗口: a normal round reads the most recent 40 target messages; an
+  // auto-continue round keeps working on its whole task thread. The window is
+  // history only — it never decides the signal, the discipline or the cursor.
+  const messages: RoundMessage[] = readContextWindow(
+    db,
+    wake.targetId,
+    contextScopeFor(wake, targetKind),
+  );
+
   const triggeredByHuman = wokeByHuman(db, wake);
   const discipline = readDiscipline(db, wake, triggeredByHuman);
   // Recall happens before the round runs and only informs its understanding
@@ -523,9 +529,20 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     reason: wake.reason,
     discipline,
     messages,
+    consumedSeq,
     memories,
     systemPrompt: composeSystemPrompt(db, member, targetKind, triggeredByHuman, memories),
   };
+}
+
+/**
+ * How much history this round reads. 自动续跑 (Auto-continue) continues a task thread
+ * and therefore reads that thread whole; every other round reads the recent
+ * window. The wake reason alone is not enough: only a continue wake on a task
+ * target is a thread-wide round.
+ */
+function contextScopeFor(wake: Wake, targetKind: RoundTargetKind): ContextScope {
+  return wake.reason === 'continue' && targetKind === 'task' ? 'full' : 'window';
 }
 
 /**
@@ -697,10 +714,28 @@ function commitRound(
       budgetConsumed,
     });
     outcomes.push(outcome);
+    // 消费游标 (Agent Read Cursor) advances only on replied / ignored: a failed
+    // round leaves its message new, so the next wake reads it again instead of
+    // skipping it. The cursor and the round's own rows share this transaction.
+    if (advancesCursor(judged.status)) {
+      advanceConsumedSeq(db, wake.memberId, wake.targetId, wake.fromSeq);
+    }
     return { outcome, replySeq: reply?.seq ?? null };
   });
   const { outcome, replySeq } = write();
   return { outcome, replySeq, messages, outcomes };
+}
+
+/**
+ * Whether a round's conclusion consumes its triggering message. Only the two
+ * normal protocol conclusions do: `replied` and `ignored`. A structured silence
+ * is the model's explicit protocol answer, but the spec's cursor rule names
+ * exactly these two statuses, so silence neither advances nor rewinds it. A
+ * failed round never consumes; a merged row is not a round of its own and
+ * moves nothing.
+ */
+function advancesCursor(status: RoundOutcomeStatus): boolean {
+  return status === 'replied' || status === 'ignored';
 }
 
 /** One target message a round committed, as the subscription relays it. */
@@ -748,24 +783,43 @@ export type RoundOutcomeStatus =
  *
  * The stored status is computed from the structured verdict, never from the
  * reason text, so the text can gain clauses without changing what is recorded.
+ *
+ * The finished reason (轮次结束原因) is computed separately: an adapter that
+ * states how it ended (the iteration limit) says so even when the response
+ * discipline then closes the round as failed, and an adapter failure with no
+ * statement of its own is an error. Every other round ran to completion.
  */
 function judgeRound(
   discipline: RoundDiscipline,
   result: RoundResult,
   replySeq: number | null,
 ): { status: RoundOutcomeStatus; finishedReason: FinishedReason } {
+  const finishedReason = finishedReasonOf(result);
   if (result.verdict === 'failed') {
-    return { status: 'failed', finishedReason: 'error' };
+    return { status: 'failed', finishedReason };
   }
   if (result.verdict === 'replied') {
     return replySeq === null && discipline.definite
-      ? { status: 'failed', finishedReason: 'completed' }
-      : { status: 'replied', finishedReason: 'completed' };
+      ? { status: 'failed', finishedReason }
+      : { status: 'replied', finishedReason };
   }
   if (discipline.definite) {
-    return { status: 'failed', finishedReason: 'completed' };
+    return { status: 'failed', finishedReason };
   }
-  return { status: result.verdict, finishedReason: 'completed' };
+  return { status: result.verdict, finishedReason };
+}
+
+/**
+ * How the round ended, as the seam stated it. The adapter only states departures
+ * from a normal completion; an absent statement plus a failed verdict is the
+ * error reason, because a failure that says nothing about its ending ended in
+ * an error.
+ */
+function finishedReasonOf(result: RoundResult): FinishedReason {
+  if (result.finishedReason !== undefined) {
+    return result.finishedReason;
+  }
+  return result.verdict === 'failed' ? 'error' : 'completed';
 }
 
 /**
@@ -857,10 +911,12 @@ function hasBody(result: RoundResult): boolean {
 }
 
 /**
- * The body the round was woken by: the message at the wake's `baseSeq`. A round
- * whose first read message already moved past it (a pierced wake is the only
- * shape today) falls back to the oldest message it did read, so the card always
- * carries a trigger excerpt.
+ * The body the round was woken by: the message at the wake's `baseSeq`. The
+ * trigger is normally the newest message when the round reads, so it is inside
+ * the context window and the lookup is exact. A trigger older than the window
+ * start (a deferred wake that waited while more than a window of messages
+ * landed) falls back to the oldest message the round did read — the window
+ * message nearest the trigger — so the card always carries an excerpt.
  */
 function triggerBody(input: RoundInput): string {
   const exact = input.messages.find((message) => message.seq === input.baseSeq);

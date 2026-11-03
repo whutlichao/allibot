@@ -466,7 +466,7 @@ test('memory survives a restart and rides along with a whole data directory rest
     }
     const migration = runCli(['--migrate', '--data-dir', restoredDir]);
     assert.equal(migration.exitCode, 0, `the restored copy is current: ${migration.output}`);
-    assert.match(migration.stdout, /已是 Schema 版本 11/);
+    assert.match(migration.stdout, /已是 Schema 版本 12/);
 
     restored = await startServer(restoredDir, { args: [...PROVIDER_ARGS] });
     const restoredBase = `http://127.0.0.1:${restored.port}`;

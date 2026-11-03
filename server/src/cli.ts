@@ -116,6 +116,7 @@ function createOrchestration(
           delayMs: options.scriptedDelayMs,
           replies: options.scriptedReplies.length > 0 ? options.scriptedReplies : undefined,
           echoPrompt: options.scriptedEchoPrompt,
+          reportContext: options.scriptedReportContext,
         });
   return { provider, inFlight: createInFlightRounds() };
 }

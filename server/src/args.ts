@@ -42,6 +42,12 @@ export interface CliOptions {
    */
   scriptedEchoPrompt: boolean;
   /**
+   * Have the scripted reply carry the context window it was handed (`ctx` /
+   * `reread`). Like the prompt echo, it is an adapter capability a test uses to
+   * observe the round's input, never a production branch.
+   */
+  scriptedReportContext: boolean;
+  /**
    * How long one `/api/events` connection lives before the server sends the
    * rotate frame and closes it. Production keeps the 30-minute default; a test
    * injects a short value instead of waiting.
@@ -64,8 +70,10 @@ const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
   'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
   '[--provider <scripted|model>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body>] [--scripted-delay-ms <ms>] ' +
-  '[--scripted-reply <body>] [--scripted-echo-prompt] [--sse-lifetime-ms <ms>]';
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit>] ' +
+  '[--scripted-delay-ms <ms>] ' +
+  '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
+  '[--sse-lifetime-ms <ms>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -82,6 +90,7 @@ export function parseCliArgs(
       'scripted-delay-ms': { type: 'string' },
       'scripted-reply': { type: 'string', multiple: true },
       'scripted-echo-prompt': { type: 'boolean' },
+      'scripted-report-context': { type: 'boolean' },
       'sse-lifetime-ms': { type: 'string' },
     },
     strict: true,
@@ -101,6 +110,7 @@ export function parseCliArgs(
     scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
     scriptedReplies: parseScriptedReplies(values['scripted-reply']),
     scriptedEchoPrompt: values['scripted-echo-prompt'] === true,
+    scriptedReportContext: values['scripted-report-context'] === true,
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
   };
 }
