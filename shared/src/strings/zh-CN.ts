@@ -487,10 +487,6 @@ export const ZH_CN = {
     text: '不能把子任务分派给队长本人。',
     params: [],
   },
-  'team.assignment.reason.notMember': {
-    text: '目标成员不是该频道 / 任务所属频道的活 Agent 成员。',
-    params: [],
-  },
   'team.assignment.budgetExhausted': {
     text: '分派预算耗尽：本世代已用 {used}/{limit} 跳，本次分派未运行成员。',
     params: ['used', 'limit'],

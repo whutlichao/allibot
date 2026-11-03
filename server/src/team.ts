@@ -113,7 +113,7 @@ export function readLeaderAvailability(
   leaderId: string,
   env: NodeJS.ProcessEnv,
 ): LeaderAvailability {
-  return readAgentAvailability(db, channelId, leaderId, env, 'leader');
+  return leaderAvailability(db, readAvailabilityFact(db, channelId, leaderId, env));
 }
 
 /**
@@ -128,38 +128,35 @@ export function readTeamMemberAvailability(
   memberId: string,
   env: NodeJS.ProcessEnv,
 ): LeaderAvailability {
-  return readAgentAvailability(db, channelId, memberId, env, 'member');
+  return memberAvailability(db, readAvailabilityFact(db, channelId, memberId, env));
 }
 
-function readAgentAvailability(
+type AvailabilityFact =
+  | { kind: 'ok' }
+  | {
+      kind:
+        | 'missing'
+        | 'not-agent'
+        | 'deleted'
+        | 'disabled'
+        | 'not-member'
+        | 'model-missing'
+        | 'consent-missing';
+    }
+  | { kind: 'credential-missing'; credentialEnv: string };
+
+/**
+ * The shared D3.8 fact read. The leader and the TeamAssign target ask the same
+ * questions; only the readable copy differs, so each caller maps the fact to its
+ * own literal catalog keys (the string catalog's usage scan needs the literals
+ * at the call site).
+ */
+function readAvailabilityFact(
   db: Database.Database,
   channelId: string,
   memberId: string,
   env: NodeJS.ProcessEnv,
-  subject: 'leader' | 'member',
-): LeaderAvailability {
-  const keys =
-    subject === 'leader'
-      ? {
-          missing: 'team.invalid.leaderMissing',
-          notAgent: 'team.invalid.leaderNotAgent',
-          deleted: 'team.invalid.leaderDeleted',
-          disabled: 'team.invalid.leaderDisabled',
-          notMember: 'team.invalid.leaderNotMember',
-          modelMissing: 'team.invalid.modelMissing',
-          consentMissing: 'team.invalid.consentMissing',
-          credentialMissing: 'team.invalid.credentialMissing',
-        } as const
-      : {
-          missing: 'team.member.missing',
-          notAgent: 'team.member.notAgent',
-          deleted: 'team.member.deleted',
-          disabled: 'team.member.disabled',
-          notMember: 'team.member.notMember',
-          modelMissing: 'team.member.modelMissing',
-          consentMissing: 'team.member.consentMissing',
-          credentialMissing: 'team.member.credentialMissing',
-        } as const;
+): AvailabilityFact {
   const member = db
     .prepare(
       `SELECT m.id, m.kind, m.deleted_at, c.enabled, c.model
@@ -177,40 +174,100 @@ function readAgentAvailability(
       }
     | undefined;
   if (member === undefined) {
-    return { ok: false, reason: tFromDb(db, keys.missing) };
+    return { kind: 'missing' };
   }
   if (member.kind !== 'agent' || member.enabled === null) {
-    return { ok: false, reason: tFromDb(db, keys.notAgent) };
+    return { kind: 'not-agent' };
   }
   if (member.deleted_at !== null) {
-    return { ok: false, reason: tFromDb(db, keys.deleted) };
+    return { kind: 'deleted' };
   }
   if (member.enabled === 0) {
-    return { ok: false, reason: tFromDb(db, keys.disabled) };
+    return { kind: 'disabled' };
   }
   const membership = db
     .prepare('SELECT 1 FROM target_member WHERE target_id = ? AND member_id = ?')
     .get(channelId, memberId);
   if (membership === undefined) {
-    return { ok: false, reason: tFromDb(db, keys.notMember) };
+    return { kind: 'not-member' };
   }
   const provider = checkProviderAvailability(db, member.model, env);
   if (!provider.ok) {
     switch (provider.reason) {
       case 'model-missing':
-        return { ok: false, reason: tFromDb(db, keys.modelMissing) };
+        return { kind: 'model-missing' };
       case 'consent-missing':
-        return { ok: false, reason: tFromDb(db, keys.consentMissing) };
+        return { kind: 'consent-missing' };
       case 'credential-missing':
         return {
-          ok: false,
-          reason: tFromDb(db, keys.credentialMissing, {
-            credential_env: PROVIDER_CREDENTIAL_ENV[provider.provider],
-          }),
+          kind: 'credential-missing',
+          credentialEnv: PROVIDER_CREDENTIAL_ENV[provider.provider],
         };
     }
   }
-  return { ok: true };
+  return { kind: 'ok' };
+}
+
+function leaderAvailability(
+  db: Database.Database,
+  fact: AvailabilityFact,
+): LeaderAvailability {
+  switch (fact.kind) {
+    case 'ok':
+      return { ok: true };
+    case 'missing':
+      return { ok: false, reason: tFromDb(db, 'team.invalid.leaderMissing') };
+    case 'not-agent':
+      return { ok: false, reason: tFromDb(db, 'team.invalid.leaderNotAgent') };
+    case 'deleted':
+      return { ok: false, reason: tFromDb(db, 'team.invalid.leaderDeleted') };
+    case 'disabled':
+      return { ok: false, reason: tFromDb(db, 'team.invalid.leaderDisabled') };
+    case 'not-member':
+      return { ok: false, reason: tFromDb(db, 'team.invalid.leaderNotMember') };
+    case 'model-missing':
+      return { ok: false, reason: tFromDb(db, 'team.invalid.modelMissing') };
+    case 'consent-missing':
+      return { ok: false, reason: tFromDb(db, 'team.invalid.consentMissing') };
+    case 'credential-missing':
+      return {
+        ok: false,
+        reason: tFromDb(db, 'team.invalid.credentialMissing', {
+          credential_env: fact.credentialEnv,
+        }),
+      };
+  }
+}
+
+function memberAvailability(
+  db: Database.Database,
+  fact: AvailabilityFact,
+): LeaderAvailability {
+  switch (fact.kind) {
+    case 'ok':
+      return { ok: true };
+    case 'missing':
+      return { ok: false, reason: tFromDb(db, 'team.member.missing') };
+    case 'not-agent':
+      return { ok: false, reason: tFromDb(db, 'team.member.notAgent') };
+    case 'deleted':
+      return { ok: false, reason: tFromDb(db, 'team.member.deleted') };
+    case 'disabled':
+      return { ok: false, reason: tFromDb(db, 'team.member.disabled') };
+    case 'not-member':
+      return { ok: false, reason: tFromDb(db, 'team.member.notMember') };
+    case 'model-missing':
+      return { ok: false, reason: tFromDb(db, 'team.member.modelMissing') };
+    case 'consent-missing':
+      return { ok: false, reason: tFromDb(db, 'team.member.consentMissing') };
+    case 'credential-missing':
+      return {
+        ok: false,
+        reason: tFromDb(db, 'team.member.credentialMissing', {
+          credential_env: fact.credentialEnv,
+        }),
+      };
+  }
 }
 
 /**
