@@ -170,9 +170,11 @@ export function updateAgent(
 
 /**
  * Soft delete writes member.deleted_at and removes the member from every
- * target (channel and task threads) by deleting its target_member rows. DM
- * targets, messages, task history, agent_config and round results are
- * deliberately left alone, and task.assignee_member_id is not rewritten.
+ * channel and task thread by deleting those target_member rows. DM targets keep
+ * their membership rows — the archived DM stays readable and keeps its two
+ * members (已归档私信) — and messages, task history, agent_config and round
+ * results are deliberately left alone; task.assignee_member_id is not
+ * rewritten.
  */
 export function softDeleteAgent(db: Database.Database, id: string): void {
   const remove = db.transaction((): boolean => {
@@ -185,7 +187,11 @@ export function softDeleteAgent(db: Database.Database, id: string): void {
     if (result.changes !== 1) {
       return false;
     }
-    db.prepare('DELETE FROM target_member WHERE member_id = ?').run(id);
+    db.prepare(
+      `DELETE FROM target_member
+        WHERE member_id = ?
+          AND target_id IN (SELECT id FROM target WHERE kind <> 'dm')`,
+    ).run(id);
     return true;
   });
   if (!remove()) {

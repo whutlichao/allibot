@@ -10,6 +10,7 @@ import { ApiFailure } from './api-error.js';
 import { listAttachmentsForMessages } from './attachments.js';
 import { openEpoch } from './budget.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
+import { assertDmWritable } from './dms.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
 import { collectWakes, dispatchWakes, type InFlightRounds } from './rounds.js';
@@ -250,10 +251,18 @@ function assertTargetReadable(db: Database.Database, targetId: string): void {
   }
 }
 
-/** The write guard from #9, reused rather than restated: archived is 400, deleted is 404. */
+/**
+ * The write guard from #9, reused rather than restated: archived is 400, deleted
+ * is 404. An archived DM (its peer Agent was soft-deleted) is read-only — the
+ * same 400 shape as an archived channel's message entry.
+ */
 function assertTargetWritable(db: Database.Database, targetId: string): void {
-  if (readTarget(db, targetId).kind === 'channel') {
+  const { kind } = readTarget(db, targetId);
+  if (kind === 'channel') {
     assertChannelWritable(assertChannelReadable(db, targetId));
+  }
+  if (kind === 'dm') {
+    assertDmWritable(db, targetId);
   }
 }
 

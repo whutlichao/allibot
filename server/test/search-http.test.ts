@@ -156,10 +156,9 @@ function runAgentMessageFixture(
 }
 
 /**
- * A DM target. #22 (私信) has not landed, so no HTTP path creates one; this
- * uses the same test-only fixture the response-judgment tests use to write the
- * rows the DM write path will own. Search still has to answer for a DM
- * target: a DM has no channel row to be filtered by.
+ * A DM target. The fixture writes the rows the DM write path owns
+ * (`POST /api/dms` would write the same ones); search still has to answer for a
+ * DM target, because a DM has no channel row to be filtered by.
  */
 const DM_TARGET_FIXTURE = path.join(REPO_ROOT, 'server', 'test', 'fixtures', 'dm-target.mjs');
 
