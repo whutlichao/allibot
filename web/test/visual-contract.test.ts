@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { Avatar, avatarSlotToken, type AvatarSlot } from '../src/components/Avatar.ts';
+import { AVATAR_SLOTS, Avatar, avatarSlotToken } from '../src/components/Avatar.ts';
 import {
   AVATAR_SLOT_TOKENS,
   FORBIDDEN_TIER_ALIASES,
@@ -168,8 +168,10 @@ test('avatar slots are five deterministic status-free hues', async () => {
 });
 
 test('avatar_slot 0..4 renders --av-0..--av-4 and never a status token', () => {
-  AVATAR_SLOT_TOKENS.forEach((token, index) => {
-    const slot = index as AvatarSlot;
+  assert.equal(AVATAR_SLOTS.length, AVATAR_SLOT_TOKENS.length);
+
+  AVATAR_SLOTS.forEach((slot) => {
+    const token = AVATAR_SLOT_TOKENS[slot]!;
     assert.equal(avatarSlotToken(slot), token);
 
     const html = renderToStaticMarkup(createElement(Avatar, { slot, name: '成员' }));

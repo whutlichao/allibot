@@ -10,16 +10,11 @@
  * `product-roles.css` 声明。
  */
 
-/** 档位（Tier）后缀：族名沿用旧名，新增档位只允许这三个后缀。 */
+/**
+ * 档位（Tier）后缀：族名沿用旧名，新增档位只允许这三个后缀。
+ * 淡底档 = ''（族名）；填充档 = '-fill'；文字档 = '-deep'；图形档 = '-graphic'。
+ */
 export const TIER_SUFFIXES = ['', '-fill', '-deep', '-graphic'] as const;
-
-/** 档位按对比度用途分层。 */
-export const TIER_PURPOSES = {
-  subtle: '',
-  fill: '-fill',
-  text: '-deep',
-  graphic: '-graphic',
-} as const;
 
 /** 角色族（Role Family）：每个角色恰好一个色相。 */
 export const ROLE_FAMILY_ROOTS = ['--accent', '--selected', '--unread', '--warn'] as const;
@@ -46,12 +41,35 @@ export const VISUAL_CONTRACT_TOKENS = [
   '--border',
   '--border-strong',
   '--on-accent',
-  // 角色族：每族四档（淡底 / -fill 填充 / -deep 文字 / -graphic 图形）
-  ...ROLE_FAMILY_ROOTS.flatMap((root) =>
-    TIER_SUFFIXES.map((suffix) => `${root}${suffix}`),
-  ),
+  // 角色族 accent：淡底 / 填充 / 文字 / 图形
+  '--accent',
+  '--accent-fill',
+  '--accent-deep',
+  '--accent-graphic',
+  // 角色族 selected
+  '--selected',
+  '--selected-fill',
+  '--selected-deep',
+  '--selected-graphic',
+  // 角色族 unread
+  '--unread',
+  '--unread-fill',
+  '--unread-deep',
+  '--unread-graphic',
+  // 角色族 warn
+  '--warn',
+  '--warn-fill',
+  '--warn-deep',
+  '--warn-graphic',
   // 状态点
-  ...STATUS_TOKENS,
+  '--online',
+  '--working',
+  '--error',
+  '--offline',
   // 头像色位
-  ...AVATAR_SLOT_TOKENS,
+  '--av-0',
+  '--av-1',
+  '--av-2',
+  '--av-3',
+  '--av-4',
 ] as const;
