@@ -302,7 +302,7 @@ async function teamAssignResult(
     }
     const result = await assign({ member_id: memberId, instruction });
     reports.push(toolReport(result));
-    if (!result.ok) {
+    if (untilExhausted && !result.ok) {
       break;
     }
   }

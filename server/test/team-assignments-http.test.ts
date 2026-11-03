@@ -394,6 +394,21 @@ test('a TeamAssign call runs the member inside the leader round and records one 
   assert.ok(assignment.started_at.length > 0);
   assert.ok(assignment.finished_at !== null, 'the assignment is closed');
 
+  const snapshot = await getJson(
+    fixture.base,
+    `/api/targets/${fixture.channelId}/team-runs?limit=5`,
+  );
+  const runs = snapshot['team_runs'] as Array<Record<string, unknown>>;
+  assert.equal(runs.length, 1, 'the leader round has one run');
+  assert.equal(runs[0]?.['status'], 'completed');
+  assert.equal(runs[0]?.['task_id'], null);
+  const nested = runs[0]?.['assignments'] as Array<Record<string, unknown>>;
+  assert.equal(nested.length, 1, 'the snapshot nests the assignment');
+  assert.equal(nested[0]?.['id'], assignment.id);
+  assert.equal(nested[0]?.['state'], 'completed');
+  assert.equal(nested[0]?.['jump_consumed'], 1);
+  assert.equal(nested[0]?.['reply_excerpt'], assignment.reply_excerpt);
+
   const channelBudget = budgetRows(fixture).find((row) => row.target_id === fixture.channelId);
   assert.ok(channelBudget !== undefined, 'the human message opened the channel epoch');
   assert.equal(channelBudget.used, 1, 'the assignment advances the channel budget by one jump');
@@ -641,6 +656,7 @@ test('a task-thread TeamAssign writes the task scope and leaves the task row and
   assert.equal(assignment.task_id, task.id);
   assert.equal(assignment.member_id, fixture.memberIds[0]);
   assert.match(assignment.reply_excerpt ?? '', /\[tools\] transfer_task/, 'the assignee sub-round may transfer');
+  assert.doesNotMatch(assignment.reply_excerpt ?? '', /TeamAssign/, 'a member sub-round cannot assign further');
   assert.match(assignment.reply_excerpt ?? '', /\[team\] leader:false/);
 
   const after = taskRow(fixture);
