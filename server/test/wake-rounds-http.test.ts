@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { test } from 'node:test';
+import { ZH_CN } from '@allibot/shared';
 import Database from 'better-sqlite3';
 import {
   makeTempDir,
@@ -515,6 +516,27 @@ test('a round offering several pending replies still lands exactly one target me
       '一轮 ↔ 至多一条 target 消息: the first pending reply is the round\'s message',
     );
     assert.equal(roundOutcomes(fixture).length, 1, 'one round outcome for the one round');
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('the readable round copy comes from the zh-CN catalog through the stored locale', async () => {
+  const fixture = await startWakeFixture('allibot-wake-copy-', 'reply');
+  try {
+    const agent = await createAgent(fixture, '甲');
+    const channelId = await createChannel(fixture);
+    await joinChannel(fixture, channelId, agent);
+    await postMessage(fixture, channelId, { body: '请回应' });
+
+    const row = roundOutcomes(fixture)[0];
+    assert.ok(row !== undefined);
+    assert.equal(
+      row.reason,
+      `${ZH_CN['wake.channelMessage'].text}；${ZH_CN['round.replied'].text}`,
+      'the reason is composed from catalog entries, not a second copy of the text',
+    );
+    assert.equal(row.finished_reason, ZH_CN['round.finished.completed'].text);
   } finally {
     await fixture.stop();
   }

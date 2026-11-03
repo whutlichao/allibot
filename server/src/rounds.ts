@@ -8,45 +8,46 @@ import type {
   RoundResult,
   WakeReason,
 } from './agent-seam.js';
+import { tFromDb } from './copy.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
 
 /**
- * The readable zh-CN copy for round outcomes (轮次结果 reason) and the round
- * finished reason (轮次结束原因). The spec routes backend-generated text
- * through the string catalog (#8); that catalog is not on this branch yet, so
- * this module is the single formatting entry point — every readable round text
- * goes through `roundText` / `finishedReasonText`, and #8 replaces the tables
- * behind them without touching a caller or a stored row.
- *
- * Stored rows keep the language they were written in; the catalog ticket owns
- * the locale preference, which is why nothing here reads a request header.
+ * The readable round copy. Backend-generated text renders through the shared
+ * string catalog (#8) by the stored locale preference, so every readable round
+ * text goes through `tFromDb` — the one formatting entry point — and stored
+ * rows keep the language they were written in (a later preference switch never
+ * rewrites history).
  */
-export const ROUND_TEXT = {
-  'wake.channel-message': '本轮由频道消息唤醒',
-  'wake.mention': '本轮由个人提及唤醒',
-  'wake.claim': '本轮由认领唤醒',
-  'wake.continue': '本轮由自动续跑唤醒',
-  'verdict.replied': '已回复',
-  'verdict.ignored': '自判忽略：本轮没有需要回应的话',
-  'verdict.failed': '处理失败，需要排查',
-  'penetration.suffix': '本轮是被点名的穿透唤醒，回复时顺带加入频道，加入事件 seq={seq}',
-  'merged.reason': '已有一轮在进行中（in-flight）：{count} 次重复唤醒合并进那一轮，以最大 seq #{largest} 为准；不排队、不重放',
-  'round.no-body': '本轮没有产出可落库的正文',
-  'join.event': '{name} 加入了频道：它被点名时并不在频道里，回复时顺带加入（成员变化只随真实回复发生）',
-} as const;
 
-export type RoundTextKey = keyof typeof ROUND_TEXT;
+/** The wake reason's readable text; the reason only picks diagnostics copy. */
+function wakeText(db: Database.Database, reason: WakeReason): string {
+  switch (reason) {
+    case 'channel-message':
+      return tFromDb(db, 'wake.channelMessage');
+    case 'mention':
+      return tFromDb(db, 'wake.mention');
+    case 'claim':
+      return tFromDb(db, 'wake.claim');
+    case 'continue':
+      return tFromDb(db, 'wake.continue');
+  }
+}
 
-/** Render one readable round text; the single formatting entry point. */
-export function roundText(
-  key: RoundTextKey,
-  params: Record<string, string | number> = {},
-): string {
-  return ROUND_TEXT[key].replace(/\{(\w+)\}/g, (match, name: string) => {
-    const value = params[name];
-    return value === undefined ? match : String(value);
-  });
+/**
+ * The seam verdict's readable text. A `replied` verdict whose body cannot be
+ * committed is stated as such, not judged: whether that is a failure under a
+ * definite signal is the response-judgement ticket's rule.
+ */
+function verdictText(db: Database.Database, verdict: RoundResult['verdict']): string {
+  switch (verdict) {
+    case 'replied':
+      return tFromDb(db, 'round.replied');
+    case 'ignored':
+      return tFromDb(db, 'round.ignored');
+    case 'failed':
+      return tFromDb(db, 'round.failed');
+  }
 }
 
 /**
@@ -54,16 +55,13 @@ export function roundText(
  * status. This ticket only produces normal completion and error; a merged row
  * has no round of its own, so its finished reason stays unknown (NULL).
  */
-export const FINISHED_REASON = {
-  completed: '正常完成',
-  error: '错误',
-} as const;
-
-export type FinishedReason = keyof typeof FINISHED_REASON;
+export type FinishedReason = 'completed' | 'error';
 
 /** The readable finished-reason value stored in `round_outcome`. */
-export function finishedReasonText(reason: FinishedReason): string {
-  return FINISHED_REASON[reason];
+export function finishedReasonText(db: Database.Database, reason: FinishedReason): string {
+  return reason === 'completed'
+    ? tFromDb(db, 'round.finished.completed')
+    : tFromDb(db, 'round.finished.error');
 }
 
 /**
@@ -377,7 +375,7 @@ function commitRound(
         wake,
         baseSeq: Math.max(...turn.repeats),
         status: 'merged',
-        reason: roundText('merged.reason', {
+        reason: tFromDb(db, 'round.merged', {
           count: turn.repeats.length,
           largest: Math.max(...turn.repeats),
         }),
@@ -392,7 +390,7 @@ function commitRound(
       wake,
       baseSeq: wake.fromSeq,
       status: result.verdict,
-      reason: roundReason(wake, result, joinedSeq, replySeq),
+      reason: roundReason(db, wake, result, joinedSeq, replySeq),
       merged: 0,
       startedAt,
       finishedAt,
@@ -443,7 +441,7 @@ function commitJoin(db: Database.Database, wake: Wake, result: RoundResult): num
     wake.targetId,
     'system',
     ownerId(db),
-    roundText('join.event', { name: member.display_name }),
+    tFromDb(db, 'system.member.piercedJoin', { name: member.display_name }),
   );
 }
 
@@ -497,25 +495,26 @@ function ownerId(db: Database.Database): string {
 }
 
 function roundReason(
+  db: Database.Database,
   wake: Wake,
   result: RoundResult,
   joinedSeq: number | null,
   replySeq: number | null,
 ): string {
-  const parts: string[] = [roundText(`wake.${wake.reason}`)];
+  const parts: string[] = [wakeText(db, wake.reason)];
   if (result.verdict === 'replied' && replySeq === null) {
     // A reply verdict with no committable body is still the adapter's own
     // verdict; the response-judgement ticket decides whether that is a
     // failure under a definite signal. Here it is only stated, not judged.
-    parts.push(roundText('round.no-body'));
+    parts.push(tFromDb(db, 'round.noBody'));
   } else {
-    parts.push(roundText(`verdict.${result.verdict}`));
+    parts.push(verdictText(db, result.verdict));
   }
   if (result.detail !== undefined && result.detail.length > 0) {
     parts.push(result.detail);
   }
   if (joinedSeq !== null) {
-    parts.push(roundText('penetration.suffix', { seq: joinedSeq }));
+    parts.push(tFromDb(db, 'round.penetrationSuffix', { seq: joinedSeq }));
   }
   return parts.join('；');
 }
@@ -534,7 +533,7 @@ interface InsertOutcomeInput {
 function insertOutcome(db: Database.Database, input: InsertOutcomeInput): RoundOutcomeRow {
   const id = randomUUID();
   const finishedReason =
-    input.finishedReason === undefined ? null : finishedReasonText(input.finishedReason);
+    input.finishedReason === undefined ? null : finishedReasonText(db, input.finishedReason);
   db.prepare(
     `INSERT INTO round_outcome
        (id, member_id, target_id, base_seq, status, reason, finished_reason,

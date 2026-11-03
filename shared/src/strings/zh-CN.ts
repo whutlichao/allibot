@@ -46,6 +46,34 @@ export const ZH_CN = {
   'settings.error.load': { text: '设置读取失败，请确认后端已启动。', params: [] },
   'settings.error.save': { text: '设置未保存，请重试。', params: [] },
 
+  // 轮次结果（Round Outcome）与穿透加入事件的可读文案：后端在 HTTP 请求之外
+  // 写这两类文本，按库内语言偏好经 tFromDb 渲染。键名用承重词（wake / round /
+  // penetration / join），参数位只带标识（seq / count / name），从不携带正文。
+  'wake.channelMessage': { text: '本轮由频道消息唤醒', params: [] },
+  'wake.mention': { text: '本轮由个人提及唤醒', params: [] },
+  'wake.claim': { text: '本轮由认领唤醒', params: [] },
+  'wake.continue': { text: '本轮由自动续跑唤醒', params: [] },
+  'round.replied': { text: '已回复', params: [] },
+  'round.ignored': { text: '自判忽略：本轮没有需要回应的话', params: [] },
+  'round.failed': { text: '处理失败，需要排查', params: [] },
+  'round.noBody': { text: '本轮没有产出可落库的正文', params: [] },
+  'round.penetrationSuffix': {
+    text: '本轮是被点名的穿透唤醒，回复时顺带加入频道，加入事件 seq={seq}',
+    params: ['seq'],
+  },
+  'round.merged': {
+    text:
+      '已有一轮在进行中（in-flight）：{count} 次重复唤醒合并进那一轮，' +
+      '以最大 seq #{largest} 为准；不排队、不重放',
+    params: ['count', 'largest'],
+  },
+  'round.finished.completed': { text: '正常完成', params: [] },
+  'round.finished.error': { text: '错误', params: [] },
+  'system.member.piercedJoin': {
+    text: '{name} 加入了频道：它被点名时并不在频道里，回复时顺带加入（成员变化只随真实回复发生）',
+    params: ['name'],
+  },
+
   // 示例文案：用来看消息密度在壳里的呈现。
   'message.sample.author': { text: '示例成员', params: [] },
   'message.sample.body': { text: '{author} 的消息示例：正文按消息密度呈现。', params: ['author'] },
