@@ -95,6 +95,11 @@ export const ZH_CN = {
   'round.finished.error': { text: '错误', params: [] },
   'round.finished.iterationLimit': { text: '达到迭代上限', params: [] },
   'round.finished.humanInterrupt': { text: '人类中断', params: [] },
+  // 人类中断的轮次说明：run 被取消发生在结论落库之前，本轮不产生回复消息。
+  'round.interrupted': {
+    text: '本轮被人类中断：run 在结论落库前被取消，不产生回复消息，轮次按人类中断收口',
+    params: [],
+  },
   // 自动续跑的两条轮次说明：授予一次续跑，或到达每世代四轮的上限后暂停。
   'round.continue.granted': {
     text: '已按结构化动作 continue_task 申请续跑（本世代第 {round} 轮）',

@@ -73,6 +73,13 @@ export interface ScriptedProviderOptions {
    * the real window, not a recomputation of it.
    */
   reportContext?: boolean;
+  /**
+   * Append the invocation ordinal to the reply (`calls:<n>`). A test counts
+   * the provider's calls through the ordinary reply bodies, so "one provider
+   * call per round outcome" is observable at the HTTP seam. Like the prompt and
+   * context reports it is a capability of the double, not a production branch.
+   */
+  reportCalls?: boolean;
 }
 
 /** The default scripted reply: deterministic, readable and free of model calls. */
@@ -98,10 +105,13 @@ function memoryReport(input: RoundInput): string {
 }
 
 export function createScriptedProvider(options: ScriptedProviderOptions): RoundProvider {
+  let calls = 0;
   return {
     deferred: options.behavior === 'delay',
     name: `scripted:${options.behavior}`,
     async runRound(input: RoundInput): Promise<RoundResult> {
+      calls += 1;
+      const callReport = options.reportCalls === true ? `\ncalls:${calls}` : '';
       switch (options.behavior) {
         case 'ignore':
           return { verdict: 'ignored', replies: [] };
@@ -119,24 +129,28 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
           // it had concluded: the partial conclusion it did produce is landed,
           // and the round states the iteration-limit finished reason.
           return {
-            ...replyResult(input, options),
+            ...replyResult(input, options, callReport),
             finishedReason: 'iteration-limit',
           };
         case 'delay':
           await delay(options.delayMs);
-          return replyResult(input, options);
+          return replyResult(input, options, callReport);
         case 'continue-task':
           // The structured action rides the same round result as the reply:
           // the output shape stays "zero or more replies plus one result".
-          return { ...replyResult(input, options), taskAction: 'continue_task' };
+          return { ...replyResult(input, options, callReport), taskAction: 'continue_task' };
         case 'reply':
-          return replyResult(input, options);
+          return replyResult(input, options, callReport);
       }
     },
   };
 }
 
-function replyResult(input: RoundInput, options: ScriptedProviderOptions): RoundResult {
+function replyResult(
+  input: RoundInput,
+  options: ScriptedProviderOptions,
+  callReport: string,
+): RoundResult {
   // Without an explicit body the double answers with what it read through the
   // ordinary read path — the triggering seq — so the round is observably a
   // real round rather than a canned string.
@@ -144,7 +158,7 @@ function replyResult(input: RoundInput, options: ScriptedProviderOptions): Round
   // Each capture rides the first body: the reply message is the only face a
   // test can read the round's input from.
   const [first, ...rest] = bodies;
-  const sections = [`${first}${contextReport(input, options)}`];
+  const sections = [`${first}${contextReport(input, options)}${callReport}`];
   if (options.echoPrompt === true) {
     sections[0] = `${sections[0]} [system-prompt] ${input.systemPrompt}`;
   }

@@ -6,7 +6,6 @@ import {
   type Server,
   type ServerResponse,
 } from 'node:http';
-import type { RoundProvider } from './agent-seam.js';
 import { ApiFailure } from './api-error.js';
 import {
   maxUploadEnvelopeBytes,
@@ -43,7 +42,7 @@ import {
   remoteDataFlowView,
 } from './providers.js';
 import { createReminder, deleteReminder, listReminders } from './reminders.js';
-import { dispatchWakes, type InFlightRounds } from './rounds.js';
+import { dispatchWakes, type OrchestrationRuntime } from './rounds.js';
 import { parseSearchQuery, searchWorkspace } from './search.js';
 import { getSettings, updateSettings } from './settings.js';
 import {
@@ -76,12 +75,11 @@ export interface StartedServer {
  * The orchestration runtime the HTTP face drives: the member-face adapter and
  * the process-local in-flight registry. It is created once by the CLI (which
  * selects the adapter from startup arguments) and handed to the HTTP layer, so
- * the routes stay free of adapter selection.
+ * the routes stay free of adapter selection. Its shape lives with the
+ * orchestration module so the live AG-UI run and the REST message write take
+ * the same value.
  */
-export interface OrchestrationRuntime {
-  provider: RoundProvider;
-  inFlight: InFlightRounds;
-}
+export type { OrchestrationRuntime } from './rounds.js';
 
 interface HttpContext {
   db: Database.Database;
@@ -132,7 +130,7 @@ export async function startHttpServer(
   const writeError = options.writeError ?? defaultWriteError;
   // The CopilotKit multi-route handler owns everything under its base path;
   // its routes are not part of the human-face REST table below.
-  const copilotKitHandler = createCopilotKitHandler(db);
+  const copilotKitHandler = createCopilotKitHandler(db, orchestration);
   const server = createServer((request, response) => {
     const pathname = new URL(request.url ?? '/', `http://${HOST}`).pathname;
     if (isCopilotKitPath(pathname)) {
@@ -334,7 +332,9 @@ const ROUTES: readonly Route[] = [
         parseMessageRequest(targetId, await readJsonBody(request)),
         orchestration,
       );
-      sendJson(response, 201, result);
+      // `created` is the orchestration's dedupe fact, not part of the human
+      // face's answer: the wire keeps the message identity only.
+      sendJson(response, 201, { id: result.id, seq: result.seq });
     },
   },
   {

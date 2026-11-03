@@ -122,6 +122,7 @@ function createOrchestration(
           replies: options.scriptedReplies.length > 0 ? options.scriptedReplies : undefined,
           echoPrompt: options.scriptedEchoPrompt,
           reportContext: options.scriptedReportContext,
+          reportCalls: options.scriptedReportCalls,
         });
   return { provider, inFlight: createInFlightRounds() };
 }

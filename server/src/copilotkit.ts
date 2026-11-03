@@ -4,6 +4,7 @@ import type { CopilotRuntimeFetchHandler } from '@copilotkit/runtime/v2';
 import { createCopilotNodeHandler } from '@copilotkit/runtime/v2/node';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { AllibotAgent, ORCHESTRATION_AGENT_ID } from './agui-agent.js';
+import type { OrchestrationRuntime } from './rounds.js';
 
 /** The multi-route CopilotKit base path the frontend provider points at. */
 export const COPILOTKIT_BASE_PATH = '/api/copilotkit';
@@ -22,9 +23,10 @@ export const COPILOTKIT_BASE_PATH = '/api/copilotkit';
  */
 export function createCopilotKitHandler(
   db: Database.Database,
+  orchestration: OrchestrationRuntime,
 ): (request: IncomingMessage, response: ServerResponse) => Promise<void> {
   const agents: ConstructorParameters<typeof CopilotRuntime>[0]['agents'] = {
-    [ORCHESTRATION_AGENT_ID]: new AllibotAgent(db),
+    [ORCHESTRATION_AGENT_ID]: new AllibotAgent(db, orchestration),
   };
   const runtime = new CopilotRuntime({ agents });
   const fetchHandler: CopilotRuntimeFetchHandler = createCopilotRuntimeHandler({

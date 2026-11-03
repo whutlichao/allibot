@@ -49,6 +49,13 @@ export interface CliOptions {
    */
   scriptedReportContext: boolean;
   /**
+   * Have the scripted reply carry the invocation ordinal (`calls:<n>`). It is
+   * how a test observes the provider's call count through the ordinary reply
+   * body — the same adapter capability pattern as the prompt / context reports,
+   * never a production branch.
+   */
+  scriptedReportCalls: boolean;
+  /**
    * How long one `/api/events` connection lives before the server sends the
    * rotate frame and closes it. Production keeps the 30-minute default; a test
    * injects a short value instead of waiting.
@@ -79,7 +86,7 @@ const USAGE =
   '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task>] ' +
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
-  '[--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
+  '[--scripted-report-calls] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -97,6 +104,7 @@ export function parseCliArgs(
       'scripted-reply': { type: 'string', multiple: true },
       'scripted-echo-prompt': { type: 'boolean' },
       'scripted-report-context': { type: 'boolean' },
+      'scripted-report-calls': { type: 'boolean' },
       'sse-lifetime-ms': { type: 'string' },
       'reminder-tick-ms': { type: 'string' },
     },
@@ -118,6 +126,7 @@ export function parseCliArgs(
     scriptedReplies: parseScriptedReplies(values['scripted-reply']),
     scriptedEchoPrompt: values['scripted-echo-prompt'] === true,
     scriptedReportContext: values['scripted-report-context'] === true,
+    scriptedReportCalls: values['scripted-report-calls'] === true,
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
     reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),
   };

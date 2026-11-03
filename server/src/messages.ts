@@ -5,7 +5,6 @@ import {
   type MessageView,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
-import type { RoundProvider } from './agent-seam.js';
 import { ApiFailure } from './api-error.js';
 import { listAttachmentsForMessages } from './attachments.js';
 import { openEpoch } from './budget.js';
@@ -13,7 +12,12 @@ import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { assertDmWritable } from './dms.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
-import { collectWakes, dispatchWakes, type InFlightRounds } from './rounds.js';
+import {
+  collectWakes,
+  dispatchWakes,
+  type DispatchOptions,
+  type OrchestrationRuntime,
+} from './rounds.js';
 import { publishMessageCreated, publishUnreadChanged } from './events.js';
 import { countUnread } from './unread.js';
 
@@ -162,8 +166,9 @@ export function appendMessage(
 export async function appendMessageAndDispatch(
   db: Database.Database,
   input: AppendMessageInput,
-  orchestration: { provider: RoundProvider; inFlight: InFlightRounds },
-): Promise<{ id: string; seq: number }> {
+  orchestration: OrchestrationRuntime,
+  options: DispatchOptions = {},
+): Promise<{ id: string; seq: number; created: boolean }> {
   const appended = appendMessage(db, input);
   if (appended.created) {
     const wakes = collectWakes(db, {
@@ -172,15 +177,12 @@ export async function appendMessageAndDispatch(
       kind: input.kind,
       seq: appended.seq,
     });
-    await dispatchWakes(
-      db,
-      orchestration.provider,
-      wakes,
-      orchestration.inFlight,
-      input.kind,
-    );
+    await dispatchWakes(db, orchestration.provider, wakes, orchestration.inFlight, {
+      ...options,
+      messageKind: input.kind,
+    });
   }
-  return { id: appended.id, seq: appended.seq };
+  return appended;
 }
 
 /**

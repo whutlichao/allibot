@@ -295,6 +295,61 @@ export function createInFlightRounds(): InFlightRounds {
 }
 
 /**
+ * The orchestration runtime the write paths drive: the member-face adapter and
+ * the process-local in-flight registry. The human-face message write, the claim
+ * and the live AG-UI run all hand this same value to the orchestration, so a
+ * reply or a claim round is executed by one module with one registry.
+ */
+export interface OrchestrationRuntime {
+  provider: RoundProvider;
+  inFlight: InFlightRounds;
+}
+
+/** One reply a round committed, as the live run observes it. */
+export interface CommittedReply {
+  /** The SQLite `message.id` — the AG-UI `messageId` is this value. */
+  id: string;
+  seq: number;
+  memberId: string;
+  body: string;
+}
+
+/**
+ * The observation face of one dispatch call (the live AG-UI run):
+ * - `onReply` sees the replies this call's own wakes produced, in commit order.
+ *   The agent-to-agent relay rounds stay backend-driven facts published on the
+ *   global SSE; the run does not stream them a second time.
+ * - `signal` is the run's cancellation: an in-flight round closes as a human
+ *   interrupt (no reply message), and no further round of this dispatch starts.
+ * - `awaitDeferred` makes a deferred adapter settle inside the call instead of
+ *   after it; the live run waits so it can stream and be cancelled. The plain
+ *   message write keeps the adapter's deferred behaviour.
+ *
+ * None of these starts a round: the rounds are still exactly those
+ * `dispatchWakes` delivers, so a round never executes twice.
+ */
+export interface DispatchOptions {
+  /** The kind of message the wakes belong to; `null` when no message is charged. */
+  messageKind?: string | null;
+  onError?: (error: unknown, wake: Wake) => void;
+  /** The live run's cancellation; an aborted round closes as a human interrupt. */
+  signal?: AbortSignal;
+  /** The live run's observation of the replies this dispatch produced. */
+  onReply?(reply: CommittedReply): void;
+  /** Await rounds a deferred adapter would otherwise leave to settle later. */
+  awaitDeferred?: boolean;
+}
+
+export interface RoundRunOptions {
+  /** The counted jump this delivery was charged; 0 when no jump applies. */
+  jump?: number;
+  /** The run's cancellation; an aborted round closes as a human interrupt. */
+  signal?: AbortSignal;
+  /** The live run's observation of the reply this round commits. */
+  onReply?(reply: CommittedReply): void;
+}
+
+/**
  * Deliver a message's wakes. One Agent has at most one round in flight: a wake
  * that arrives while a round runs for the same member is not queued and not
  * replayed — it folds into the running round and leaves one `merged` row.
@@ -319,16 +374,19 @@ export async function dispatchWakes(
   provider: RoundProvider,
   wakes: readonly Wake[],
   inFlight: InFlightRounds,
-  messageKind: string | null = null,
-  onError: (error: unknown, wake: Wake) => void = (error, wake) => {
-    // Failure isolation: one member's round must not fail the message write or
-    // another member's round. The message is already committed; an adapter
-    // failure is folded into a `failed` outcome by runRound, so what reaches
-    // here is a storage-level problem worth a log line and nothing more.
-    console.error(`allibot: round for member ${wake.memberId} failed:`, error);
-  },
+  options: DispatchOptions = {},
 ): Promise<void> {
-  if (wakes.length === 0) {
+  const { messageKind = null, signal, onReply, awaitDeferred = false } = options;
+  const onError: (error: unknown, wake: Wake) => void =
+    options.onError ??
+    ((error, wake) => {
+      // Failure isolation: one member's round must not fail the message write or
+      // another member's round. The message is already committed; an adapter
+      // failure is folded into a `failed` outcome by runRound, so what reaches
+      // here is a storage-level problem worth a log line and nothing more.
+      console.error(`allibot: round for member ${wake.memberId} failed:`, error);
+    });
+  if (wakes.length === 0 || signal?.aborted) {
     return;
   }
   const delivering = wakes.filter((wake) => !foldsIntoInFlight(inFlight, wake));
@@ -343,12 +401,20 @@ export async function dispatchWakes(
   }
   const jump = delivered ? 1 : 0;
   for (const wake of wakes) {
-    if (provider.deferred) {
-      void runRound(db, provider, wake, inFlight, jump).catch((error: unknown) => onError(error, wake));
+    // A cancelled run starts no further round. The wakes it never started are
+    // not rounds and leave no outcome row: the member's consumption cursor did
+    // not move, so a later wake reads the message again.
+    if (signal?.aborted) {
+      return;
+    }
+    if (provider.deferred && !awaitDeferred) {
+      void runRound(db, provider, wake, inFlight, { jump, signal, onReply }).catch(
+        (error: unknown) => onError(error, wake),
+      );
       continue;
     }
     try {
-      await runRound(db, provider, wake, inFlight, jump);
+      await runRound(db, provider, wake, inFlight, { jump, signal, onReply });
     } catch (error) {
       onError(error, wake);
     }
@@ -416,8 +482,9 @@ export async function runRound(
   provider: RoundProvider,
   wake: Wake,
   inFlight: InFlightRounds,
-  budgetConsumed = 0,
+  options: RoundRunOptions = {},
 ): Promise<RoundOutcomeRow | null> {
+  const { jump = 0, signal, onReply } = options;
   const active = inFlight.get(wake.memberId);
   if (active !== undefined) {
     if (active.targetId === wake.targetId) {
@@ -437,9 +504,12 @@ export async function runRound(
   // unreadable round has no definite signal to enforce.
   let input: RoundInput | undefined;
   let result: RoundResult;
+  let interrupted = false;
   try {
     input = readRoundInput(db, wake);
-    result = await provider.runRound(input);
+    const settled = await runProviderRound(provider, input, signal);
+    interrupted = settled.interrupted;
+    result = settled.result;
   } catch (error) {
     // A wake that arrived after the adapter settled but before this round's
     // transaction commits still folds into this round; a crash here must not
@@ -449,7 +519,10 @@ export async function runRound(
 
   let committed: CommittedRound;
   try {
-    committed = commitRound(db, wake, turn, startedAt, result, input, budgetConsumed);
+    committed = commitRound(db, wake, turn, startedAt, result, input, {
+      jump,
+      interrupted,
+    });
   } finally {
     inFlight.delete(wake.memberId);
   }
@@ -457,6 +530,9 @@ export async function runRound(
   // returned; a rolled-back round announces nothing.
   for (const message of committed.messages) {
     publishMessageCreated({ targetId: wake.targetId, id: message.id, seq: message.seq });
+  }
+  if (committed.reply !== null) {
+    onReply?.({ ...committed.reply, memberId: wake.memberId });
   }
   for (const outcome of committed.outcomes) {
     publishRoundOutcome(outcome);
@@ -473,15 +549,21 @@ export async function runRound(
   }
   // The other-target wakes wait here rather than running in parallel: one
   // member still has at most one round in flight. They were deferred into this
-  // round's turn, not delivered to another member, so they carry no jump.
+  // round's turn, not delivered to another member, so they carry no jump. A
+  // cancelled run starts none of them: they were never rounds.
   for (const deferred of turn.deferred) {
-    await runRound(db, provider, deferred, inFlight);
+    if (signal?.aborted) {
+      break;
+    }
+    await runRound(db, provider, deferred, inFlight, { signal });
   }
   // The reply is itself an Agent message, so it relays to the other members
   // under the same response budget: its wakes are charged as one more jump, or
   // suppressed when the epoch is exhausted. Depth first, so the next members'
   // rounds close before this one returns and the chain is observable in seq
-  // order on the synchronous adapter.
+  // order on the synchronous adapter. The relay stays backend-driven: it is
+  // not handed to the live run's observer, which only streams the replies the
+  // run's own message woke.
   if (committed.replySeq !== null) {
     const replyWakes = collectWakes(db, {
       targetId: wake.targetId,
@@ -489,12 +571,12 @@ export async function runRound(
       kind: 'agent',
       seq: committed.replySeq,
     });
-    await dispatchWakes(db, provider, replyWakes, inFlight, 'agent');
+    await dispatchWakes(db, provider, replyWakes, inFlight, { messageKind: 'agent', signal });
   }
   // 自动续跑 carries no jump: the caller passes no message kind, so the wake
   // is delivered even in an exhausted epoch and never advances target_budget.
   if (committed.pendingWakes.length > 0) {
-    await dispatchWakes(db, provider, committed.pendingWakes, inFlight);
+    await dispatchWakes(db, provider, committed.pendingWakes, inFlight, { signal });
   }
   return committed.outcome;
 }
@@ -683,26 +765,28 @@ function commitRound(
   startedAt: string,
   result: RoundResult,
   roundInput: RoundInput | undefined,
-  budgetConsumed: number,
+  options: { jump: number; interrupted: boolean },
 ): CommittedRound {
-  const signal = roundInput?.discipline ?? { definite: false, signal: null };
+  const { jump, interrupted } = options;
+  const discipline = roundInput?.discipline ?? { definite: false, signal: null };
   const messages: WrittenMessage[] = [];
   const outcomes: RoundOutcomeRow[] = [];
   const write = db.transaction((): {
     outcome: RoundOutcomeRow;
-    replySeq: number | null;
+    reply: { id: string; seq: number; body: string } | null;
     pendingWakes: Wake[];
   } => {
-    const joinedSeq = commitJoin(db, wake, result, messages);
-    const reply = commitReply(db, wake, result, messages);
+    const joinedSeq = interrupted ? null : commitJoin(db, wake, result, messages);
+    const reply = interrupted ? null : commitReply(db, wake, result, messages);
     const finishedAt = new Date().toISOString();
 
     // Long-term memory is written back deterministically at round close
     // (D5.1): the trigger excerpt plus this member's reply excerpt, or the
     // "no reply" wording for an ignored / failed round. It never calls a model
     // and has no switch; a round whose input could not even be read writes no
-    // card, because nothing was understood.
-    if (roundInput !== undefined) {
+    // card, because nothing was understood. An interrupted round never
+    // concluded its understanding, so it writes no card either.
+    if (roundInput !== undefined && !interrupted) {
       writeRoundMemoryCard(db, {
         memberId: wake.memberId,
         targetId: wake.targetId,
@@ -728,25 +812,33 @@ function commitRound(
       );
     }
 
-    const judged = judgeRound(signal, result, reply?.seq ?? null);
+    // 人类中断 (human interrupt) is the orchestration's fact, not the adapter's:
+    // the run was cancelled before the round's conclusion could be committed.
+    // The round lands no reply; it closes as failed so the consumption cursor
+    // stays where it is and the message is read again by the next wake.
+    const judged = interrupted
+      ? { status: 'failed' as const, finishedReason: 'human-interrupt' as const }
+      : judgeRound(discipline, result, reply?.seq ?? null);
     // 自动续跑: the structured action lands its own system record in this same
     // transaction, either with one more wake for the same assignee or with the
     // paused record once the epoch's four work rounds are used up.
-    const action = commitTaskAction(db, wake, roundInput, result, messages);
+    const action = interrupted ? null : commitTaskAction(db, wake, roundInput, result, messages);
     const outcome = insertOutcome(db, {
       wake,
       baseSeq: wake.fromSeq,
       status: judged.status,
-      reason: roundReason(
-        db,
-        wake,
-        signal,
-        result,
-        judged,
-        joinedSeq,
-        reply?.seq ?? null,
-        action?.clause ?? null,
-      ),
+      reason: interrupted
+        ? [wakeText(db, wake.reason), tFromDb(db, 'round.interrupted')].join('；')
+        : roundReason(
+            db,
+            wake,
+            discipline,
+            result,
+            judged,
+            joinedSeq,
+            reply?.seq ?? null,
+            action?.clause ?? null,
+          ),
       merged: 0,
       startedAt,
       finishedAt,
@@ -754,7 +846,7 @@ function commitRound(
       // The row-level marker of "this round was delivered by a counted jump".
       // A folded reply lands here too, so the row count never decides the hop
       // count (the ledger does); one jump marks every member it was delivered to.
-      budgetConsumed,
+      budgetConsumed: jump,
     });
     outcomes.push(outcome);
     // 消费游标 (Agent Read Cursor) advances only on replied / ignored: a failed
@@ -765,12 +857,12 @@ function commitRound(
     }
     return {
       outcome,
-      replySeq: reply?.seq ?? null,
+      reply,
       pendingWakes: action === null || action.wake === null ? [] : [action.wake],
     };
   });
-  const { outcome, replySeq, pendingWakes } = write();
-  return { outcome, replySeq, messages, outcomes, pendingWakes };
+  const { outcome, reply, pendingWakes } = write();
+  return { outcome, reply, replySeq: reply?.seq ?? null, messages, outcomes, pendingWakes };
 }
 
 /**
@@ -896,6 +988,8 @@ interface WrittenMessage {
  */
 interface CommittedRound {
   outcome: RoundOutcomeRow;
+  /** The persisted reply this round landed, if any (一轮 ↔ 至多一条). */
+  reply: { id: string; seq: number; body: string } | null;
   replySeq: number | null;
   messages: WrittenMessage[];
   /** Every outcome row written by this round, in write order. */
@@ -906,6 +1000,50 @@ interface CommittedRound {
    * closes, with no jump charged (自动续跑 is not a jump).
    */
   pendingWakes: Wake[];
+}
+
+/**
+ * Await the adapter's round, or the run's cancellation — whichever comes
+ * first. A cancelled run discards the adapter's late result and closes the
+ * round as a human interrupt; the abandoned promise's rejection is swallowed
+ * so it cannot escape as an unhandled one.
+ */
+async function runProviderRound(
+  provider: RoundProvider,
+  input: RoundInput,
+  signal: AbortSignal | undefined,
+): Promise<{ result: RoundResult; interrupted: boolean }> {
+  if (signal === undefined) {
+    return { result: await provider.runRound(input), interrupted: false };
+  }
+  if (signal.aborted) {
+    return { result: { verdict: 'failed', replies: [] }, interrupted: true };
+  }
+  const round = provider.runRound(input);
+  round.catch(() => undefined);
+  const interruptedResult: RoundResult = { verdict: 'failed', replies: [] };
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<null>((resolve) => {
+    onAbort = () => resolve(null);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    const settled = await Promise.race([
+      round.then((result) => ({ result, interrupted: false as const })),
+      aborted.then(() => ({ result: interruptedResult, interrupted: true as const })),
+    ]);
+    // An abort that lands after the adapter settled but before the round's
+    // transaction ran still stops the run: the human cancelled before the
+    // conclusion was committed.
+    if (!settled.interrupted && signal.aborted) {
+      return { result: { verdict: 'failed', replies: [] }, interrupted: true };
+    }
+    return settled;
+  } finally {
+    if (onAbort !== undefined) {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
 }
 
 /**
@@ -1044,8 +1182,7 @@ function commitReply(
   wake: Wake,
   result: RoundResult,
   written: WrittenMessage[],
-): { id: string; seq: number; body: string } | null {
-  if (result.verdict !== 'replied' || !hasBody(result)) {
+): { id: string; seq: number; body: string } | null {  if (result.verdict !== 'replied' || !hasBody(result)) {
     return null;
   }
   // 一轮 ↔ 至多一条 target 消息: the seam may hand over several pending
