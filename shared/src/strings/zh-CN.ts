@@ -214,6 +214,24 @@ export const ZH_CN = {
     text: '你正在执行队长分派的子任务：{instruction}',
     params: ['instruction'],
   },
+  // SOP 内部轮次（#45 / D4.3）：执行者 / 校验者段落，产出不写频道消息。
+  'prompt.sop.discipline': {
+    text:
+      '这是 SOP 内部轮次：产出只回到 SOP 运行，不写频道消息、不写任务、不进未读 / 搜索 / 唤醒 / 预算。',
+    params: [],
+  },
+  'prompt.sop.executor': {
+    text:
+      '你正在执行 SOP「{title}」的第 {step} 步（第 {attempt}/{max_attempts} 次尝试）。' +
+      '步骤说明：{description}。只执行这一步，并说明结果。',
+    params: ['title', 'step', 'attempt', 'max_attempts', 'description'],
+  },
+  'prompt.sop.verifier': {
+    text:
+      '你正在校验 SOP「{title}」的第 {step} 步（第 {attempt}/{max_attempts} 次尝试）。' +
+      '执行者输出：{executor}。必须返回结构化 sopVerdict（pass 或 fail）。',
+    params: ['title', 'step', 'attempt', 'max_attempts', 'executor'],
+  },
 
   // 示例文案：用来看消息密度在壳里的呈现。
   'message.sample.author': { text: '示例成员', params: [] },
@@ -589,6 +607,25 @@ export const ZH_CN = {
   'workspace.sop.phase.awaiting': { text: '等待中', params: [] },
   'workspace.sop.phase.completed': { text: '已完成', params: [] },
   'workspace.sop.phase.failed': { text: '失败', params: [] },
+  'workspace.sop.runs.attempt': { text: '尝试', params: [] },
+  'workspace.sop.runs.waitingOn': { text: '等待', params: [] },
+  'workspace.sop.runs.phaseStrip': { text: '阶段', params: [] },
+  'workspace.sop.runs.executorExcerpt': { text: '执行者输出', params: [] },
+  'workspace.sop.runs.verifierExcerpt': { text: '校验者输出', params: [] },
+  'workspace.sop.runs.error': { text: '错误', params: [] },
+  'workspace.sop.waiting.verifier': { text: '校验者判定', params: [] },
+  'workspace.sop.waiting.approval': { text: '审批', params: [] },
+  // SOP 运行收口与轮次失败的可读原因（后端）。
+  'sop.run.interrupted': { text: 'SOP 运行因进程重启中断（interrupted）。', params: [] },
+  'sop.run.verifier.noVerdict': {
+    text: '校验者未返回结构化 sopVerdict，无法判定这一步。',
+    params: [],
+  },
+  'sop.run.verifier.noReason': {
+    text: '校验者判定为 fail，但没有给出可读说明。',
+    params: [],
+  },
+  'sop.run.round.failed': { text: 'SOP 轮次失败：{reason}', params: ['reason'] },
   // 权限档 / 规则 / 审批（#44 / D5.5 / D5.6）：三档权限、规则集与 HITL 面。
   'permission.approval.timeout': {
     text: '审批等待超时（600 秒），本轮以失败收口。',

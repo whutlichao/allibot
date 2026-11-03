@@ -45,7 +45,14 @@ import {
   permissionScopeKey,
   type PermissionScope,
 } from './workspace/permissions.ts';
-import { readSopDefinitions, readSopRuns } from './workspace/sops.ts';
+import {
+  applySopUpdateFrame,
+  mergeSopRun,
+  readSopDefinitions,
+  readSopRun,
+  readSopRuns,
+  readSopUpdateFrame,
+} from './workspace/sops.ts';
 import {
   deleteAgent,
   createSopDefinition,
@@ -394,6 +401,25 @@ function render(saveFailed = false): void {
               .then(() => render())
               .catch((error: unknown) => {
                 console.error('plan read failed', error);
+              });
+            return;
+          }
+          if (event.event === 'sop_update') {
+            const frame = readSopUpdateFrame(event.data);
+            if (frame === null) {
+              return;
+            }
+            // 帧是进度点，不是摘录快照：先用它移动本地读数，再按 run id 各读一次
+            // `GET /api/sop-runs/{id}` 取回 state。没有轮询，也没有第二条流。
+            currentSopRuns = applySopUpdateFrame(currentSopRuns, frame);
+            render();
+            void readSopRun(fetch, frame.sop_run_id)
+              .then((run) => {
+                currentSopRuns = mergeSopRun(currentSopRuns, run);
+                render();
+              })
+              .catch((error: unknown) => {
+                console.error('SOP run read failed', error);
               });
             return;
           }

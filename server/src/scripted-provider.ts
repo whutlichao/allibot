@@ -63,6 +63,9 @@ export type ScriptedBehavior =
   | 'plan'
   | 'sop-create'
   | 'sop-start'
+  | 'sop-executor'
+  | 'sop-verifier'
+  | 'sop-approval'
   | 'workspace'
   | 'permission'
   | 'mcp-approval'
@@ -84,6 +87,9 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'plan',
   'sop-create',
   'sop-start',
+  'sop-executor',
+  'sop-verifier',
+  'sop-approval',
   'workspace',
   'permission',
   'mcp-approval',
@@ -229,6 +235,12 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
           // The member face has no SOP write tool (D4.2): the double states
           // that the tool is unavailable and writes nothing.
           return sopUnavailableResult(input, options, callReport, options.behavior);
+        case 'sop-executor':
+          return sopResult(input, callReport, 'pass');
+        case 'sop-verifier':
+          return sopResult(input, callReport, 'fail');
+        case 'sop-approval':
+          return await sopApprovalResult(input, callReport);
         case 'reply':
           return replyResult(input, options, callReport);
       }
@@ -721,6 +733,83 @@ async function teamApprovalResult(
     };
   }
   return await teamAssignResult(input, options, callReport, false);
+}
+
+/**
+ * The double's SOP executor / verifier face (#45 / D4.3). The same injected
+ * behaviour serves both roles: in an executor round it answers with a
+ * deterministic text; in a verifier round it returns the selected structured
+ * `sopVerdict` and quotes the executor text it was handed, so a process-level
+ * test can prove the executor output was the verifier's input.
+ */
+function sopResult(
+  input: RoundInput,
+  callReport: string,
+  verdict: 'pass' | 'fail',
+): RoundResult {
+  const sop = input.sop;
+  if (sop === null) {
+    return {
+      verdict: 'replied',
+      replies: [`[sop] unavailable${callReport}`],
+    };
+  }
+  if (sop.role === 'executor') {
+    return {
+      verdict: 'replied',
+      replies: [
+        `SOP-EXEC:${sop.step_index}:${sop.attempt}:${sop.step_title}${callReport}`,
+      ],
+    };
+  }
+  const saw = (sop.executor_text ?? '-').replaceAll('\n', ' ');
+  return {
+    verdict: 'replied',
+    replies: [
+      `SOP-VERIFY:${verdict.toUpperCase()}:${sop.step_index}:${sop.attempt}:SAW:${saw}${callReport}`,
+    ],
+    sopVerdict: verdict,
+  };
+}
+
+/**
+ * The double's SOP approval face (#45 / D4.3 / D5.6). The executor round makes
+ * one gated write: under `ask-writes` that registers a SOP approval and waits;
+ * approve executes the write, deny returns the tool's DENIED result and the
+ * round still continues. The verifier then passes with a readable text.
+ */
+async function sopApprovalResult(
+  input: RoundInput,
+  callReport: string,
+): Promise<RoundResult> {
+  const sop = input.sop;
+  if (sop === null) {
+    return { verdict: 'replied', replies: [`[sop-approval] unavailable${callReport}`] };
+  }
+  if (sop.role === 'verifier') {
+    const saw = (sop.executor_text ?? '-').replaceAll('\n', ' ');
+    return {
+      verdict: 'replied',
+      replies: [`[sop-approval] verifier:pass saw:${saw}${callReport}`],
+      sopVerdict: 'pass',
+    };
+  }
+  const workspace = input.workspace;
+  if (workspace === null) {
+    return {
+      verdict: 'replied',
+      replies: [`[sop-approval] available:false${callReport}`],
+    };
+  }
+  const result = await workspace.files.Write({
+    path: 'sop-approval.txt',
+    content: 'written-by-sop-approval',
+  });
+  const outcome = result.ok ? 'ok' : `error:${result.error ?? 'unknown'}`;
+  return {
+    verdict: 'replied',
+    replies: [`[sop-approval] write:${outcome}${callReport}`],
+  };
 }
 
 /**
