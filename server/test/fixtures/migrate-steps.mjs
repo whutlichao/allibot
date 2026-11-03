@@ -8,10 +8,12 @@ import { MIGRATION_STEPS, runMigrations } from '../../dist/db.js';
  */
 const [, , mode, dataDir] = process.argv;
 
-const BASELINE_MODES = new Set(['v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v11']);
+const BASELINE_MODES = new Set(['v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9', 'v11', 'v12']);
 
 if ((mode !== 'ok' && mode !== 'fail' && !BASELINE_MODES.has(mode ?? '')) || dataDir === undefined) {
-  console.error('usage: migrate-steps.mjs <ok|fail|v2|v3|v4|v5|v6|v7|v8|v9|v11> <data-dir>');
+  console.error(
+    'usage: migrate-steps.mjs <ok|fail|v2|v3|v4|v5|v6|v7|v8|v9|v11|v12> <data-dir>',
+  );
   process.exit(2);
 }
 

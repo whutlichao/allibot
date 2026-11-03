@@ -54,7 +54,7 @@ test('the legacy data dir warning renders from the zh-CN catalog', async () => {
       const row = db.prepare('SELECT schema_version FROM schema_meta').get() as {
         schema_version: number;
       };
-      assert.equal(row.schema_version, 12);
+      assert.equal(row.schema_version, SCHEMA_VERSION);
     } finally {
       db.close();
     }
