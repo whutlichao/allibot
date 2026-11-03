@@ -19,7 +19,8 @@
     "test:team-config": "node --import ./test/support/register-css.mjs --test test/team-config.test.ts",
     "test:team-runs": "node --import ./test/support/register-css.mjs --test test/team-runs.test.ts",
     "test:team-assignments": "node --import ./test/support/register-css.mjs --test test/team-assignments.test.ts",
-    "test:plan-panel": "node --import ./test/support/register-css.mjs --test test/plan-panel.test.ts"
+    "test:plan-panel": "node --import ./test/support/register-css.mjs --test test/plan-panel.test.ts",
+    "test:sop-definitions": "node --import ./test/support/register-css.mjs --test test/sop-definitions.test.ts"
   },
   "dependencies": {
     "@allibot/shared": "*",

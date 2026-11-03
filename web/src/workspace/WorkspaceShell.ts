@@ -3,6 +3,9 @@ import {
   type ChannelConfigPatch,
   type Locale,
   type PlanRunView,
+  type SopDefinitionCreate,
+  type SopDefinitionView,
+  type SopRunView,
   type TargetMemberView,
   type TaskStatus,
   type TaskView,
@@ -59,6 +62,10 @@ export interface WorkspaceShellProps {
   teamRuns?: Record<string, readonly TeamRunView[]>;
   /** Plan snapshots, keyed by target id; the run panel reads them. */
   plans?: Record<string, readonly PlanRunView[]>;
+  /** SOP definitions, keyed by channel id; the channel context panel reads them. */
+  sopDefinitions?: Record<string, readonly SopDefinitionView[]>;
+  /** SOP run snapshots, keyed by definition id. */
+  sopRuns?: Record<string, readonly SopRunView[]>;
   viewportWidth?: number;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
@@ -70,6 +77,9 @@ export interface WorkspaceShellProps {
   onSaveAgent?: AsyncAction2<string, { system_prompt: string }>;
   /** Read the channel's team config change; resolves after the host re-read it. */
   onChannelConfigChange?: AsyncAction2<string, ChannelConfigPatch>;
+  /** Create / start a SOP; the host writes and re-reads, the panel only displays. */
+  onCreateSop?: (input: SopDefinitionCreate) => void | Promise<void>;
+  onStartSop?: (definitionId: string) => void | Promise<void>;
   /** Soft delete the Agent; resolves after the host re-read the workspace. */
   onDeleteAgent?: AsyncAction1<string>;
   saveFailed?: boolean;
@@ -125,6 +135,10 @@ export function WorkspaceShell({
   onChannelConfigChange,
   teamRuns,
   plans,
+  sopDefinitions,
+  sopRuns,
+  onCreateSop,
+  onStartSop,
   saveFailed = false,
   onLiveEvent,
 }: WorkspaceShellProps) {
@@ -300,6 +314,11 @@ export function WorkspaceShell({
           : (patch: ChannelConfigPatch) => onChannelConfigChange(selectedTargetId, patch),
       teamRuns: selectedTargetId === null ? undefined : teamRuns?.[selectedTargetId],
       plans: selectedTargetId === null ? undefined : plans?.[selectedTargetId],
+      sopDefinitions:
+        selectedTargetId === null ? undefined : sopDefinitions?.[selectedTargetId],
+      sopRuns,
+      onCreateSop,
+      onStartSop,
       onOpenPanel: openPanel,
     });
   } else if (drawer === 'members') {

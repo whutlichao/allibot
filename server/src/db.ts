@@ -7,7 +7,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 export interface MigrationStep {
   readonly to: number;
@@ -764,6 +764,78 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
 
         -- The plan read and every tool result walk one run in plan order.
         CREATE INDEX plan_task_run_position ON plan_task (plan_run_id, position);
+      `);
+    },
+  },
+  {
+    // The SOP ticket (#41 / T16) lands the owner-started multi-step flow. A
+    // definition is immutable in M2: its ordered steps are one JSON array, and
+    // (channel_id, name) names exactly one definition. A run is the five-phase
+    // progress record of one start; its state is an opaque JSON snapshot, while
+    // its identity and start instant stay frozen at insert.
+    to: 17,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE sop_definition (
+          id TEXT PRIMARY KEY,
+          channel_id TEXT NOT NULL REFERENCES channel (id),
+          name TEXT NOT NULL,
+          steps TEXT NOT NULL CHECK (json_valid(steps) AND json_type(steps) = 'array'),
+          created_at TEXT NOT NULL,
+          UNIQUE (channel_id, name)
+        );
+
+        CREATE TABLE sop_run (
+          id TEXT PRIMARY KEY,
+          definition_id TEXT NOT NULL REFERENCES sop_definition (id),
+          channel_id TEXT NOT NULL REFERENCES channel (id),
+          phase TEXT NOT NULL CHECK (phase IN ('pending', 'running', 'awaiting', 'completed', 'failed')),
+          state TEXT NOT NULL CHECK (json_valid(state)),
+          current_step INTEGER NOT NULL CHECK (current_step >= 0),
+          started_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          finished_at TEXT,
+          CHECK (
+            (phase IN ('pending', 'running', 'awaiting') AND finished_at IS NULL)
+            OR (phase IN ('completed', 'failed') AND finished_at IS NOT NULL)
+          )
+        );
+
+        -- A run belongs to its definition's channel: the row cannot name a
+        -- different channel on insert or on any later update.
+        CREATE TRIGGER sop_run_channel_consistency_insert
+        BEFORE INSERT ON sop_run
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+          SELECT 1 FROM sop_definition d
+           WHERE d.id = NEW.definition_id AND d.channel_id = NEW.channel_id
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'sop_run channel does not match its definition');
+        END;
+
+        CREATE TRIGGER sop_run_channel_consistency_update
+        BEFORE UPDATE OF definition_id, channel_id ON sop_run
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+          SELECT 1 FROM sop_definition d
+           WHERE d.id = NEW.definition_id AND d.channel_id = NEW.channel_id
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'sop_run channel does not match its definition');
+        END;
+
+        -- A run's identity and start instant are frozen at insert; phase,
+        -- state, current_step and updated_at are the progress surface.
+        CREATE TRIGGER sop_run_immutable_fields
+        BEFORE UPDATE ON sop_run
+        FOR EACH ROW
+        WHEN NEW.id <> OLD.id
+          OR NEW.definition_id <> OLD.definition_id
+          OR NEW.started_at <> OLD.started_at
+        BEGIN
+          SELECT RAISE(ABORT, 'sop_run changes an immutable field');
+        END;
       `);
     },
   },

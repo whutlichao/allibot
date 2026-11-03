@@ -54,7 +54,9 @@ export type ScriptedBehavior =
   | 'transfer-task'
   | 'team-assign'
   | 'team-budget'
-  | 'plan';
+  | 'plan'
+  | 'sop-create'
+  | 'sop-start';
 
 export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'reply',
@@ -69,6 +71,8 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'team-assign',
   'team-budget',
   'plan',
+  'sop-create',
+  'sop-start',
 ];
 
 export interface ScriptedProviderOptions {
@@ -187,6 +191,11 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
           return await teamAssignResult(input, options, callReport, true);
         case 'plan':
           return await planResult(input, options, callReport);
+        case 'sop-create':
+        case 'sop-start':
+          // The member face has no SOP write tool (D4.2): the double states
+          // that the tool is unavailable and writes nothing.
+          return sopUnavailableResult(input, options, callReport, options.behavior);
         case 'reply':
           return replyResult(input, options, callReport);
       }
@@ -387,6 +396,30 @@ async function planResult(
   return {
     verdict: 'replied',
     replies: [`${lines.join('\n')}${callReport}${teamReport(input, options)}`],
+  };
+}
+
+/**
+ * The double's proof that the member face has no SOP write tool (#41 / D4.2):
+ * a `sop-create` / `sop-start` round reports the tool as unavailable and names
+ * the SOP tools it was actually offered (none). It creates no definition and
+ * starts no run; the human face is the only SOP write entry.
+ */
+function sopUnavailableResult(
+  input: RoundInput,
+  options: ScriptedProviderOptions,
+  callReport: string,
+  behavior: 'sop-create' | 'sop-start',
+): RoundResult {
+  const sopTools = input.tools.filter((tool) => /sop/i.test(tool));
+  return {
+    verdict: 'replied',
+    replies: [
+      `[${behavior}] unavailable` +
+        `\n[sop-tools] ${sopTools.length === 0 ? '-' : sopTools.join(',')}` +
+        callReport +
+        teamReport(input, options),
+    ],
   };
 }
 

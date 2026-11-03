@@ -2,6 +2,9 @@ import type {
   AgentView,
   ChannelConfigPatch,
   ChannelView,
+  SopDefinitionCreate,
+  SopDefinitionView,
+  SopRunView,
   TargetMemberView,
 } from '@allibot/shared';
 
@@ -111,4 +114,32 @@ export async function patchChannelConfig(
     body: JSON.stringify(patch),
   });
   return readJson<ChannelView>(response, `PATCH channel ${channelId}`);
+}
+
+/**
+ * The owner-only SOP writes (#41 / D4.2): one definition create and one start.
+ * They live with the other human-face writes, not in the render-only workspace
+ * modules; opening the SOP panel never POSTs anything.
+ */
+export async function createSopDefinition(
+  fetchImpl: typeof fetch,
+  input: SopDefinitionCreate,
+): Promise<SopDefinitionView> {
+  const response = await fetchImpl('/api/sops', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return readJson<SopDefinitionView>(response, 'POST /api/sops');
+}
+
+/** `POST /api/sops/{id}/runs` answers 202 with the pending run. */
+export async function startSopRun(
+  fetchImpl: typeof fetch,
+  definitionId: string,
+): Promise<SopRunView> {
+  const response = await fetchImpl(`/api/sops/${encodeURIComponent(definitionId)}/runs`, {
+    method: 'POST',
+  });
+  return readJson<SopRunView>(response, `POST SOP ${definitionId} start`);
 }

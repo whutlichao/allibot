@@ -2,6 +2,9 @@ import {
   t,
   type ChannelConfigPatch,
   type PlanRunView,
+  type SopDefinitionCreate,
+  type SopDefinitionView,
+  type SopRunView,
   type TargetMemberView,
   type TaskStatus,
   type TaskView,
@@ -30,6 +33,10 @@ export interface AppProps {
   teamRuns?: Record<string, readonly TeamRunView[]>;
   /** Plan snapshots the shell may render, keyed by target id. */
   plans?: Record<string, readonly PlanRunView[]>;
+  /** SOP definitions, keyed by channel id. */
+  sopDefinitions?: Record<string, readonly SopDefinitionView[]>;
+  /** SOP run snapshots, keyed by definition id. */
+  sopRuns?: Record<string, readonly SopRunView[]>;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
   onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
@@ -37,6 +44,8 @@ export interface AppProps {
   onSaveAgent?: AsyncAction2<string, { system_prompt: string }>;
   onDeleteAgent?: AsyncAction1<string>;
   onChannelConfigChange?: AsyncAction2<string, ChannelConfigPatch>;
+  onCreateSop?: (input: SopDefinitionCreate) => void | Promise<void>;
+  onStartSop?: (definitionId: string) => void | Promise<void>;
   onLiveEvent?: (event: LiveEvent) => void;
 }
 
@@ -58,12 +67,16 @@ export function App({
   channelMembers,
   teamRuns,
   plans,
+  sopDefinitions,
+  sopRuns,
   onSelectTarget,
   onTaskTransition,
   onJoinMember,
   onSaveAgent,
   onDeleteAgent,
   onChannelConfigChange,
+  onCreateSop,
+  onStartSop,
   onLiveEvent,
 }: AppProps) {
   if (workspace !== undefined) {
@@ -75,6 +88,8 @@ export function App({
       channelMembers,
       teamRuns,
       plans,
+      sopDefinitions,
+      sopRuns,
       onSelectTarget,
       onTaskTransition,
       onSettingsChange,
@@ -82,6 +97,8 @@ export function App({
       onSaveAgent,
       onDeleteAgent,
       onChannelConfigChange,
+      onCreateSop,
+      onStartSop,
       saveFailed,
       onLiveEvent,
     });

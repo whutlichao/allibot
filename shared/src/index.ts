@@ -416,6 +416,73 @@ export interface PlanUpdateFrame {
 }
 
 /**
+ * One step of an SOP definition (D4.2): the ordered executor -> verifier unit
+ * with its retry ceiling. The definition is immutable in M2, so this shape is
+ * never rewritten after the definition is created.
+ */
+export interface SopStepDefinition {
+  title: string;
+  description: string;
+  executor_member_id: string;
+  verifier_member_id: string;
+  max_attempts: number;
+}
+
+/** The bounds the definition write enforces (D4.2). */
+export const SOP_MIN_STEPS = 1;
+export const SOP_MAX_STEPS = 20;
+export const SOP_MAX_ATTEMPTS = 5;
+
+/** The five SOP run phases (D4.2); `pending` is already created but not started. */
+export const SOP_RUN_PHASES = ['pending', 'running', 'awaiting', 'completed', 'failed'] as const;
+export type SopRunPhase = (typeof SOP_RUN_PHASES)[number];
+
+/**
+ * An SOP definition as `POST /api/sops` and the two reads return it. It is a
+ * channel-scoped ordered step list named by `(channel_id, name)`; there is no
+ * edit or delete face.
+ */
+export interface SopDefinitionView {
+  id: string;
+  channel_id: string;
+  name: string;
+  steps: SopStepDefinition[];
+  created_at: string;
+}
+
+/** The `POST /api/sops` body: one immutable definition on one channel. */
+export interface SopDefinitionCreate {
+  channel_id: string;
+  name: string;
+  steps: SopStepDefinition[];
+}
+
+/**
+ * The run's `state` column: an opaque JSON snapshot the executor maintains
+ * (D4.2 / D4.3 names the current step, attempt, step excerpts, `waiting_on`
+ * and error). #41 stores the initial empty snapshot; #45 owns the live shape.
+ */
+export type SopRunStateSnapshot = Record<string, unknown>;
+
+/**
+ * One SOP run as the start response and the run reads return it. `phase` and
+ * `current_step` are columns; `state` is the parsed JSON snapshot. It is not a
+ * task, a message, a team run or a second target.
+ */
+export interface SopRunView {
+  id: string;
+  definition_id: string;
+  channel_id: string;
+  phase: SopRunPhase;
+  state: SopRunStateSnapshot;
+  current_step: number;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+
+/**
  * One highlight range inside a hit's text. `start` / `end` are UTF-16
  * code-unit offsets and half-open `[start, end)`, the same convention the
  * mention ranges use: the backend decides every range, the frontend only wraps

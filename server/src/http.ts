@@ -59,6 +59,15 @@ import {
   listTargetMembers,
 } from './target-members.js';
 import { listPlans, parsePlanQuery } from './plans.js';
+import {
+  createSopDefinition,
+  getSopDefinition,
+  getSopRun,
+  listSopDefinitions,
+  listSopRuns,
+  parseSopRunQuery,
+  startSopRun,
+} from './sops.js';
 import { listTeamRuns, parseTeamRunQuery, prepareTeamChangeWake } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
 import { readWorkspace } from './workspace.js';
@@ -176,6 +185,8 @@ const TARGET_ID = '([^/]+)';
 const ATTACHMENT_ID = '([^/]+)';
 const TASK_ID = '([^/]+)';
 const REMINDER_ID = '([^/]+)';
+const SOP_ID = '([^/]+)';
+const SOP_RUN_ID = '([^/]+)';
 
 const ROUTES: readonly Route[] = [
   {
@@ -341,6 +352,59 @@ const ROUTES: readonly Route[] = [
       sendJson(response, 200, {
         plans: listPlans(db, decodeId(params[0]), query),
       });
+    },
+  },
+  {
+    // The SOP definitions (#41 / D2.3): one immutable, channel-scoped ordered
+    // step list per (channel_id, name). `channel_id` narrows the read; an
+    // archived channel keeps its definitions readable.
+    method: 'GET',
+    pattern: /^\/api\/sops$/,
+    handle: async (request, response, { db }) => {
+      const channelId =
+        new URL(request.url ?? '/', `http://${HOST}`).searchParams.get('channel_id') ?? undefined;
+      sendJson(response, 200, { sops: listSopDefinitions(db, channelId) });
+    },
+  },
+  {
+    // A first create is 201; a same-name same-shape replay is 200 (D2.4). The
+    // route has no PATCH / DELETE sibling: a definition is immutable in M2.
+    method: 'POST',
+    pattern: /^\/api\/sops$/,
+    handle: async (request, response, { db }) => {
+      const created = createSopDefinition(db, await readJsonBody(request));
+      sendJson(response, created.created ? 201 : 200, created.definition);
+    },
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/api/sops/${SOP_ID}/runs$`),
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 202, startSopRun(db, decodeId(params[0])));
+    },
+  },
+  {
+    // The run snapshot of one definition (D2.3): newest first, each with the
+    // stored state snapshot; `before` is the run-id cursor.
+    method: 'GET',
+    pattern: new RegExp(`^/api/sops/${SOP_ID}/runs$`),
+    handle: async (request, response, { db }, ...params) => {
+      const query = parseSopRunQuery(new URL(request.url ?? '/', `http://${HOST}`).searchParams);
+      sendJson(response, 200, { runs: listSopRuns(db, decodeId(params[0]), query) });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/sops/${SOP_ID}$`),
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, getSopDefinition(db, decodeId(params[0])));
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/sop-runs/${SOP_RUN_ID}$`),
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, getSopRun(db, decodeId(params[0])));
     },
   },
   {
