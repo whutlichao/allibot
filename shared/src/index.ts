@@ -165,11 +165,31 @@ export interface RemoteDataFlowView {
   confirmed_at: string | null;
 }
 
+/**
+ * The three remote data-flow consent kinds (#47 / v21). `model` is M1's
+ * provider consent; `mcp` confirms one remote MCP server by name; `docker`
+ * confirms one image reference before a pull. All three store only the scope
+ * and when it was confirmed — never a URL, command, env value or credential.
+ */
+export const REMOTE_CONSENT_SCOPE_KINDS = ['model', 'mcp', 'docker'] as const;
+export type RemoteConsentScopeKind = (typeof REMOTE_CONSENT_SCOPE_KINDS)[number];
+
+/** One consent row as the human face reads it: scope and time only. */
+export interface RemoteConsentScopeView {
+  scope_kind: RemoteConsentScopeKind;
+  scope_id: string;
+  confirmed_at: string;
+}
+
 /** `GET /api/remote-data-flow`'s body. */
 export interface RemoteDataFlowReadView {
   /** The data surfaces that leave the machine on a remote model call (D4.2). */
   data_surfaces: string[];
   providers: RemoteDataFlowView[];
+  /** Confirmed remote MCP servers (name + time only; D6.1). */
+  mcp_consents: RemoteConsentScopeView[];
+  /** Confirmed Docker image references (reference + time only; D5.3). */
+  docker_consents: RemoteConsentScopeView[];
 }
 
 /**
@@ -179,6 +199,42 @@ export interface RemoteDataFlowReadView {
 export interface RemoteConsentView {
   provider: AgentProvider;
   confirmed_at: string;
+}
+
+/**
+ * MCP 声明 (MCP Server) entry: one server inside the Agent-home `mcp.json`
+ * (D6.1). `env_names` holds environment variable names only — the values are
+ * read from the host process environment at spawn time and never stored in
+ * the file or the database.
+ */
+export const MCP_TRANSPORTS = ['stdio', 'http', 'sse'] as const;
+export type McpTransport = (typeof MCP_TRANSPORTS)[number];
+
+export interface McpServerEntry {
+  name: string;
+  transport: McpTransport;
+  enabled: boolean;
+  /** stdio only: the executable and its arguments. */
+  command?: string;
+  args?: string[];
+  /** http / sse only: the endpoint the host process connects to. */
+  url?: string;
+  /** Environment variable names to pass to the server process (never values). */
+  env_names?: string[];
+}
+
+/** `GET` / `PUT /api/agents/{id}/mcp`'s body. */
+export interface AgentMcpView {
+  agent_id: string;
+  /** The one file both management blocks and runtime assembly read. */
+  path: string;
+  present: boolean;
+  /** Normalized entries; empty when the file is missing or invalid. */
+  entries: McpServerEntry[];
+  /** The exact file text (empty when missing) for the raw textarea. */
+  raw: string;
+  /** Readable whole-file diagnostic; null when the declaration is usable. */
+  diagnostic: string | null;
 }
 
 /**
