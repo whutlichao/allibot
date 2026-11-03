@@ -686,12 +686,6 @@ interface WrittenMessage {
   seq: number;
 }
 
-/** One target message a round committed, as the subscription relays it. */
-interface WrittenMessage {
-  id: string;
-  seq: number;
-}
-
 /**
  * The round's committed rows: its outcome, the seq of the reply it landed
  * (`null` when it landed no message), and everything the subscription relays.
