@@ -9,6 +9,7 @@ import {
   assertServeableSchemaVersion,
   databaseExists,
   migrateDataDir,
+  openDatabase,
 } from './db.js';
 import { HOST, startHttpServer } from './http.js';
 import { acquireDataDirLock } from './lock.js';
@@ -56,12 +57,14 @@ async function run(argv: readonly string[]): Promise<number> {
   assertServeableSchemaVersion(resolution.dataDir);
 
   const lock = await acquireDataDirLock(resolution.dataDir);
+  const db = openDatabase(resolution.dataDir);
   try {
-    const { server, port: boundPort } = await startHttpServer(port);
+    const { server, port: boundPort } = await startHttpServer(port, db);
     console.log(`allibot server listening on http://${HOST}:${boundPort}`);
 
     return await waitForShutdown(server);
   } finally {
+    db.close();
     await lock.release();
   }
 }

@@ -11,8 +11,9 @@ if ((mode !== 'ok' && mode !== 'fail') || dataDir === undefined) {
   process.exit(2);
 }
 
+const tail = MIGRATION_STEPS[MIGRATION_STEPS.length - 1];
 const fixtureStep = {
-  to: 2,
+  to: (tail === undefined ? 0 : tail.to) + 1,
   apply(db) {
     db.exec('CREATE TABLE fixture_business (id INTEGER PRIMARY KEY)');
     if (mode === 'fail') {

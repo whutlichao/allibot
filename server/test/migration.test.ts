@@ -18,13 +18,13 @@ function readSchemaVersion(dataDir: string): unknown {
   }
 }
 
-test('migrate initializes an empty data directory at schema version 1 and records an audit entry', async () => {
+test('migrate initializes an empty data directory at the current schema version and records an audit entry', async () => {
   const dataDir = await makeTempDir('allibot-migrate-');
   try {
     const result = runCli(['--migrate', '--data-dir', dataDir]);
 
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
-    assert.equal(readSchemaVersion(dataDir), 1);
+    assert.equal(readSchemaVersion(dataDir), 2);
     assert.equal(existsSync(path.join(dataDir, 'schema-migrations.jsonl')), true);
 
     const entries = readLedger(dataDir);
@@ -33,7 +33,7 @@ test('migrate initializes an empty data directory at schema version 1 and record
     const entry = entries[0];
     assert.ok(entry !== undefined);
     assert.equal(entry['from'], null);
-    assert.equal(entry['to'], 1);
+    assert.equal(entry['to'], 2);
     assert.equal(entry['result'], 'ok');
     assert.equal(entry['backup_path'], null);
 
@@ -60,7 +60,7 @@ test('initializing a non-empty data directory backs it up first without copying 
     const result = runCli(['--migrate', '--data-dir', dataDir]);
 
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
-    assert.equal(readSchemaVersion(dataDir), 1);
+    assert.equal(readSchemaVersion(dataDir), 2);
 
     const backups = readdirSync(parent).filter((name) => name.startsWith('data.backup-'));
     assert.equal(backups.length, 1, `expected exactly one backup directory, saw: ${backups.join(', ')}`);
@@ -73,7 +73,7 @@ test('initializing a non-empty data directory backs it up first without copying 
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 1);
+    assert.equal(entries[0]?.['to'], 2);
     assert.equal(entries[0]?.['result'], 'ok');
     assert.equal(entries[0]?.['backup_path'], backupPath);
   } finally {
@@ -91,8 +91,8 @@ test('migrate is idempotent: a second run reports the current version and append
     const second = runCli(['--migrate', '--data-dir', dataDir]);
 
     assert.equal(second.exitCode, 0, `second migrate should exit 0; output: ${second.output}`);
-    assert.match(second.output, /already at schema version 1/);
-    assert.equal(readSchemaVersion(dataDir), 1);
+    assert.match(second.output, /already at schema version 2/);
+    assert.equal(readSchemaVersion(dataDir), 2);
     assert.deepEqual(
       readLedger(dataDir),
       ledgerAfterFirst,
