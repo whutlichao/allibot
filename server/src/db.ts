@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export interface MigrationStep {
   readonly to: number;
@@ -161,6 +161,26 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
           SELECT RAISE(ABORT, 'message is append-only: DELETE is not allowed');
         END;
       `);
+    },
+  },
+  {
+    to: 5,
+    apply(db) {
+      db.exec(`
+        -- The workspace settings are exactly three config values (locale,
+        -- message density, theme). The key check keeps this from becoming a
+        -- general key-value store, and the value check keeps every setting a
+        -- non-empty string. A value's allowed set is enforced by the write
+        -- path, so adding a choice is not a schema change.
+        CREATE TABLE setting (
+          key TEXT PRIMARY KEY CHECK (key IN ('locale', 'density', 'theme')),
+          value TEXT NOT NULL CHECK (length(value) > 0)
+        );
+      `);
+      const insert = db.prepare('INSERT INTO setting (key, value) VALUES (?, ?)');
+      insert.run('locale', 'zh-CN');
+      insert.run('density', 'comfortable');
+      insert.run('theme', 'system');
     },
   },
 ];

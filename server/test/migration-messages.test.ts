@@ -65,13 +65,13 @@ function countRows(dataDir: string, table: string): number {
   }
 }
 
-test('migrating an empty data dir adds message and message_mention at schema version 4', async () => {
+test('migrating an empty data dir adds message and message_mention and lands on schema version 5', async () => {
   const dataDir = await makeTempDir('allibot-messages-migrate-');
   try {
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 4);
+    assert.equal(readSchemaVersion(dataDir), 5);
     const tables = tableNames(dataDir);
     for (const table of ['message', 'message_mention']) {
       assert.ok(tables.includes(table), `${table} table is missing; tables: ${tables.join(', ')}`);
@@ -111,14 +111,14 @@ test('migrating an empty data dir adds message and message_mention at schema ver
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 4);
+    assert.equal(entries[0]?.['to'], 5);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
   }
 });
 
-test('a version 3 data dir upgrades to version 4 with a backup that keeps channel rows', async () => {
+test('a version 3 data dir upgrades through the chain with a backup that keeps channel rows', async () => {
   const parent = await makeTempDir('allibot-messages-upgrade-');
   const dataDir = path.join(parent, 'data');
 
@@ -152,7 +152,7 @@ test('a version 3 data dir upgrades to version 4 with a backup that keeps channe
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 4);
+    assert.equal(readSchemaVersion(dataDir), 5);
     assert.ok(tableNames(dataDir).includes('message'));
     assert.equal(
       countRows(dataDir, "channel WHERE id = 'kept-channel'"),
@@ -186,7 +186,7 @@ test('a version 3 data dir upgrades to version 4 with a backup that keeps channe
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 3);
-    assert.equal(last?.['to'], 4);
+    assert.equal(last?.['to'], 5);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);
