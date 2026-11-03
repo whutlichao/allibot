@@ -14,11 +14,12 @@
   "scripts": {
     "build": "npm run build --workspace shared && npm run build --workspace server && node scripts/write-root-cli.mjs && npm run build --workspace web",
     "typecheck": "npm run typecheck --workspace shared && npm run typecheck --workspace server && npm run typecheck --workspace web",
-    "test": "npm run build && npm run test --workspace server && npm run test:strings && npm run test:visual-contract && npm run test:workspace-shell && npm run test:web-render",
+    "test": "npm run build && npm run test --workspace server && npm run test:strings && npm run test:visual-contract && npm run test:workspace-shell && npm run test:task-board && npm run test:web-render",
     "test:strings": "npm run build --workspace shared && npm run test:strings --workspace shared && npm run test:strings --workspace web",
     "test:visual-contract": "npm run test:visual-contract --workspace web",
     "test:web-render": "npm run build --workspace shared && npm run test:web-render --workspace web",
     "test:workspace-shell": "npm run test:workspace-shell --workspace web",
+    "test:task-board": "npm run test:task-board --workspace web",
     "test:agui-contract": "npm run build && node --test server/test/agui-contract.test.ts && npm run test:agui-contract --workspace web"
   }
 }
