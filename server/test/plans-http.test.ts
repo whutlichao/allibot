@@ -186,7 +186,7 @@ test('the plan read returns the latest runs with their full tasks, filters by me
   });
   seedPlanRun(fixture, {
     id: 'plan-b-member',
-    targetId: fixture.taskTargetId,
+    targetId: fixture.channelId,
     memberId: fixture.agentB,
     createdAt: '2026-11-04T11:00:00.000Z',
     tasks: [{ id: 'b-1', title: '乙的计划', status: 'pending', position: 0 }],
@@ -197,7 +197,7 @@ test('the plan read returns the latest runs with their full tasks, filters by me
   const plans = all.body['plans'] as Record<string, unknown>[];
   assert.deepEqual(
     plans.map((plan) => plan['id']),
-    ['plan-b-member', 'plan-new', 'plan-old'],
+    ['plan-new', 'plan-old'],
     'runs are newest first',
   );
   const newest = plans.find((plan) => plan['id'] === 'plan-new');
@@ -251,7 +251,11 @@ test('the plan read returns the latest runs with their full tasks, filters by me
   assert.deepEqual(notMember.body['plans'], [], 'a member outside the target reads an empty list');
 
   const channelPlans = await getJson(fixture.base, `/api/targets/${fixture.channelId}/plans`);
-  assert.deepEqual(channelPlans.body['plans'], [], 'a target with no Plan reads an empty list');
+  assert.deepEqual(
+    (channelPlans.body['plans'] as Record<string, unknown>[]).map((plan) => plan['id']),
+    ['plan-b-member'],
+    'another target reads only its own runs',
+  );
 
   const unknown = await getJson(fixture.base, '/api/targets/no-such-target/plans');
   assert.equal(unknown.status, 404, `unknown target -> ${unknown.status}: ${JSON.stringify(unknown.body)}`);

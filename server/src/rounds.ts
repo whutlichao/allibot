@@ -1217,8 +1217,8 @@ function readRoundInput(
 /**
  * The tools one round may call (D3.7). `TeamAssign` is the leader's own tool;
  * `transfer_task` is the structured action of the task's current assignee, so
- * it is absent from a leader round that did not take the task. Plan tools
- * arrive with #40.
+ * it is absent from a leader round that did not take the task. The four Plan
+ * tools are appended on every task / team round (D4.1).
  */
 function readRoundTools(
   db: Database.Database,
