@@ -36,6 +36,7 @@ import {
   remoteDataFlowView,
 } from './providers.js';
 import type { InFlightRounds } from './rounds.js';
+import { parseSearchQuery, searchWorkspace } from './search.js';
 import { getSettings, updateSettings } from './settings.js';
 import {
   createTask,
@@ -302,6 +303,14 @@ const ROUTES: readonly Route[] = [
         200,
         updateTask(db, decodeId(params[0]), await readJsonBody(request)),
       );
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/search$/,
+    handle: async (request, response, { db }) => {
+      const query = parseSearchQuery(new URL(request.url ?? '/', `http://${HOST}`).searchParams);
+      sendJson(response, 200, { hits: searchWorkspace(db, query) });
     },
   },
   {

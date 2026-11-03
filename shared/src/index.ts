@@ -200,6 +200,54 @@ export interface TaskView {
   unread_count: number;
 }
 
+/**
+ * One highlight range inside a hit's text. `start` / `end` are UTF-16
+ * code-unit offsets and half-open `[start, end)`, the same convention the
+ * mention ranges use: the backend decides every range, the frontend only wraps
+ * them.
+ */
+export interface SearchHighlight {
+  start: number;
+  end: number;
+}
+
+/**
+ * A message hit: one message whose body contains the query, with the target it
+ * belongs to and every occurrence of the query, not just the first.
+ */
+export interface MessageSearchHit {
+  type: 'message';
+  target_id: string;
+  message_id: string;
+  highlights: SearchHighlight[];
+}
+
+/**
+ * A task hit: the title is the hit subject. There is no highlight range —
+ * the frontend renders the hit as a whole rather than locating text itself.
+ */
+export interface TaskSearchHit {
+  type: 'task';
+  task_id: string;
+  title: string;
+}
+
+/**
+ * An Agent hit: the display name or the role is the hit subject. Like a task
+ * hit it may carry no highlight range.
+ */
+export interface AgentSearchHit {
+  type: 'agent';
+  member_id: string;
+  display_name: string;
+  role: string;
+}
+
+/**
+ * The three hit kinds are siblings; `type` is what the frontend renders by.
+ */
+export type SearchHit = MessageSearchHit | TaskSearchHit | AgentSearchHit;
+
 export {
   MESSAGE_DENSITIES,
   SUPPORTED_LOCALES,

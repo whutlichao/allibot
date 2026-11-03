@@ -114,6 +114,7 @@ function createOrchestration(
           behavior: options.scriptedProvider,
           delayMs: options.scriptedDelayMs,
           replies: options.scriptedReplies.length > 0 ? options.scriptedReplies : undefined,
+          echoPrompt: options.scriptedEchoPrompt,
         });
   return { provider, inFlight: createInFlightRounds() };
 }

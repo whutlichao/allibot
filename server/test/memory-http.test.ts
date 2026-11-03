@@ -232,8 +232,11 @@ test('a replied round writes back one memory card with both excerpts and keyword
 });
 
 test('an ignored or failed round still writes one card: trigger excerpt, no reply, no model call', async () => {
+  // A human message is a definite signal (#15), so the double's self-judged
+  // ignore closes as `failed`; either way the round wrote no reply and its
+  // card records that.
   for (const [behavior, expectedStatus] of [
-    ['ignore', 'ignored'],
+    ['ignore', 'failed'],
     ['fail', 'failed'],
   ] as const) {
     const dataDir = await makeTempDir(`allibot-memory-${behavior}-`);

@@ -229,7 +229,7 @@ test('one owner message wakes both Agent members and each lands exactly one repl
   }
 });
 
-test('the scripted ignore and fail behaviours close rounds as ignored and failed', async () => {
+test('the scripted ignore and fail behaviours close rounds without a reply', async () => {
   const ignoring = await startWakeFixture('allibot-wake-ignore-', 'ignore');
   try {
     const agent = await createAgent(ignoring, '沉默者');
@@ -242,7 +242,10 @@ test('the scripted ignore and fail behaviours close rounds as ignored and failed
     assert.deepEqual(messages.map((message) => message['kind']), ['human']);
     const outcomes = roundOutcomes(ignoring);
     assert.equal(outcomes.length, 1);
-    assert.equal(outcomes[0]?.status, 'ignored');
+    // A human message is a definite signal (#15): the double's self-judged
+    // ignore closes as failed. The non-definite ignored round is covered in
+    // response-judgment-http.test.ts.
+    assert.equal(outcomes[0]?.status, 'failed');
     assert.equal(outcomes[0]?.finished_reason, '正常完成');
   } finally {
     await ignoring.stop();
@@ -391,10 +394,11 @@ test('a mentioned outsider that ignores joins nothing and leaves no system messa
     assert.deepEqual(
       roundOutcomes(fixture).map((row) => [row.member_id, row.status]),
       [
-        [insider, 'ignored'],
-        [outsider, 'ignored'],
+        [insider, 'failed'],
+        [outsider, 'failed'],
       ],
-      'the pierced member still gets a round outcome',
+      // The human message that pierced the mention is a definite signal (#15),
+      // so both rounds close as failed; the pierced member still gets one.
     );
   } finally {
     await fixture.stop();
@@ -533,7 +537,11 @@ test('the readable round copy comes from the zh-CN catalog through the stored lo
     assert.ok(row !== undefined);
     assert.equal(
       row.reason,
-      `${ZH_CN['wake.channelMessage'].text}；${ZH_CN['round.replied'].text}`,
+      [
+        ZH_CN['wake.channelMessage'].text,
+        ZH_CN['round.replied'].text,
+        ZH_CN['round.mandatory.humanMessage'].text,
+      ].join('；'),
       'the reason is composed from catalog entries, not a second copy of the text',
     );
     assert.equal(row.finished_reason, ZH_CN['round.finished.completed'].text);
