@@ -89,6 +89,11 @@ export interface CliOptions {
   /** Make the doubled member sub-round fail (a TeamAssign failure case). */
   scriptedTeamMemberFail: boolean;
   /**
+   * The commands a scripted `shell` round asks the production shell face to
+   * run. Like every `--scripted-*` value it only configures the test double.
+   */
+  scriptedShellCommands: readonly string[];
+  /**
    * How long one `/api/events` connection lives before the server sends the
    * rotate frame and closes it. Production keeps the 30-minute default; a test
    * injects a short value instead of waiting.
@@ -111,6 +116,13 @@ export interface CliOptions {
    * lifetime / reminder tick injections.
    */
   approvalTimeoutMs: number;
+  /**
+   * The MCP `env_names` declared for the local shell (#46 / D5.4). #47 reads
+   * them from the member's `mcp.json`; until then this startup injection is the
+   * documented merge point. Names only: values come from the process
+   * environment at spawn time and are never stored.
+   */
+  shellEnvNames: readonly string[];
 }
 
 const DEFAULT_PORT = 3000;
@@ -127,7 +139,7 @@ const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
   'usage: allibot <serve|--migrate> [--data-dir <path>] [--home-dir <path>] [--port <port>] ' +
   '[--provider <scripted|model>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|workspace|permission|mcp-approval|team-approval>] ' +
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|workspace|permission|mcp-approval|team-approval|shell>] ' +
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
   '[--scripted-report-calls] [--scripted-report-team] [--scripted-transfer-member <member-id>] ' +
@@ -159,10 +171,12 @@ export function parseCliArgs(
       'scripted-team-assign-member': { type: 'string', multiple: true },
       'scripted-team-assign-instruction': { type: 'string' },
       'scripted-team-member-fail': { type: 'boolean' },
+      'scripted-shell-command': { type: 'string', multiple: true },
       'sse-lifetime-ms': { type: 'string' },
       'reminder-tick-ms': { type: 'string' },
       'fixed-clock': { type: 'string' },
       'approval-timeout-ms': { type: 'string' },
+      'shell-env-name': { type: 'string', multiple: true },
     },
     strict: true,
     allowPositionals: true,
@@ -189,7 +203,8 @@ export function parseCliArgs(
         values['scripted-transfer-member'] !== undefined ||
         values['scripted-team-assign-member'] !== undefined ||
         values['scripted-team-assign-instruction'] !== undefined ||
-        values['scripted-team-member-fail'] === true,
+        values['scripted-team-member-fail'] === true ||
+        values['scripted-shell-command'] !== undefined,
     ),
     scriptedProvider: parseScriptedProvider(values['scripted-provider']),
     scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
@@ -206,10 +221,12 @@ export function parseCliArgs(
       values['scripted-team-assign-instruction'],
     ),
     scriptedTeamMemberFail: values['scripted-team-member-fail'] === true,
+    scriptedShellCommands: parseScriptedShellCommands(values['scripted-shell-command']),
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
     reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),
     fixedClock: parseFixedClock(values['fixed-clock']),
     approvalTimeoutMs: parseApprovalTimeoutMs(values['approval-timeout-ms']),
+    shellEnvNames: parseShellEnvNames(values['shell-env-name']),
   };
 }
 
@@ -316,6 +333,33 @@ function parseScriptedTeamAssignMembers(
     throw new Error('invalid --scripted-team-assign-member value: a member id must not be empty');
   }
   return raw.map((memberId) => memberId.trim());
+}
+
+function parseScriptedShellCommands(raw: readonly string[] | undefined): readonly string[] {
+  if (raw === undefined) {
+    return [];
+  }
+  if (raw.some((command) => command.trim().length === 0)) {
+    throw new Error('invalid --scripted-shell-command value: a command must not be empty');
+  }
+  return raw;
+}
+
+/** Shell env names are variable names only: no `=` and no empty name. */
+function parseShellEnvNames(raw: readonly string[] | undefined): readonly string[] {
+  if (raw === undefined) {
+    return [];
+  }
+  const names: string[] = [];
+  for (const name of raw) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      throw new Error(`invalid --shell-env-name value: ${name}`);
+    }
+    if (!names.includes(name)) {
+      names.push(name);
+    }
+  }
+  return names;
 }
 
 function parseScriptedTeamAssignInstruction(raw: string | undefined): string | undefined {

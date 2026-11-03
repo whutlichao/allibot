@@ -37,6 +37,7 @@ import { createPlanFace } from './plans.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
+import { createLocalShell, getShellEnvNames } from './local-shell.js';
 import { createToolGate } from './tool-gate.js';
 import { readTargetPermissionContext } from './permissions.js';
 import { createRoundFileTools } from './workspace-files.js';
@@ -1143,6 +1144,7 @@ function readAssignmentRoundInput(
       false,
       true,
       workspace !== null,
+      workspace?.allow_local_shell === 1,
     ),
     plan: createPlanFace(db, params.team.targetId, member.id),
     workspace,
@@ -1224,6 +1226,14 @@ function readRoundWorkspace(
     files: createRoundFileTools({
       root: binding.root,
       skillsRoot: binding.skillsRoot,
+      gate,
+    }),
+    shell: createLocalShell({
+      root: binding.root,
+      allowLocalShell: permission.allowLocalShell,
+      // #47 replaces this process-level list with the member's enabled MCP
+      // servers' `env_names`; the shell face itself already merges per round.
+      envNames: getShellEnvNames(),
       gate,
     }),
   };
@@ -1310,6 +1320,7 @@ function readRoundInput(
     isLeader,
     planAvailable,
     workspace !== null,
+    workspace?.allow_local_shell === 1,
   );
   const plan = planAvailable ? createPlanFace(db, wake.targetId, member.id) : null;
   const team: RoundTeamContext | null =
@@ -1368,6 +1379,7 @@ function readRoundTools(
   isLeader: boolean,
   planAvailable: boolean,
   fileToolsAvailable: boolean,
+  shellAvailable: boolean,
 ): readonly string[] {
   const tools: string[] = [];
   if (isLeader) {
@@ -1387,9 +1399,13 @@ function readRoundTools(
     tools.push('TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate');
   }
   if (fileToolsAvailable) {
-    // A local round with a project root gets exactly the restricted file tools;
-    // there is no shell tool in this ticket (`allow_local_shell=0`).
+    // A local round with a project root gets exactly the restricted file tools.
     tools.push('Read', 'Glob', 'Grep', 'Write', 'Edit');
+  }
+  if (shellAvailable) {
+    // The explicit switch adds the local shell to the offered set. The switch
+    // alone does not skip the per-call approval: the gate still asks (D5.4).
+    tools.push('Bash');
   }
   return tools;
 }

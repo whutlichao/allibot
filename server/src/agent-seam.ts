@@ -144,6 +144,60 @@ export interface RoundFileTools {
   Edit(request: EditFileRequest): Promise<RoundFileToolResult>;
 }
 
+/** Why a local-shell call did not run (D5.4). */
+export type ShellToolErrorCode =
+  | 'invalid-command'
+  | 'outside-root'
+  | 'not-found'
+  | 'not-a-directory'
+  | 'denied'
+  | 'spawn-failed';
+
+/** One local-shell call: the command and its optional in-root cwd. */
+export interface RunShellRequest {
+  command: string;
+  /**
+   * A directory inside the project root to run from; absent means the root.
+   * `..`, a root-outside absolute path and an escaping symlink are hard tool
+   * errors, never an approval question (D5.1 / D5.4).
+   */
+  cwd?: string;
+  /** A stable adapter / model call id; a retry is the same call (D5.6). */
+  tool_call_id?: string;
+}
+
+/**
+ * The local-shell tool result. A completed command is `ok:true` whatever its
+ * exit code (the adapter reads `exit_code`); a denial is `ok:false` with
+ * `error:'denied'` — `DENIED`, not a round error. Output travels to the
+ * adapter only: the production round path never logs it or stores it (D5.4).
+ */
+export interface RoundShellResult {
+  ok: boolean;
+  error?: ShellToolErrorCode;
+  message?: string;
+  /** The absolute directory the process ran in (the project root by default). */
+  cwd?: string;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+  /** `true` when output exceeded the capture cap and was truncated. */
+  output_truncated?: boolean;
+}
+
+/**
+ * 本地 shell (#46 / D5.4): the only shell this ticket ships. It is present
+ * exactly when a local round has a usable project root; `enabled` mirrors
+ * `channel.allow_local_shell`. A call while the switch is off is `DENIED`
+ * without an approval; every enabled call goes through the one tool gate and
+ * therefore asks the human before it runs.
+ */
+export interface RoundShell {
+  readonly root: string;
+  readonly enabled: boolean;
+  run(request: RunShellRequest): Promise<RoundShellResult>;
+}
+
 /** One gate decision as an adapter may preview it before calling a tool. */
 export interface RoundPermissionCheck {
   decision: 'allow' | 'deny' | 'ask';
@@ -180,9 +234,9 @@ export interface RoundPermissionFace {
 
 /**
  * The round's workspace context (D3.7 / D5.1): the one project root, the
- * effective backend, the local-shell flag (always 0 until #46) and the file
- * tool face. `null` on a DM or a local channel / task with no root: no project
- * file tools and no shell.
+ * effective backend, the local-shell flag and the file / shell tool faces.
+ * `null` on a DM or a local channel / task with no root: no project file tools
+ * and no shell.
  */
 export interface RoundWorkspaceContext {
   root: string;
@@ -195,6 +249,12 @@ export interface RoundWorkspaceContext {
   /** The tool gate preview; the file tools apply the gate themselves. */
   permission: RoundPermissionFace;
   files: RoundFileTools;
+  /**
+   * The local-shell face (#46). It exists whenever the round has a project
+   * root; `enabled` mirrors the channel switch, and a call while it is off is
+   * `DENIED` without an approval. A round without a root has no face at all.
+   */
+  shell: RoundShell;
 }
 
 /**
