@@ -3,13 +3,15 @@ import { MIGRATION_STEPS, runMigrations } from '../../dist/db.js';
 /**
  * Test-only migration fixture. It appends a step that only exists in this
  * fixture process so the production schema is never touched by test tables.
- * The `v2` mode builds the version-2 baseline without the fixture step, so a
- * test can drive the real version-2 -> version-3 upgrade.
+ * The `vN` modes build the version-N baseline without the fixture step, so a
+ * test can drive the real version-N -> version-N+1 upgrade.
  */
 const [, , mode, dataDir] = process.argv;
 
-if ((mode !== 'ok' && mode !== 'fail' && mode !== 'v2') || dataDir === undefined) {
-  console.error('usage: migrate-steps.mjs <ok|fail|v2> <data-dir>');
+const BASELINE_MODES = new Set(['v2', 'v3']);
+
+if ((mode !== 'ok' && mode !== 'fail' && !BASELINE_MODES.has(mode ?? '')) || dataDir === undefined) {
+  console.error('usage: migrate-steps.mjs <ok|fail|v2|v3> <data-dir>');
   process.exit(2);
 }
 
@@ -24,7 +26,9 @@ const fixtureStep = {
   },
 };
 
-const steps = mode === 'v2' ? MIGRATION_STEPS.filter((step) => step.to <= 2) : [...MIGRATION_STEPS, fixtureStep];
+const steps = BASELINE_MODES.has(mode)
+  ? MIGRATION_STEPS.filter((step) => step.to <= Number(mode.slice(1)))
+  : [...MIGRATION_STEPS, fixtureStep];
 
 try {
   const outcome = runMigrations(dataDir, steps);

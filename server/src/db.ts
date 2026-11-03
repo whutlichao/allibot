@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export interface MigrationStep {
   readonly to: number;
@@ -102,6 +102,64 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
           member_id TEXT NOT NULL REFERENCES member (id),
           PRIMARY KEY (target_id, member_id)
         );
+      `);
+    },
+  },
+  {
+    to: 4,
+    apply(db) {
+      db.exec(`
+        -- A message is one permanent record inside a target. It is append-only:
+        -- there is no code path that updates or deletes one, and the triggers
+        -- below make the database the backstop. seq is the target-scoped
+        -- monotonic number assigned by the single writer as MAX(seq) + 1.
+        CREATE TABLE message (
+          id TEXT PRIMARY KEY,
+          target_id TEXT NOT NULL REFERENCES target (id),
+          seq INTEGER NOT NULL CHECK (seq > 0),
+          kind TEXT NOT NULL CHECK (kind IN ('human', 'agent', 'system')),
+          author_member_id TEXT NOT NULL REFERENCES member (id),
+          -- The author metadata is a snapshot taken at write time: renaming a
+          -- member later must not rewrite history, and a soft-deleted author
+          -- still renders.
+          author_display_name TEXT NOT NULL,
+          author_avatar_slot INTEGER NOT NULL CHECK (author_avatar_slot BETWEEN 0 AND 4),
+          body TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          task_ref TEXT,
+          task_pointer TEXT,
+          client_message_id TEXT,
+          UNIQUE (target_id, seq)
+        );
+
+        -- The client message id is the idempotency key shared with the AG-UI
+        -- run path: one target never holds two rows for the same client id.
+        CREATE UNIQUE INDEX message_client_message_id
+          ON message (target_id, client_message_id)
+          WHERE client_message_id IS NOT NULL;
+
+        -- Mention ranges are a write-time snapshot: start / end are UTF-16
+        -- code-unit offsets into body, and renaming a member never re-runs the
+        -- parser over history.
+        CREATE TABLE message_mention (
+          message_id TEXT NOT NULL REFERENCES message (id),
+          member_id TEXT NOT NULL REFERENCES member (id),
+          start INTEGER NOT NULL CHECK (start >= 0),
+          "end" INTEGER NOT NULL CHECK ("end" > start),
+          PRIMARY KEY (message_id, start)
+        );
+
+        CREATE TRIGGER message_append_only_update
+        BEFORE UPDATE ON message
+        BEGIN
+          SELECT RAISE(ABORT, 'message is append-only: UPDATE is not allowed');
+        END;
+
+        CREATE TRIGGER message_append_only_delete
+        BEFORE DELETE ON message
+        BEGIN
+          SELECT RAISE(ABORT, 'message is append-only: DELETE is not allowed');
+        END;
       `);
     },
   },
