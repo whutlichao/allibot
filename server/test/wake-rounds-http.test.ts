@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
@@ -418,6 +419,32 @@ test('a replayed client message id wakes nobody a second time and an archived ch
     });
     assert.equal(refused.status, 400);
     assert.equal(roundOutcomes(fixture).length, 1, 'a refused write triggers no wake');
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('the round_outcome row reads back through the sqlite3 CLI with readable reason and finish reason', async () => {
+  const fixture = await startWakeFixture('allibot-wake-sqlite-', 'reply');
+  try {
+    const agent = await createAgent(fixture, '甲');
+    const channelId = await createChannel(fixture);
+    await joinChannel(fixture, channelId, agent);
+    await postMessage(fixture, channelId, { body: '请回应' });
+
+    const result = spawnSync(
+      'sqlite3',
+      [
+        path.join(fixture.dataDir, 'allibot.db'),
+        'select member_id, target_id, base_seq, status, reason, finished_reason from round_outcome order by id',
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0, `sqlite3 should exit 0; stderr: ${result.stderr}`);
+    const columns = result.stdout.trim().split('|');
+    assert.deepEqual(columns.slice(0, 4), [agent, channelId, '1', 'replied']);
+    assert.match(columns[4] ?? '', /[一-鿿]/, 'the reason is readable zh-CN text');
+    assert.equal(columns[5], '正常完成');
   } finally {
     await fixture.stop();
   }
