@@ -35,6 +35,7 @@ import {
   softDeleteAgent,
   updateAgent,
 } from './members.js';
+import { createDm, listDms } from './dms.js';
 import { appendMessageAndDispatch, listMessages, parseMessageRequest, parsePageQuery } from './messages.js';
 import {
   confirmProviderConsent,
@@ -280,6 +281,23 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/targets/${CHANNEL_ID}/members$`),
     handle: async (_request, response, { db }, ...params) => {
       sendJson(response, 200, { members: listTargetMembers(db, decodeId(params[0])) });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/dms$/,
+    handle: async (_request, response, { db }) => {
+      sendJson(response, 200, { dms: listDms(db) });
+    },
+  },
+  {
+    // Creation is the one DM write: it is idempotent per Agent, so a repeat is
+    // 200 with the same id and only the first call is a 201.
+    method: 'POST',
+    pattern: /^\/api\/dms$/,
+    handle: async (request, response, { db }) => {
+      const created = createDm(db, await readJsonBody(request));
+      sendJson(response, created.created ? 201 : 200, { id: created.id });
     },
   },
   {

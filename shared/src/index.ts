@@ -117,6 +117,29 @@ export interface TargetMemberView {
 }
 
 /**
+ * The Agent side of a DM, as the left column reads it. `deleted_at` is the
+ * whole archived-DM rule: a non-null value moves the DM into the archived
+ * segment and makes it read-only, and the backend still serves its history.
+ */
+export interface DmPeerView {
+  id: string;
+  display_name: string;
+  avatar_slot: number;
+  deleted_at: string | null;
+}
+
+/**
+ * A DM as `GET /api/dms` returns it: the target id (the thread id) and its one
+ * Agent. The list is the DM face's whole read model — there is no per-DM
+ * endpoint, because a DM is a target and its history reads through
+ * `GET /api/targets/{id}/messages`.
+ */
+export interface DmView {
+  id: string;
+  peer: DmPeerView;
+}
+
+/**
  * The message kinds. `system` records a fact no conversation participant said
  * (join-through, task create/change, reminder due, auto-continue, task
  * pointer) and is written by backend paths only.
