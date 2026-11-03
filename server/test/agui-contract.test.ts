@@ -36,7 +36,11 @@ async function startAguiFixture(prefix: string): Promise<AguiFixture> {
   const dataDir = await makeTempDir(prefix);
   const migration = runCli(['--migrate', '--data-dir', dataDir]);
   assert.equal(migration.exitCode, 0, `migrate should exit 0; output: ${migration.output}`);
-  const running = await startServer(dataDir);
+  // The run drives real rounds now: the scripted double replies so the stream
+  // has a member reply to observe after the human message lands.
+  const running = await startServer(dataDir, {
+    args: ['--scripted-provider', 'reply', '--scripted-reply', '好'],
+  });
   return {
     dataDir,
     running,
@@ -102,7 +106,7 @@ interface SeededTarget {
   agentIds: string[];
 }
 
-/** A target with the owner, two Agent members and one human message. */
+/** A target with the owner and two Agent members; the run carries the first message. */
 async function seedTarget(fixture: AguiFixture, prefix: string): Promise<SeededTarget> {
   const channelId = await createChannel(fixture, prefix);
   const agentIds = [
@@ -112,12 +116,6 @@ async function seedTarget(fixture: AguiFixture, prefix: string): Promise<SeededT
   for (const agentId of agentIds) {
     await joinChannel(fixture, channelId, agentId);
   }
-  const posted = await fetch(`${fixture.base}/api/targets/${channelId}/messages`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ body: '大家怎么看？' }),
-  });
-  assert.equal(posted.status, 201, await posted.clone().text());
   return { channelId, agentIds };
 }
 
@@ -243,7 +241,11 @@ test('a run streams RUN_STARTED, one target state snapshot, per-member reply gro
         assert.fail(`unexpected event inside a reply group: ${kind}`);
       }
     }
-    assert.equal(groups.length, agentIds.length, 'one reply group per Agent member of the target');
+    // Each member's direct reply is one contiguous START → CONTENT* → END
+    // group under a single messageId, and the groups never interleave. The
+    // agent-to-agent relay rounds are backend-driven rows, not part of this
+    // run's stream.
+    assert.equal(groups.length, agentIds.length, 'one reply group per woken Agent member');
     const closed = groups.filter((group) => group.end !== -1);
     assert.equal(closed.length, groups.length, 'every reply group closes with TEXT_MESSAGE_END');
     assert.equal(
@@ -252,29 +254,45 @@ test('a run streams RUN_STARTED, one target state snapshot, per-member reply gro
       'each reply group uses its own messageId',
     );
     for (const group of groups) {
-      assert.deepEqual(group.contents, ['echo: 大家怎么看？']);
+      assert.deepEqual(group.contents, ['好']);
     }
 
     // messageId is the SQLite message.id: the durable rows are the truth, the
-    // events only observe them.
+    // events only observe them. The run also persisted its user message first.
     const rows = queryAll<{ id: string; target_id: string; kind: string; author_member_id: string; body: string }>(
       fixture.dataDir,
       "SELECT id, target_id, kind, author_member_id, body FROM message WHERE target_id = ? AND kind = 'agent' ORDER BY seq",
       [channelId],
     );
+    const rowById = new Map(rows.map((row) => [row.id, row]));
     assert.deepEqual(
-      rows.map((row) => row.id),
-      groups.map((group) => group.messageId),
-      'the streamed messageIds are the persisted Agent message ids, in seq order',
-    );
-    assert.deepEqual(
-      rows.map((row) => row.author_member_id),
+      groups.map((group) => rowById.get(group.messageId)?.author_member_id),
       agentIds,
-      'one persisted reply per Agent member, authored by that member',
+      'the streamed replies are the persisted rows, one per woken member',
     );
-    for (const row of rows) {
-      assert.equal(row.body, 'echo: 大家怎么看？');
+    for (const group of groups) {
+      const row = rowById.get(group.messageId);
+      assert.ok(row !== undefined, 'every streamed messageId is a persisted Agent row');
+      assert.equal(row.body, group.contents.join(''));
     }
+
+    const human = queryAll<{
+      kind: string;
+      client_message_id: string | null;
+      author_member_id: string;
+    }>(
+      fixture.dataDir,
+      'SELECT kind, client_message_id, author_member_id FROM message WHERE target_id = ? AND seq = 1',
+      [channelId],
+    )[0];
+    assert.ok(human !== undefined, 'the run persisted its user message before streaming');
+    assert.equal(human.kind, 'human');
+    assert.equal(human.client_message_id, 'run-order-1-user', 'the AG-UI message id is the client id');
+    const owner = queryAll<{ id: string }>(
+      fixture.dataDir,
+      "SELECT id FROM member WHERE kind = 'owner'",
+    )[0];
+    assert.equal(human.author_member_id, owner?.id, 'the run writes human messages as the owner');
   } finally {
     await fixture.stop();
   }
