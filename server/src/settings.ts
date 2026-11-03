@@ -57,7 +57,8 @@ export function updateSettings(db: Database.Database, body: unknown): WorkspaceS
     const statement = db.prepare(
       'INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value',
     );
-    for (const [key, value] of Object.entries(patch)) {
+    for (const key of SETTING_KEYS) {
+      const value = patch[key];
       if (value !== undefined) {
         statement.run(key, value);
       }
