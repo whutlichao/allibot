@@ -127,7 +127,7 @@ const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
   'usage: allibot <serve|--migrate> [--data-dir <path>] [--home-dir <path>] [--port <port>] ' +
   '[--provider <scripted|model>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|workspace|permission|mcp-approval|team-approval>] ' +
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|sop-executor|sop-verifier|sop-approval|workspace|permission|mcp-approval|team-approval>] ' +
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
   '[--scripted-report-calls] [--scripted-report-team] [--scripted-transfer-member <member-id>] ' +

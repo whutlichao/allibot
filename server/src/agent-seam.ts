@@ -235,6 +235,8 @@ export interface RoundPromptSections {
   assignment: string | null;
   /* The recalled-memory section; null when nothing was recalled. */
   memory: string | null;
+  /* The SOP step / role paragraph; null on every ordinary or team round. */
+  sop: string | null;
 }
 
 /** One TeamAssign call: the tool's stable input shape (D3.4). */
@@ -342,6 +344,24 @@ export interface RoundDiscipline {
   signal: 'mention' | 'claim' | 'human-message' | 'continue' | 'team-change' | null;
 }
 
+/**
+ * The SOP context of one internal member round (D4.3). It is `null` on every
+ * ordinary / team round. Both roles use the same member-face seam; the
+ * verifier receives the executor's text as part of its input.
+ */
+export interface RoundSopContext {
+  run_id: string;
+  definition_id: string;
+  step_index: number;
+  step_title: string;
+  step_description: string;
+  role: 'executor' | 'verifier';
+  attempt: number;
+  max_attempts: number;
+  /** The executor's text; `null` in an executor round. */
+  executor_text: string | null;
+}
+
 /** The round's input: the member, the context it reads, and its discipline. */
 export interface RoundInput {
   member: RoundMember;
@@ -353,6 +373,17 @@ export interface RoundInput {
    * through its channel; a DM is always autonomous.
    */
   channelMode: 'autonomous' | 'team';
+  /**
+   * The stable reply identity allocated before the adapter runs (D5.6). A
+   * landed ordinary round message uses it as its message id; a TeamAssign
+   * sub-round / SOP round never lands a message, so it only names approvals.
+   */
+  replyId: string;
+  /**
+   * The SOP context of this internal round (D4.3); `null` unless this round is
+   * an SOP executor / verifier round.
+   */
+  sop: RoundSopContext | null;
   /**
    * The tools this round may call, in stable order (D3.7). `TeamAssign` is the
    * leader's own tool; `transfer_task` is available only to the task's current
@@ -507,6 +538,13 @@ export interface RoundResult {
    * action; a missing / invalid id is a structured refusal, not a round failure.
    */
   taskTransferMemberId?: string;
+  /**
+   * The verifier round's structured conclusion (D4.3): `pass` advances to the
+   * next SOP step, `fail` retries the same step within `max_attempts`. Prose in
+   * `replies` never decides it; absent means the verifier did not answer the
+   * protocol and the run fails with a readable reason.
+   */
+  sopVerdict?: 'pass' | 'fail';
 }
 
 export interface RoundProvider {

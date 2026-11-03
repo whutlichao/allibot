@@ -17,6 +17,7 @@ import { createModelProvider } from './model-provider.js';
 import { startReminderScheduler } from './reminders.js';
 import { createInFlightRounds } from './rounds.js';
 import { createScriptedProvider } from './scripted-provider.js';
+import { closeInterruptedSopRuns } from './sop-executor.js';
 import { closeInterruptedTeamRuns } from './team-runs.js';
 
 const SHUTDOWN_GRACE_MS = 5_000;
@@ -109,6 +110,10 @@ async function run(argv: readonly string[]): Promise<number> {
   // previous process never concluded. It closes as failed/interrupted before
   // the server accepts work; nothing is replayed or refunded.
   closeInterruptedTeamRuns(db);
+  // SOP 重启收口 (D4.3): a running / awaiting run (and a pending one whose
+  // scheduled worker died with the old process) closes failed/interrupted; no
+  // step is replayed across a restart.
+  closeInterruptedSopRuns(db);
   // 审批重启收口 (D5.6): a pending approval belongs to a round the previous
   // process never concluded. It closes `expired`; no waiter survives a restart.
   expirePendingApprovals(db);

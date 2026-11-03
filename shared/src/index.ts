@@ -676,10 +676,33 @@ export interface SopDefinitionCreate {
  */
 export type SopRunStateSnapshot = Record<string, unknown>;
 
+/** What an `awaiting` run waits for (D4.2): the verifier verdict or an approval. */
+export type SopRunWaitingOn = 'verifier' | 'approval';
+
 /**
- * One SOP run as the start response and the run reads return it. `phase` and
- * `current_step` are columns; `state` is the parsed JSON snapshot. It is not a
- * task, a message, a team run or a second target.
+ * One step's recorded progress inside the run's `state` snapshot (D4.2): the
+ * latest attempt's executor / verifier output excerpt plus the structured
+ * verifier verdict. The run keeps one entry per step that has started.
+ */
+export interface SopRunStepSnapshot {
+  index: number;
+  title: string;
+  executor_member_id: string;
+  verifier_member_id: string;
+  /** How many attempts this step has run (1-based; the latest one). */
+  attempts: number;
+  executor_excerpt: string | null;
+  verifier_excerpt: string | null;
+  verifier_verdict: 'pass' | 'fail' | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/**
+ * One SOP run as the start response and the run reads return it. `phase`,
+ * `current_step`, `attempt` and `waiting_on` are the read-model projection of
+ * the stored snapshot; `state` is the raw snapshot. It is not a task, a
+ * message, a team run or a second target.
  */
 export interface SopRunView {
   id: string;
@@ -688,9 +711,25 @@ export interface SopRunView {
   phase: SopRunPhase;
   state: SopRunStateSnapshot;
   current_step: number;
+  attempt: number;
+  waiting_on: SopRunWaitingOn | null;
   started_at: string;
   updated_at: string;
   finished_at: string | null;
+}
+
+/**
+ * The `sop_update` SSE frame (D2.5): published on every phase change and on
+ * every step / attempt change. It names the run and its progress point; the
+ * excerpt snapshot stays on `GET /api/sop-runs/{id}` (the stream is live-only).
+ */
+export interface SopUpdateFrame {
+  sop_run_id: string;
+  definition_id: string;
+  phase: SopRunPhase;
+  current_step: number;
+  attempt: number;
+  occurred_at: string;
 }
 
 

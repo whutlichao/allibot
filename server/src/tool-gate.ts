@@ -38,6 +38,16 @@ export interface ToolGateOptions {
   contextKind: 'round' | 'team-assignment' | 'sop';
   /** The assignment / SOP run id; null for an ordinary round. */
   contextId: string | null;
+  /**
+   * The approval row's `target_id`. An ordinary / team-assignment round names
+   * its target; a SOP approval has no target (`null`, D5.6). Undefined keeps
+   * the permission context's target.
+   */
+  approvalTargetId?: string | null;
+  /** The SOP executor's hook: the batch is about to wait for a human. */
+  onApprovalWait?: () => void;
+  /** The SOP executor's hook: the wait settled (approved / denied / timeout). */
+  onApprovalSettled?: () => void;
 }
 
 export function createToolGate(options: ToolGateOptions): ToolGate {
@@ -56,7 +66,10 @@ export function createToolGate(options: ToolGateOptions): ToolGate {
       const registration: RegisterApprovalInput = {
         replyId,
         toolCallId: request.tool_call_id,
-        targetId: permission.targetId,
+        targetId:
+          options.approvalTargetId === undefined
+            ? permission.targetId
+            : options.approvalTargetId,
         contextKind,
         contextId,
         memberId: permission.memberId,
@@ -66,8 +79,10 @@ export function createToolGate(options: ToolGateOptions): ToolGate {
           tool_name: request.tool_name,
           ...(request.arguments ?? {}),
         },
+        onWait: options.onApprovalWait,
       };
       const outcome = await requestApproval(db, registration);
+      options.onApprovalSettled?.();
       if (outcome === 'timeout') {
         throw new ApprovalTimeoutError(tFromDb(db, 'permission.approval.timeout'));
       }
