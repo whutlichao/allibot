@@ -19,10 +19,15 @@ import {
   type ContextScope,
 } from './context-window.js';
 import { tFromDb } from './copy.js';
-import { publishMessageCreated, publishRoundOutcome } from './events.js';
+import {
+  publishMessageCreated,
+  publishRoundOutcome,
+  publishUnreadChanged,
+} from './events.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
 import { insertMessageRow } from './message-store.js';
-import { liveMemberClause } from './members.js';
+import { liveMemberClause, readOwnerId } from './members.js';
+import { countUnread } from './unread.js';
 
 /**
  * 自动续跑 (Auto-continue) is bounded independently of the response budget:
@@ -456,6 +461,16 @@ export async function runRound(
   for (const outcome of committed.outcomes) {
     publishRoundOutcome(outcome);
   }
+  // A landed reply is an Agent conversation message, so the owner's unread
+  // reading for this target moved; a round that landed nothing (ignored,
+  // failed, merged) leaves it untouched. A merged join system message never
+  // counts, so `replySeq` is the whole condition.
+  if (committed.replySeq !== null) {
+    publishUnreadChanged({
+      targetId: wake.targetId,
+      unreadCount: countUnread(db, readOwnerId(db), wake.targetId),
+    });
+  }
   // The other-target wakes wait here rather than running in parallel: one
   // member still has at most one round in flight. They were deferred into this
   // round's turn, not delivered to another member, so they carry no jump.
@@ -799,7 +814,7 @@ function commitTaskAction(
       db,
       wake.targetId,
       'system',
-      ownerId(db),
+      readOwnerId(db),
       tFromDb(db, 'task.event.continue.paused', {
         rounds: TASK_WORK_ROUNDS_PER_EPOCH,
         assignee: roundInput.member.display_name,
@@ -817,7 +832,7 @@ function commitTaskAction(
     db,
     wake.targetId,
     'system',
-    ownerId(db),
+    readOwnerId(db),
     tFromDb(db, 'task.event.continue', {
       assignee: roundInput.member.display_name,
       title: task.title,
@@ -1004,7 +1019,7 @@ function commitJoin(
     db,
     wake.targetId,
     'system',
-    ownerId(db),
+    readOwnerId(db),
     tFromDb(db, 'system.member.piercedJoin', { name: member.display_name }),
   );
   written.push(join);
@@ -1075,16 +1090,6 @@ function insertMessage(
   body: string,
 ): { id: string; seq: number } {
   return insertMessageRow(db, { targetId, kind, authorMemberId, body });
-}
-
-function ownerId(db: Database.Database): string {
-  const row = db.prepare("SELECT id FROM member WHERE kind = 'owner'").get() as
-    | { id: string }
-    | undefined;
-  if (row === undefined) {
-    throw new Error('owner row is missing');
-  }
-  return row.id;
 }
 
 /**

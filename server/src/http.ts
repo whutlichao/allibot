@@ -32,6 +32,7 @@ import {
   createAgent,
   getAgent,
   listAgents,
+  readOwnerId,
   softDeleteAgent,
   updateAgent,
 } from './members.js';
@@ -58,6 +59,7 @@ import {
   listChannelMembers,
   listTargetMembers,
 } from './target-members.js';
+import { markOwnerRead, readWorkspaceUnread } from './unread.js';
 
 export const HOST = '127.0.0.1';
 
@@ -169,6 +171,7 @@ export async function startHttpServer(
 
 const AGENT_ID = '([^/]+)';
 const CHANNEL_ID = '([^/]+)';
+const TARGET_ID = '([^/]+)';
 const ATTACHMENT_ID = '([^/]+)';
 const TASK_ID = '([^/]+)';
 
@@ -181,6 +184,17 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/api\/events$/,
     handle: async (_request, response, { sseLifetimeMs }) => {
       openEventStream(response, sseLifetimeMs);
+    },
+  },
+  {
+    // The workspace reading. #25 lands only the unread keys its acceptance
+    // fixes; #27 extends this same handler into the complete workspace read
+    // model (owner, agents, channels, dms, tasks, settings, status points)
+    // without changing the unread module behind these two numbers.
+    method: 'GET',
+    pattern: /^\/api\/workspace$/,
+    handle: async (_request, response, { db }) => {
+      sendJson(response, 200, readWorkspaceUnread(db, readOwnerId(db)));
     },
   },
   {
@@ -320,6 +334,16 @@ const ROUTES: readonly Route[] = [
         orchestration,
       );
       sendJson(response, 201, result);
+    },
+  },
+  {
+    // The owner's read position. The body is only `last_read_seq`; the stored
+    // row is monotonic and clamped to the target's newest seq.
+    method: 'POST',
+    pattern: new RegExp(`^/api/targets/${TARGET_ID}/read$`),
+    handle: async (request, response, { db }, ...params) => {
+      const result = markOwnerRead(db, decodeId(params[0]), await readJsonBody(request));
+      sendJson(response, 200, result);
     },
   },
   {

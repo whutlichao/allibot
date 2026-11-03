@@ -83,6 +83,21 @@ export function publishMessageCreated(message: {
   });
 }
 
+/**
+ * The frame a changed unread reading produces. It is published only when the
+ * reading actually moved: a system-only message and a no-op read change
+ * nothing, so they announce nothing.
+ */
+export function publishUnreadChanged(change: {
+  targetId: string;
+  unreadCount: number;
+}): void {
+  eventHub.publish({
+    event: 'unread.changed',
+    data: { target_id: change.targetId, unread_count: change.unreadCount },
+  });
+}
+
 /** The frame one round outcome row produces. */
 export function publishRoundOutcome(outcome: {
   target_id: string;

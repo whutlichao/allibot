@@ -304,6 +304,17 @@ export interface AgentSearchHit {
  */
 export type SearchHit = MessageSearchHit | TaskSearchHit | AgentSearchHit;
 
+/**
+ * 未读 (Unread) as the workspace reads it. `unread_total` is the channel-type
+ * plus dm-type sum; a task target is deliberately absent from both numbers and
+ * kept in its own task payload's `unread_count`. `unread_by_target` carries
+ * every visible channel and dm target, zero counts included.
+ */
+export interface WorkspaceUnreadView {
+  unread_total: number;
+  unread_by_target: Record<string, number>;
+}
+
 export {
   MESSAGE_DENSITIES,
   SUPPORTED_LOCALES,

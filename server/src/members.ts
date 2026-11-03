@@ -29,6 +29,20 @@ export function liveMemberClause(alias = 'member'): string {
   return `${alias}.deleted_at IS NULL`;
 }
 
+/**
+ * The one human row, read by kind rather than by display name or list
+ * position. The owner's read position is the unread badge's baseline.
+ */
+export function readOwnerId(db: Database.Database): string {
+  const row = db.prepare("SELECT id FROM member WHERE kind = 'owner'").get() as
+    | { id: string }
+    | undefined;
+  if (row === undefined) {
+    throw new Error('owner row is missing');
+  }
+  return row.id;
+}
+
 interface AgentRow {
   id: string;
   display_name: string;
