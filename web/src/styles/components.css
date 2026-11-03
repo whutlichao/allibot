@@ -960,6 +960,71 @@
   resize: vertical;
 }
 
+.agent-detail__home-path,
+.agent-detail__rule-path {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.agent-detail__rules {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-detail__rule {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.agent-detail__rule-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-detail__rule-kind {
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.agent-detail__rule-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.agent-detail__rule[data-rule-status='unreadable'] .agent-detail__rule-status {
+  color: var(--warn-deep);
+}
+
+.agent-detail__rule-content {
+  margin: 0;
+  max-block-size: 160px;
+  overflow: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--fg);
+}
+
+.agent-detail__rule-note,
+.agent-detail__rules-pending {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .agent-detail__save-bar {
   display: flex;
   align-items: center;

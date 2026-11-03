@@ -62,6 +62,7 @@ function agent(overrides: Partial<AgentView> & Pick<AgentView, 'id' | 'display_n
     max_iterations: 8,
     auto_claim: 1,
     workspace_backend: null,
+    home_path: '/tmp/allibot-home/agents/agent-1',
     status: 'online',
     offline_reason: null,
     ...overrides,
@@ -152,18 +153,24 @@ test('the Agent detail renders the three tabs in the fixed order', () => {
   }
 });
 
-test('the basic tab holds stats, system prompt, config and the danger block last', () => {
-  assert.deepEqual([...AGENT_BASIC_SECTIONS], ['stats', 'system-prompt', 'config', 'danger']);
+test('the basic tab holds stats, system prompt, config, rules and the danger block last', () => {
+  assert.deepEqual([...AGENT_BASIC_SECTIONS], [
+    'stats',
+    'system-prompt',
+    'config',
+    'rules',
+    'danger',
+  ]);
 
   const html = renderToStaticMarkup(
     createElement(AgentDetailPanel, { agent: agent({ id: AGENT_ID, display_name: '阿蓝' }), locale: 'zh-CN' }),
   );
   const basic = panelRegion(html, 'basic');
   const sections = [...basic.matchAll(/data-section="([^"]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(sections, ['stats', 'system-prompt', 'config', 'danger']);
+  assert.deepEqual(sections, ['stats', 'system-prompt', 'config', 'rules', 'danger']);
   assert.ok(basic.indexOf('data-section="danger"') > basic.indexOf('data-section="config"'), '危险操作恒为最后一块');
 
-  for (const copy of ['统计', '系统提示', '配置', '危险操作']) {
+  for (const copy of ['统计', '系统提示', '配置', '家目录与规则', '危险操作']) {
     assert.ok(basic.includes(copy), `the basic tab is missing ${copy}`);
   }
   assert.ok(basic.includes('在线'), 'the stats block shows the status point');

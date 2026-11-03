@@ -128,6 +128,7 @@ function agent(): AgentView {
     max_iterations: 8,
     auto_claim: 0,
     workspace_backend: null,
+    home_path: '/tmp/allibot-home/agents/agent-1',
   };
 }
 
