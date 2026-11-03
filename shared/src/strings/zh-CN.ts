@@ -46,6 +46,9 @@ export const ZH_CN = {
   'settings.error.load': { text: '设置读取失败，请确认后端已启动。', params: [] },
   'settings.error.save': { text: '设置未保存，请重试。', params: [] },
 
+  // 提及补全（Mention Completion）的候选列表标签：候选只列当前 target 的 Agent。
+  'mention.completion.label': { text: '提及候选', params: [] },
+
   // 轮次结果（Round Outcome）与穿透加入事件的可读文案：后端在 HTTP 请求之外
   // 写这两类文本，按库内语言偏好经 tFromDb 渲染。键名用承重词（wake / round /
   // penetration / join），参数位只带标识（seq / count / name），从不携带正文。
@@ -173,6 +176,9 @@ export const ZH_CN = {
   // 频道里的指针消息正文：它是 system，不计未读、不唤醒。
   'task.pointer.body': { text: '已创建任务「{title}」，在这里进入任务线程。', params: ['title'] },
 
+  // 提醒到点的系统事件消息正文：作者恒为 owner，不唤醒、不计未读。
+  'reminder.due.body': { text: '提醒到点：{text}', params: ['text'] },
+
   // 任务状态在系统事件消息里的可读标签（承重词，不用看板列名替代）。
   'task.status.todo': { text: '待认领', params: [] },
   'task.status.inProgress': { text: '进行中', params: [] },
@@ -223,4 +229,40 @@ export const ZH_CN = {
     params: [],
   },
   'provider.call.failed': { text: '模型调用失败：{message}', params: ['message'] },
+
+  // 工作台壳（Workspace）：左侧 target 导航、右侧上下文 / 抽屉。文案按词条的
+  // 承重词（频道 / 私信 / 任务 / 本机 Agent / 工作台），不使用 Avoid 列的替代叫法。
+  'workspace.nav.title': { text: '导航', params: [] },
+  'workspace.nav.channels': { text: '频道', params: [] },
+  'workspace.nav.channelsArchived': { text: '已归档频道', params: [] },
+  'workspace.nav.dms': { text: '私信', params: [] },
+  'workspace.nav.dmsArchived': { text: '已归档私信', params: [] },
+  'workspace.nav.tasks': { text: '任务', params: [] },
+  'workspace.nav.agents': { text: '本机 Agent', params: [] },
+  'workspace.nav.empty': { text: '暂无', params: [] },
+  'workspace.nav.open': { text: '导航', params: [] },
+  'workspace.nav.unread': { text: '{count} 条未读', params: ['count'] },
+  'workspace.context.title': { text: '成员与上下文', params: [] },
+  'workspace.context.empty': { text: '尚未选择 target', params: [] },
+  'workspace.context.kind.channel': { text: '频道', params: [] },
+  'workspace.context.kind.dm': { text: '私信', params: [] },
+  'workspace.context.kind.task': { text: '任务', params: [] },
+  'workspace.panel.taskBoard': { text: '任务看板', params: [] },
+  'workspace.panel.members': { text: '成员面板', params: [] },
+  'workspace.panel.roster': { text: '成员名册', params: [] },
+  'workspace.panel.agentDetail': { text: 'Agent 详情', params: [] },
+  'workspace.panel.pending': { text: '此面由后续票接入。', params: [] },
+  'workspace.drawer.close': { text: '关闭', params: [] },
+  'workspace.status.online': { text: '在线', params: [] },
+  'workspace.status.working': { text: '工作中', params: [] },
+  'workspace.status.error': { text: '出错', params: [] },
+  'workspace.status.offline': { text: '未启用', params: [] },
+
+  // 任务看板（Task Board）：按任务状态分列的呈现面，列名沿用任务状态的
+  // 可读文案；筛选只收窄视图，不改变任务恰好属于一个频道的归属事实。
+  'taskBoard.filter.label': { text: '频道筛选', params: [] },
+  'taskBoard.filter.all': { text: '全部频道', params: [] },
+  'taskBoard.transition.label': { text: '流转', params: [] },
+  'taskBoard.chip.thread': { text: '进入任务线程', params: [] },
+  'taskBoard.chip.unread': { text: '· {count} 条未读', params: ['count'] },
 } as const satisfies Record<string, CatalogEntry>;

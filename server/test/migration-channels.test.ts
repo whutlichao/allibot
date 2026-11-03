@@ -4,6 +4,7 @@ import { mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { SCHEMA_VERSION } from '../dist/db.js';
 import {
   MIGRATION_FIXTURE,
   makeTempDir,
@@ -63,7 +64,7 @@ test('migrating an empty data dir adds channel, target and target_member', async
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 12);
+    assert.equal(readSchemaVersion(dataDir), SCHEMA_VERSION);
     const tables = tableNames(dataDir);
     for (const table of ['channel', 'target', 'target_member']) {
       assert.ok(tables.includes(table), `${table} table is missing; tables: ${tables.join(', ')}`);
@@ -138,7 +139,7 @@ test('a version 2 data directory upgrades through the chain with a backup that k
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 12);
+    assert.equal(readSchemaVersion(dataDir), SCHEMA_VERSION);
     assert.ok(tableNames(dataDir).includes('channel'));
     assert.equal(
       countRows(dataDir, "member WHERE id = 'kept-agent'"),
@@ -171,7 +172,7 @@ test('a version 2 data directory upgrades through the chain with a backup that k
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 2);
-    assert.equal(last?.['to'], 12);
+    assert.equal(last?.['to'], SCHEMA_VERSION);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);

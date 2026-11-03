@@ -414,10 +414,15 @@ test('two connections over two targets each receive both kinds of frames, told a
       ['second', second],
     ] as const) {
       const frames: SseFrame[] = [];
-      for (let index = 0; index < 5; index += 1) {
+      for (let index = 0; index < 16; index += 1) {
         const frame = await stream.next();
         assert.ok(frame !== null, `${name} should stay open`);
         frames.push(frame);
+        const outcomes = frames.filter((candidate) => candidate.event === 'round.outcome');
+        const changes = frames.filter((candidate) => candidate.event === 'unread.changed');
+        if (outcomes.length === 2 && changes.length === 2) {
+          break;
+        }
       }
       const created = frames
         .filter((frame) => frame.event === 'message.created')
@@ -431,11 +436,22 @@ test('two connections over two targets each receive both kinds of frames, told a
       assert.deepEqual(created, [`${channelA}|1`, `${channelA}|2`, `${channelB}|1`, `${channelB}|2`].sort());
 
       const outcomes = frames.filter((frame) => frame.event === 'round.outcome');
-      assert.equal(outcomes.length, 1, `${name} sees one round outcome`);
-      const outcome = JSON.parse(outcomes[0]!.data) as Record<string, unknown>;
-      assert.ok([channelA, channelB].includes(outcome['target_id'] as string));
-      assert.equal(outcome['member_id'], agent);
-      assert.equal(outcome['status'], 'replied');
+      assert.equal(outcomes.length, 2, `${name} sees one round outcome per target`);
+      for (const outcomeFrame of outcomes) {
+        const outcome = JSON.parse(outcomeFrame.data) as Record<string, unknown>;
+        assert.ok([channelA, channelB].includes(outcome['target_id'] as string));
+        assert.equal(outcome['member_id'], agent);
+        assert.equal(outcome['status'], 'replied');
+      }
+
+      // Each Agent reply raises that target's owner unread reading.
+      const changes = frames
+        .filter((frame) => frame.event === 'unread.changed')
+        .map((frame) => JSON.parse(frame.data) as Record<string, unknown>);
+      assert.deepEqual(
+        changes.map((data) => `${String(data['target_id'])}|${String(data['unread_count'])}`).sort(),
+        [`${channelA}|1`, `${channelB}|1`].sort(),
+      );
     }
   } finally {
     await first.close();

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { SCHEMA_VERSION } from '../dist/db.js';
 import { makeTempDir, readLedger, removeTempDir, runCli } from './support.ts';
 
 interface MemberRow {
@@ -89,7 +90,7 @@ test('migrating an empty data dir creates member and agent_config with exactly o
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 12);
+    assert.equal(readSchemaVersion(dataDir), SCHEMA_VERSION);
     const tables = tableNames(dataDir);
     assert.ok(tables.includes('member'), `member table is missing; tables: ${tables.join(', ')}`);
     assert.ok(
@@ -134,7 +135,7 @@ test('migrating an empty data dir creates member and agent_config with exactly o
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 12);
+    assert.equal(entries[0]?.['to'], SCHEMA_VERSION);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -154,7 +155,7 @@ test('a version 1 data dir is backed up and upgraded through the production chai
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 12);
+    assert.equal(readSchemaVersion(dataDir), SCHEMA_VERSION);
     assert.ok(tableNames(dataDir).includes('member'));
     assert.ok(tableNames(dataDir).includes('agent_config'));
 
@@ -186,7 +187,7 @@ test('a version 1 data dir is backed up and upgraded through the production chai
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], 1);
-    assert.equal(entries[0]?.['to'], 12);
+    assert.equal(entries[0]?.['to'], SCHEMA_VERSION);
     assert.equal(entries[0]?.['result'], 'ok');
     assert.equal(entries[0]?.['backup_path'], backupPath);
   } finally {

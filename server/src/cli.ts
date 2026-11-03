@@ -12,6 +12,7 @@ import {
 import { HOST, startHttpServer, type OrchestrationRuntime } from './http.js';
 import { acquireDataDirLock } from './lock.js';
 import { createModelProvider } from './model-provider.js';
+import { startReminderScheduler } from './reminders.js';
 import { createInFlightRounds } from './rounds.js';
 import { createScriptedProvider } from './scripted-provider.js';
 
@@ -78,6 +79,9 @@ async function run(argv: readonly string[]): Promise<number> {
 
   const lock = await acquireDataDirLock(resolution.dataDir);
   const db = openDatabase(resolution.dataDir);
+  // 提醒到点 is a backend fact, not a request: the process ticks on its own.
+  // The first pass runs now, so a restart catches up overdue reminders.
+  const stopReminders = startReminderScheduler(db, options.reminderTickMs);
   try {
     const orchestration = createOrchestration(options, db);
     const { server, port: boundPort } = await startHttpServer(
@@ -92,6 +96,7 @@ async function run(argv: readonly string[]): Promise<number> {
 
     return await waitForShutdown(server);
   } finally {
+    stopReminders();
     db.close();
     await lock.release();
   }

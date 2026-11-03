@@ -1,3 +1,5 @@
+import type { WorkspaceSettingsView } from './settings.js';
+
 export type ApiErrorCode =
   | 'validation_failed'
   | 'not_found'
@@ -303,6 +305,83 @@ export interface AgentSearchHit {
  * The three hit kinds are siblings; `type` is what the frontend renders by.
  */
 export type SearchHit = MessageSearchHit | TaskSearchHit | AgentSearchHit;
+
+/**
+ * 未读 (Unread) as the workspace reads it. `unread_total` is the channel-type
+ * plus dm-type sum; a task target is deliberately absent from both numbers and
+ * kept in its own task payload's `unread_count`. `unread_by_target` carries
+ * every visible channel and dm target, zero counts included.
+ */
+export interface WorkspaceUnreadView {
+  unread_total: number;
+  unread_by_target: Record<string, number>;
+}
+
+/**
+ * 提醒 (Reminder) as the human face returns it. `due_at_local` is the fixed
+ * `YYYY-MM-DDTHH:mm` wall time the owner set, interpreted in the machine's
+ * local timezone; `created_at` is the UTC audit stamp. `delivered_at` is the
+ * due marker (NULL = not due yet) and `missed` records a reminder the backend
+ * found more than 24 hours late, which is marked but never delivered.
+ */
+export interface ReminderView {
+  id: string;
+  channel_id: string | null;
+  due_at_local: string;
+  text: string;
+  delivered_at: string | null;
+  missed: boolean;
+  created_at: string;
+}
+
+/**
+ * `GET /api/reminders` groups the rows by their due state: pending has no
+ * delivered_at, delivered has one inside the 24-hour catch-up window, and
+ * missed is a reminder found beyond that window.
+ */
+export interface ReminderListView {
+  pending: ReminderView[];
+  delivered: ReminderView[];
+  missed: ReminderView[];
+}
+
+/**
+ * The human row as the workspace returns it. The database holds exactly one
+ * owner row (`member_single_owner`), so the reading is one object, never a
+ * list.
+ */
+export interface OwnerView {
+  id: string;
+  kind: 'owner';
+  display_name: string;
+  avatar_slot: number;
+}
+
+/**
+ * The app shell's one backend reading (D1.8 / ADR 0002). Every panel renders
+ * from this same snapshot, so the frontend never keeps a second source of
+ * truth.
+ *
+ * `agents` is the 本机 Agent list: every live Agent, not filtered by channel.
+ * `channels` carries archived channels with their `archived_at`; a deleted
+ * channel is absent, as are its tasks and messages. `status_points` is keyed
+ * by Agent member id and answers exactly what the per-Agent read answers;
+ * `settings` is the same body `GET /api/settings` returns.
+ *
+ * Unread is split in two: `unread_total` is the channel-type plus dm-type sum,
+ * while a task-type target is counted only in its task payload's
+ * `unread_count`. The reading is read-only: it writes no message, wakes no
+ * member and spends no response budget.
+ */
+export interface WorkspaceView extends WorkspaceUnreadView {
+  owner: OwnerView;
+  agents: AgentView[];
+  channels: ChannelView[];
+  dms: DmView[];
+  tasks: TaskView[];
+  settings: WorkspaceSettingsView;
+  status_points: Record<string, StatusPointView>;
+}
 
 export {
   MESSAGE_DENSITIES,

@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
 import { ROUND_CONTEXT_WINDOW, type ContextScope } from './agent-seam.js';
+import { advanceReadPosition, readLastReadSeq } from './read-position.js';
 
 export type { ContextScope } from './agent-seam.js';
 
@@ -25,10 +26,7 @@ export function readConsumedSeq(
   memberId: string,
   targetId: string,
 ): number {
-  const row = db
-    .prepare('SELECT last_read_seq FROM read_position WHERE member_id = ? AND target_id = ?')
-    .get(memberId, targetId) as { last_read_seq: number } | undefined;
-  return row?.last_read_seq ?? 0;
+  return readLastReadSeq(db, memberId, targetId);
 }
 
 /**
@@ -48,20 +46,7 @@ export function advanceConsumedSeq(
   targetId: string,
   seq: number,
 ): void {
-  db.prepare(
-    `INSERT INTO read_position (member_id, target_id, last_read_seq)
-     VALUES (?, ?, ?)
-     ON CONFLICT (member_id, target_id) DO UPDATE
-       SET last_read_seq = MAX(read_position.last_read_seq, excluded.last_read_seq)`,
-  ).run(memberId, targetId, clampToMaxSeq(db, targetId, seq));
-}
-
-/** A stored position never points past the newest stored message. */
-function clampToMaxSeq(db: Database.Database, targetId: string, seq: number): number {
-  const row = db
-    .prepare('SELECT coalesce(MAX(seq), 0) AS last FROM message WHERE target_id = ?')
-    .get(targetId) as { last: number };
-  return Math.max(0, Math.min(seq, row.last));
+  advanceReadPosition(db, memberId, targetId, seq);
 }
 
 /**

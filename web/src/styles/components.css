@@ -101,6 +101,175 @@
   line-height: 1.35;
 }
 
+/* 正文渲染：Markdown 结构在对话正文里的呈现（段落 / 标题 / 强调 / 代码 / 列表 / 引用 / 链接 / 表格）。 */
+.message-body {
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.message-body > :first-child {
+  margin-block-start: 0;
+}
+
+.message-body > :last-child {
+  margin-block-end: 0;
+}
+
+.message-body p {
+  margin: 0 0 8px;
+}
+
+.message-body h1,
+.message-body h2,
+.message-body h3,
+.message-body h4,
+.message-body h5,
+.message-body h6 {
+  margin: 12px 0 6px;
+  line-height: 1.3;
+}
+
+.message-body h1 {
+  font-size: 20px;
+}
+
+.message-body h2 {
+  font-size: 17px;
+}
+
+.message-body h3 {
+  font-size: 15px;
+}
+
+.message-body ul,
+.message-body ol {
+  margin: 0 0 8px;
+  padding-inline-start: 22px;
+}
+
+.message-body blockquote {
+  margin: 0 0 8px;
+  padding-inline-start: 10px;
+  border-inline-start: 3px solid var(--border-strong);
+  color: var(--muted);
+}
+
+.message-body code {
+  padding-inline: 4px;
+  background: var(--panel);
+  border-radius: 4px;
+  font-size: 0.92em;
+}
+
+.message-body pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.message-body pre code {
+  padding: 0;
+  background: none;
+}
+
+.message-body table {
+  margin-block-end: 8px;
+  border-collapse: collapse;
+}
+
+.message-body th,
+.message-body td {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  text-align: start;
+}
+
+.message-body th {
+  background: var(--panel);
+}
+
+.message-body a {
+  color: var(--accent-deep);
+  text-decoration: underline;
+}
+
+/*
+ * 提及（Mention）：后端给出的区间包成的标签。加粗里保留粗体、行内代码里
+ * 保留代码样式——呈现只叠加不覆盖。
+ */
+.mention {
+  padding-inline: 2px;
+  background: var(--accent);
+  border-radius: 4px;
+  color: var(--accent-deep);
+}
+
+.message-body code .mention {
+  padding-inline: 0;
+  background: none;
+  color: inherit;
+}
+
+/* 系统事件消息：事件行，不是对话正文。 */
+.message-event {
+  display: flex;
+  gap: 6px;
+  padding: 4px 12px;
+  background: var(--surface);
+  border-inline-start: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.message-event__text {
+  overflow-wrap: anywhere;
+}
+
+/* 补全（Mention Completion）：Composer 输入 @ 后弹出的候选列表。 */
+.mention-completion {
+  max-inline-size: 280px;
+  margin: 0;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  list-style: none;
+}
+
+.mention-completion__option {
+  margin: 0;
+}
+
+.mention-completion__button {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  inline-size: 100%;
+  padding: 4px 6px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--fg);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.mention-completion__button:hover,
+.mention-completion__button:focus-visible {
+  background: var(--selected);
+}
+
+.mention-completion__name {
+  font-size: 13px;
+}
+
 /*
  * 主题：壳上的 data-theme 是唯一开关。它只声明浏览器外观偏好（color-scheme：
  * 原生控件、滚动条与画布），不改视觉契约 token 的取值——token 名与取值是设计
@@ -116,4 +285,430 @@
 
 .app-shell[data-theme='system'] {
   color-scheme: light dark;
+}
+
+/*
+ * 工作台壳：宽屏 dock 左侧导航，主区是 CopilotChat，右侧上下文与次级面以
+ * 抽屉呈现；窄屏不 dock 任何侧栏，导航移入抽屉并保留常驻入口。所有取值只
+ * 消费视觉契约的 token 名，不新增第二套可改值。
+ */
+.workspace-shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  min-block-size: 100dvh;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.workspace-shell[data-layout='narrow'] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace-sidebar {
+  overflow: auto;
+  max-block-size: 100dvh;
+  background: var(--surface);
+  border-inline-end: 1px solid var(--border);
+}
+
+.workspace-navigation {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.workspace-main {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  min-block-size: 0;
+}
+
+.workspace-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border-block-end: 1px solid var(--border);
+}
+
+.workspace-header__title {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.workspace-header__action,
+.workspace-drawer__close,
+.context-panel__entry,
+.target-nav__target,
+.target-nav__panel {
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.workspace-header__action:hover,
+.workspace-drawer__close:hover,
+.context-panel__entry:hover,
+.target-nav__target:hover,
+.target-nav__panel:hover {
+  background: var(--panel-2);
+}
+
+.workspace-chat {
+  display: flex;
+  flex: 1;
+  min-block-size: 0;
+}
+
+.workspace-chat > * {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.workspace-drawer {
+  position: fixed;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 10;
+  inline-size: min(380px, 100vw);
+  overflow: auto;
+  padding: 12px;
+  background: var(--surface);
+  border-inline-start: 1px solid var(--border-strong);
+  box-shadow: 0 0 24px hsl(220 20% 10% / 12%);
+}
+
+.workspace-drawer__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-block-end: 8px;
+}
+
+.workspace-drawer__title {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+}
+
+.target-nav__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.target-nav__title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: none;
+}
+
+.target-nav__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.target-nav__target,
+.target-nav__panel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  inline-size: 100%;
+  text-align: start;
+  background: transparent;
+  border-color: transparent;
+}
+
+.target-nav__target[aria-current='true'] {
+  background: var(--selected);
+  border-color: var(--selected-fill);
+}
+
+.target-nav__label {
+  flex: 1;
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.target-nav__unread {
+  flex: none;
+  min-inline-size: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--unread);
+  color: var(--unread-deep);
+  font-size: 12px;
+  text-align: center;
+}
+
+.target-nav__empty,
+.context-panel__empty,
+.workspace-panel__pending {
+  margin: 0;
+  font-size: 13px;
+  color: var(--faint);
+}
+
+.status-point {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.status-point::before {
+  content: '';
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 999px;
+  background: var(--offline);
+}
+
+.status-point[data-status='online']::before {
+  background: var(--online);
+}
+
+.status-point[data-status='working']::before {
+  background: var(--working);
+}
+
+.status-point[data-status='error']::before {
+  background: var(--error);
+}
+
+.context-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.context-panel__target {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+}
+
+.context-panel__label {
+  font-size: 15px;
+}
+
+.context-panel__kind,
+.context-panel__unread,
+.context-panel__description,
+.context-panel__status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.context-panel__entries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-block-start: 6px;
+}
+
+.workspace-panel__title {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+/*
+ * 任务看板（Task Board）：按任务状态分列的呈现面。卡片状态色只消费既有
+ * 角色族 / 状态点 token（由内联 var() 指定），这里不声明新的色值；列名是
+ * 呈现用语，状态名仍是五个承重词。
+ */
+.workspace-drawer[data-drawer='task-board'] {
+  inline-size: min(1100px, 100vw);
+}
+
+.task-board {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-board__filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.task-board__filter-select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.task-board__columns {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  overflow-x: auto;
+  padding-block-end: 8px;
+}
+
+.task-board__column {
+  display: flex;
+  flex: 0 0 210px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.task-board__column-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.task-board__column-title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.task-board__column-count {
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.task-board__cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-board__empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.task-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-inline-start-width: 3px;
+  border-radius: 6px;
+}
+
+.task-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-card__status {
+  flex: none;
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 999px;
+}
+
+.task-card__title {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.task-card__chip {
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  padding: 2px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.task-card__chip:hover {
+  background: var(--panel-2);
+}
+
+.task-card__chip-unread {
+  padding-inline: 6px;
+  border-radius: 999px;
+  background: var(--unread);
+  color: var(--unread-deep);
+  font-size: 11px;
+}
+
+.task-card__transitions {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.task-card__transitions-summary {
+  cursor: pointer;
+}
+
+.task-card__transition-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-card__transition {
+  inline-size: 100%;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  text-align: start;
+  cursor: pointer;
+}
+
+.task-card__transition:hover {
+  background: var(--selected);
+  border-color: var(--selected-fill);
 }

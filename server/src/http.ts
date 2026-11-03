@@ -41,6 +41,7 @@ import {
   parseProviderParam,
   remoteDataFlowView,
 } from './providers.js';
+import { createReminder, deleteReminder, listReminders } from './reminders.js';
 import { dispatchWakes, type OrchestrationRuntime } from './rounds.js';
 import { parseSearchQuery, searchWorkspace } from './search.js';
 import { getSettings, updateSettings } from './settings.js';
@@ -57,6 +58,8 @@ import {
   listChannelMembers,
   listTargetMembers,
 } from './target-members.js';
+import { markOwnerRead } from './unread.js';
+import { readWorkspace } from './workspace.js';
 
 export const HOST = '127.0.0.1';
 
@@ -167,8 +170,10 @@ export async function startHttpServer(
 
 const AGENT_ID = '([^/]+)';
 const CHANNEL_ID = '([^/]+)';
+const TARGET_ID = '([^/]+)';
 const ATTACHMENT_ID = '([^/]+)';
 const TASK_ID = '([^/]+)';
+const REMINDER_ID = '([^/]+)';
 
 const ROUTES: readonly Route[] = [
   {
@@ -179,6 +184,16 @@ const ROUTES: readonly Route[] = [
     pattern: /^\/api\/events$/,
     handle: async (_request, response, { sseLifetimeMs }) => {
       openEventStream(response, sseLifetimeMs);
+    },
+  },
+  {
+    // The workspace reading (D1.8): the app shell's one backend snapshot. It
+    // composes the existing read models — agents, channels, DMs, tasks, unread,
+    // settings and status points — and writes nothing.
+    method: 'GET',
+    pattern: /^\/api\/workspace$/,
+    handle: async (_request, response, { db, env, orchestration }) => {
+      sendJson(response, 200, readWorkspace(db, env, orchestration.inFlight));
     },
   },
   {
@@ -323,6 +338,16 @@ const ROUTES: readonly Route[] = [
     },
   },
   {
+    // The owner's read position. The body is only `last_read_seq`; the stored
+    // row is monotonic and clamped to the target's newest seq.
+    method: 'POST',
+    pattern: new RegExp(`^/api/targets/${TARGET_ID}/read$`),
+    handle: async (request, response, { db }, ...params) => {
+      const result = markOwnerRead(db, decodeId(params[0]), await readJsonBody(request));
+      sendJson(response, 200, result);
+    },
+  },
+  {
     method: 'GET',
     pattern: /^\/api\/tasks$/,
     handle: async (request, response, { db }) => {
@@ -363,6 +388,33 @@ const ROUTES: readonly Route[] = [
         200,
         updateTask(db, decodeId(params[0]), await readJsonBody(request)),
       );
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/reminders$/,
+    handle: async (_request, response, { db }) => {
+      sendJson(response, 200, listReminders(db));
+    },
+  },
+  {
+    // Creating a reminder is a pure config write: no message, no wake, no
+    // budget change, no target and no unread. The due fact arrives later.
+    method: 'POST',
+    pattern: /^\/api\/reminders$/,
+    handle: async (request, response, { db }) => {
+      sendJson(response, 201, createReminder(db, await readJsonBody(request)));
+    },
+  },
+  {
+    // Deleting a delivered reminder leaves its system message in place: the
+    // message log is append-only.
+    method: 'DELETE',
+    pattern: new RegExp(`^/api/reminders/${REMINDER_ID}$`),
+    handle: async (_request, response, { db }, ...params) => {
+      deleteReminder(db, decodeId(params[0]));
+      response.writeHead(204);
+      response.end();
     },
   },
   {

@@ -11,14 +11,15 @@ import { openEpoch } from './budget.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { assertDmWritable } from './dms.js';
 import { insertMessageRow } from './message-store.js';
-import { liveMemberClause } from './members.js';
+import { liveMemberClause, readOwnerId } from './members.js';
 import {
   collectWakes,
   dispatchWakes,
   type DispatchOptions,
   type OrchestrationRuntime,
 } from './rounds.js';
-import { publishMessageCreated } from './events.js';
+import { publishMessageCreated, publishUnreadChanged } from './events.js';
+import { countUnread } from './unread.js';
 
 /** The human face may only write human messages. */
 const HUMAN_MESSAGE_KIND = 'human';
@@ -135,6 +136,19 @@ export function appendMessage(
   // its rollback reaches no subscriber either.
   if (appended.created) {
     publishMessageCreated({ targetId: input.targetId, id: appended.id, seq: appended.seq });
+    // 未读 changes only when a conversation message is not the owner's own;
+    // `system` records and the owner's own human messages never raise it, so
+    // they publish no unread frame.
+    if (input.kind === 'human' || input.kind === 'agent') {
+      const ownerId = readOwnerId(db);
+      const authorId = readAuthorId(db, input.authorMemberId ?? null);
+      if (authorId !== ownerId) {
+        publishUnreadChanged({
+          targetId: input.targetId,
+          unreadCount: countUnread(db, ownerId, input.targetId),
+        });
+      }
+    }
   }
   return appended;
 }
