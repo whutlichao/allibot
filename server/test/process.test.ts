@@ -1,129 +1,26 @@
 import assert from 'node:assert/strict';
-import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
-
-const SERVER_ENTRY = fileURLToPath(new URL('../dist/main.js', import.meta.url));
-const LISTENING_LINE = /allibot server listening on http:\/\/127\.0\.0\.1:(\d+)/;
-const STARTUP_TIMEOUT_MS = 10_000;
-const SHUTDOWN_TIMEOUT_MS = 5_000;
-
-interface RunningServer {
-  port: number;
-  stop: () => Promise<void>;
-}
+import {
+  makeTempDir,
+  removeTempDir,
+  runCli,
+  startServer,
+  type RunningServer,
+} from './support.ts';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function waitForListeningPort(child: ChildProcess): Promise<number> {
-  return new Promise((resolve, reject) => {
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      finish();
-      reject(
-        new Error(
-          `server did not listen within ${STARTUP_TIMEOUT_MS}ms; stderr: ${stderr.trim()}`,
-        ),
-      );
-    }, STARTUP_TIMEOUT_MS);
-
-    const finish = (): void => {
-      clearTimeout(timer);
-      child.stdout?.off('data', onStdout);
-      child.stderr?.off('data', onStderr);
-      child.off('exit', onExit);
-    };
-
-    const onStdout = (chunk: Buffer): void => {
-      stdout += chunk.toString('utf8');
-      const match = LISTENING_LINE.exec(stdout);
-      if (match !== null) {
-        finish();
-        resolve(Number(match[1]));
-      }
-    };
-
-    const onStderr = (chunk: Buffer): void => {
-      stderr += chunk.toString('utf8');
-    };
-
-    const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
-      finish();
-      reject(
-        new Error(
-          `server exited before listening (code=${String(code)}, signal=${String(signal)}); stderr: ${stderr.trim()}`,
-        ),
-      );
-    };
-
-    child.stdout?.on('data', onStdout);
-    child.stderr?.on('data', onStderr);
-    child.once('exit', onExit);
-  });
-}
-
-function waitForExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.off('exit', onExit);
-      reject(new Error(`server did not stop within ${SHUTDOWN_TIMEOUT_MS}ms`));
-    }, SHUTDOWN_TIMEOUT_MS);
-    const onExit = (): void => {
-      clearTimeout(timer);
-      resolve();
-    };
-    child.once('exit', onExit);
-  });
-}
-
-async function startServer(dataDir: string): Promise<RunningServer> {
-  const child = spawn(
-    process.execPath,
-    [SERVER_ENTRY, '--data-dir', dataDir, '--port', '0'],
-    { stdio: ['ignore', 'pipe', 'pipe'] },
-  );
-
-  let port: number;
-  try {
-    port = await waitForListeningPort(child);
-  } catch (error) {
-    child.kill('SIGKILL');
-    await waitForExit(child);
-    throw error;
-  }
-
-  return {
-    port,
-    stop: async (): Promise<void> => {
-      if (child.exitCode !== null || child.signalCode !== null) {
-        return;
-      }
-      child.kill('SIGTERM');
-      try {
-        await waitForExit(child);
-      } catch {
-        child.kill('SIGKILL');
-        await waitForExit(child);
-      }
-    },
-  };
-}
-
 test('unknown API path returns the unified not_found error envelope', async () => {
-  const dataDir = await mkdtemp(path.join(tmpdir(), 'allibot-server-test-'));
+  const dataDir = await makeTempDir('allibot-server-test-');
   let running: RunningServer | undefined;
 
   try {
+    const migration = runCli(['--migrate', '--data-dir', dataDir]);
+    assert.equal(migration.exitCode, 0, `migrate should exit 0; output: ${migration.output}`);
+
     running = await startServer(dataDir);
     assert.equal(existsSync(dataDir), true, 'the server data dir should exist while running');
 
@@ -143,7 +40,7 @@ test('unknown API path returns the unified not_found error envelope', async () =
     );
   } finally {
     await running?.stop();
-    await rm(dataDir, { recursive: true, force: true });
+    await removeTempDir(dataDir);
   }
 
   assert.equal(existsSync(dataDir), false, 'the temporary data dir should be removed');
