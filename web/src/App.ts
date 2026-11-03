@@ -1,5 +1,6 @@
 import {
   t,
+  type AgentRulesView,
   type ApprovalDecisionInput,
   type ApprovalView,
   type ChannelConfigPatch,
@@ -45,6 +46,9 @@ export interface AppProps {
   approvals?: readonly ApprovalView[];
   /** Permission rule sets, keyed by scope. */
   permissionRules?: Readonly<Record<string, readonly PermissionRuleView[]>>;
+  /** Effective rules per Agent id, keyed by Agent. */
+  agentRules?: Record<string, AgentRulesView>;
+  onAgentRulesNeeded?: (agentId: string, channelId: string | null) => void;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
   onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
@@ -85,6 +89,8 @@ export function App({
   sopRuns,
   approvals,
   permissionRules,
+  agentRules,
+  onAgentRulesNeeded,
   onSelectTarget,
   onTaskTransition,
   onJoinMember,
@@ -111,6 +117,8 @@ export function App({
       sopRuns,
       approvals,
       permissionRules,
+      agentRules,
+      onAgentRulesNeeded,
       onSelectTarget,
       onTaskTransition,
       onSettingsChange,

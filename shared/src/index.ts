@@ -111,6 +111,43 @@ export interface AgentView extends StatusPointView {
    * mode from `TargetMemberView.permission_mode` instead.
    */
   effective_permission_mode: PermissionMode;
+  /**
+   * The Agent home path, derived from `member_id` and the process-level global
+   * layer root (D5.2). It is read-only: no database column stores it, so a
+   * restart with the same home root returns the same value.
+   */
+  home_path: string;
+}
+
+/**
+ * The three prompt sections of the rules base (D5.2 / D3.7), in assembly
+ * order. The first and third are files the host reads; the middle one is the
+ * stored `agent_config.system_prompt`.
+ */
+export const AGENT_RULE_SECTIONS = ['global', 'system_prompt', 'project'] as const;
+export type AgentRuleSectionKind = (typeof AGENT_RULE_SECTIONS)[number];
+
+/** One prompt section as the read-only rules face reports it. */
+export interface AgentRuleSectionView {
+  kind: AgentRuleSectionKind;
+  /** The file the host reads; null for the stored prompt and an absent project. */
+  path: string | null;
+  /** Whether anything exists at the path / in the stored field. */
+  present: boolean;
+  /** Whether the host could read it as text. */
+  readable: boolean;
+  /** The section text the round would receive; null when missing / unreadable. */
+  content: string | null;
+}
+
+/** `GET /api/agents/{id}/rules` — the effective rules, read-only (D2.3). */
+export interface AgentRulesView {
+  agent_id: string;
+  channel_id: string | null;
+  home_path: string;
+  order: readonly AgentRuleSectionKind[];
+  /** The three sections, exactly in `order`. */
+  sections: AgentRuleSectionView[];
 }
 
 /**

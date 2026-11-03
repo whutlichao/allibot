@@ -89,6 +89,7 @@ function agent(overrides: Partial<AgentView> = {}): AgentView {
     workspace_backend: null,
     permission_mode: null,
     effective_permission_mode: 'ask-writes',
+    home_path: '/tmp/allibot-home/agents/agent-1',
     status: 'online',
     offline_reason: null,
     ...overrides,

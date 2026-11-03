@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from './approvals.js';
 import { DEFAULT_SSE_LIFETIME_MS } from './events.js';
@@ -19,6 +20,13 @@ export type ProviderMode = 'scripted' | 'model';
 export interface CliOptions {
   command: CliCommand;
   dataDir: string | undefined;
+  /**
+   * The process-level global layer root override (D5.2): `--home-dir <path>`
+   * or the `allibot_HOME_DIR` environment variable. The flag wins. The default
+   * is `~/.allibot/`; the value is never stored in the database and has no
+   * HTTP write entry.
+   */
+  homeDir: string | undefined;
   port: number;
   /**
    * Which member-face adapter is live. The real model adapter is the default;
@@ -117,7 +125,7 @@ const PROVIDER_MODES: readonly ProviderMode[] = ['scripted', 'model'];
 const DEFAULT_SCRIPTED_PROVIDER: ScriptedBehavior = 'ignore';
 const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
-  'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
+  'usage: allibot <serve|--migrate> [--data-dir <path>] [--home-dir <path>] [--port <port>] ' +
   '[--provider <scripted|model>] ' +
   '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|workspace|permission|mcp-approval|team-approval>] ' +
   '[--scripted-delay-ms <ms>] ' +
@@ -136,6 +144,7 @@ export function parseCliArgs(
     args: [...argv],
     options: {
       'data-dir': { type: 'string' },
+      'home-dir': { type: 'string' },
       port: { type: 'string' },
       migrate: { type: 'boolean' },
       provider: { type: 'string' },
@@ -166,6 +175,7 @@ export function parseCliArgs(
   return {
     command: resolveCommand(values.migrate === true, positionals[0]),
     dataDir: values['data-dir'] ?? env.allibot_DATA_DIR,
+    homeDir: parseHomeDir(values['home-dir']),
     port: parsePort(values.port ?? String(DEFAULT_PORT)),
     providerMode: parseProviderMode(
       values.provider,
@@ -232,6 +242,21 @@ function resolveCommand(migrate: boolean, positional: string | undefined): CliCo
     throw new Error(USAGE);
   }
   throw new Error(`unknown command: ${positional}; ${USAGE}`);
+}
+
+/**
+ * The global layer root override is a real path or absent. The default is
+ * resolved later from HOME, so an absent flag stays `undefined` rather than
+ * baking this process's HOME into an option value.
+ */
+function parseHomeDir(raw: string | undefined): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw.trim().length === 0) {
+    throw new Error('invalid --home-dir value: a path must not be empty');
+  }
+  return path.resolve(raw);
 }
 
 function parsePort(raw: string): number {

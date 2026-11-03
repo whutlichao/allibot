@@ -129,9 +129,10 @@ function agent(): AgentView {
     max_iterations: 8,
     auto_claim: 0,
     workspace_backend: null,
-
     permission_mode: null,
-    effective_permission_mode: 'ask-writes',  };
+    effective_permission_mode: 'ask-writes',
+    home_path: '/tmp/allibot-home/agents/agent-1',
+  };
 }
 
 function workspace(): WorkspaceView {

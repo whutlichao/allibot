@@ -111,9 +111,10 @@ function agent(id: string, displayName: string): AgentView {
     max_iterations: 8,
     auto_claim: 1,
     workspace_backend: null,
-
     permission_mode: null,
-    effective_permission_mode: 'ask-writes',    status: 'online',
+    effective_permission_mode: 'ask-writes',
+    home_path: '/tmp/allibot-home/agents/agent-1',
+    status: 'online',
     offline_reason: null,
   };
 }

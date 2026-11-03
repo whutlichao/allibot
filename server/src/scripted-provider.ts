@@ -9,6 +9,7 @@ import type {
 } from './agent-seam.js';
 import { stableJson } from './permissions.js';
 import { codepointLength } from './team-assignments.js';
+import { agentHomeRoot } from './workspace-root.js';
 
 /**
  * The scripted provider double (D4.3): a fixed behaviour injected through the
@@ -261,6 +262,14 @@ function teamReport(input: RoundInput, options: ScriptedProviderOptions): string
     `\n[rules] global:${prompt.rulesBase === null ? 'absent' : 'present'}` +
     ` > system:${prompt.systemPrompt.length > 0 ? 'present' : 'absent'}` +
     ` > project:${prompt.projectSupplement === null ? 'absent' : 'present'}` +
+    // The content is how a process-level test observes which text each section
+    // carried and which one the assembly put last (the project supplement wins
+    // a conflict). JSON keeps the three pieces on one reply line.
+    `\n[rules-content] ${JSON.stringify({
+      global: prompt.rulesBase,
+      system: prompt.systemPrompt.length > 0 ? prompt.systemPrompt : null,
+      project: prompt.projectSupplement,
+    })}` +
     `\n[leader] duties:${prompt.leaderDuties === null ? 'absent' : 'present'}` +
     `\n[tools] ${input.tools.length === 0 ? '-' : input.tools.join(',')}`
   );
@@ -533,6 +542,18 @@ async function workspaceResult(
   } else {
     lines.push('[workspace-skills] absent');
   }
+  // The Agent home is not a project work root (#43 / D5.2): the home AGENTS.md
+  // is human-maintained and outside every file-tool root, so a Write to it is a
+  // hard error (never an approval, never a silent read-only success).
+  lines.push(
+    reportFileCall(
+      'workspace-home-write',
+      await files.Write({
+        path: path.join(agentHomeRoot(input.member.id), 'AGENTS.md'),
+        content: 'hacked',
+      }),
+    ),
+  );
   lines.push(toolsLine);
   return {
     verdict: 'replied',

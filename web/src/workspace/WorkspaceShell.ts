@@ -1,5 +1,6 @@
 import {
   t,
+  type AgentRulesView,
   type ApprovalDecisionInput,
   type ApprovalView,
   type ChannelConfigPatch,
@@ -27,6 +28,7 @@ import { SettingsPanel } from '../components/SettingsPanel.ts';
 import { TaskBoard } from '../task-board/TaskBoard.ts';
 import type { AsyncAction1, AsyncAction2 } from '../async-action.ts';
 import { AgentDetailPanel } from './AgentDetailPanel.ts';
+import { rulesChannelId } from './agent-rules.ts';
 import { ApprovalPanel } from './ApprovalPanel.ts';
 import { permissionScopeKey } from './permissions.ts';
 import { ContextPanel } from './ContextPanel.ts';
@@ -76,6 +78,8 @@ export interface WorkspaceShellProps {
   sopDefinitions?: Record<string, readonly SopDefinitionView[]>;
   /** SOP run snapshots, keyed by definition id. */
   sopRuns?: Record<string, readonly SopRunView[]>;
+  /** Effective rules per Agent id, read on demand when the detail opens. */
+  agentRules?: Record<string, AgentRulesView>;
   viewportWidth?: number;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
@@ -101,6 +105,8 @@ export interface WorkspaceShellProps {
   ) => void | Promise<void>;
   /** The raw Agent permission-mode override write (null = follow). */
   onAgentPermissionModeChange?: (agentId: string, mode: string | null) => void | Promise<void>;
+  /** Read the Agent's effective rules for the open detail; the host fetches. */
+  onAgentRulesNeeded?: (agentId: string, channelId: string | null) => void;
   saveFailed?: boolean;
   onLiveEvent?: LiveEventSink;
 }
@@ -165,6 +171,8 @@ export function WorkspaceShell({
   onApprovalDecision,
   onPermissionRulesChange,
   onAgentPermissionModeChange,
+  agentRules,
+  onAgentRulesNeeded,
   saveFailed = false,
   onLiveEvent,
 }: WorkspaceShellProps) {
@@ -203,6 +211,12 @@ export function WorkspaceShell({
   function openPanel(panel: WorkspacePanel, agentId?: string): void {
     if (panel === 'agent-detail' && agentId !== undefined) {
       setDetailAgentId(agentId);
+      // The rules are a separate read (D2.3); opening the detail asks the host
+      // for them instead of fabricating sections from the workspace snapshot.
+      onAgentRulesNeeded?.(
+        agentId,
+        rulesChannelId(workspace, selectedTargetId),
+      );
     }
     setDrawer(openWorkspacePanel({ activeTargetId: selectedTargetId, drawer }, panel).drawer);
   }
@@ -415,6 +429,7 @@ export function WorkspaceShell({
             key: selectedAgent.id,
             agent: selectedAgent,
             locale,
+            rules: agentRules?.[selectedAgent.id] ?? null,
             onSave:
               onSaveAgent === undefined
                 ? undefined

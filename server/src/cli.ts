@@ -39,6 +39,13 @@ export async function main(argv: readonly string[]): Promise<number> {
 
 async function run(argv: readonly string[]): Promise<number> {
   const options = parseCliArgs(argv);
+  // 全局层根 (#43 / D5.2): `--home-dir` is the process-level override and wins
+  // over `allibot_HOME_DIR`. Exporting it into the process environment keeps one
+  // derivation (`workspaceHomeRoot`) for rules, Agent homes and the skills
+  // second root; nothing writes this value to the database.
+  if (options.homeDir !== undefined) {
+    process.env.allibot_HOME_DIR = options.homeDir;
+  }
   if (options.fixedClock !== undefined) {
     // 固定时钟 injection: one process-wide instant, selected at startup like
     // the scripted adapter. Production keeps the wall clock.
