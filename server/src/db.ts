@@ -1,16 +1,25 @@
 import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { appendMigrationRecord } from './audit.js';
 import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export interface MigrationStep {
   readonly to: number;
   apply: (db: Database.Database) => void;
 }
+
+/**
+ * The owner row seeded by this migration. It is a write-path invariant of the
+ * migration itself: the empty database always has exactly one human member,
+ * and no HTTP route creates it.
+ */
+const OWNER_DISPLAY_NAME = '我';
+const OWNER_AVATAR_SLOT = 0;
 
 /**
  * The production step chain. Every future schema change appends exactly one
@@ -24,6 +33,42 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
     apply(db) {
       db.exec('CREATE TABLE schema_meta (schema_version INTEGER NOT NULL)');
       db.prepare('INSERT INTO schema_meta (schema_version) VALUES (?)').run(1);
+    },
+  },
+  {
+    to: 2,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE member (
+          id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('owner', 'agent')),
+          display_name TEXT NOT NULL,
+          avatar_slot INTEGER NOT NULL CHECK (avatar_slot BETWEEN 0 AND 4),
+          deleted_at TEXT,
+          created_at TEXT NOT NULL
+        );
+
+        -- The owner is the single human row; a fresh database has exactly one.
+        CREATE UNIQUE INDEX member_single_owner ON member (kind) WHERE kind = 'owner';
+
+        CREATE TABLE agent_config (
+          member_id TEXT PRIMARY KEY REFERENCES member (id),
+          role TEXT NOT NULL DEFAULT '',
+          model TEXT,
+          system_prompt TEXT NOT NULL DEFAULT '',
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          context_window INTEGER NOT NULL CHECK (context_window > 0),
+          compression_threshold REAL NOT NULL CHECK (
+            compression_threshold > 0 AND compression_threshold <= 1
+          ),
+          max_iterations INTEGER NOT NULL CHECK (max_iterations > 0),
+          auto_claim INTEGER NOT NULL DEFAULT 1 CHECK (auto_claim IN (0, 1))
+        );
+      `);
+      db.prepare(
+        `INSERT INTO member (id, kind, display_name, avatar_slot, deleted_at, created_at)
+         VALUES (?, 'owner', ?, ?, NULL, ?)`,
+      ).run(randomUUID(), OWNER_DISPLAY_NAME, OWNER_AVATAR_SLOT, new Date().toISOString());
     },
   },
 ];
@@ -112,6 +157,17 @@ export function runMigrations(
   });
 
   return { status: 'migrated', from: currentVersion, to: targetVersion, backupPath };
+}
+
+/**
+ * Open the migrated database of a data directory for the serving process.
+ * better-sqlite3 enables foreign keys by default; the server keeps that on so
+ * `agent_config.member_id` cannot point at a missing member.
+ */
+export function openDatabase(dataDir: string): Database.Database {
+  const db = new Database(databasePath(dataDir));
+  db.pragma('foreign_keys = ON');
+  return db;
 }
 
 /**

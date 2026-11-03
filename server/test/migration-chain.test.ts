@@ -18,7 +18,7 @@ import {
   runCli,
 } from './support.ts';
 
-test('a 1->2 fixture migration backs up the whole data directory and records the audit trail', async () => {
+test('a fixture migration appended to the chain tail backs up the whole data directory and records the audit trail', async () => {
   const parent = await makeTempDir('allibot-chain-');
   const dataDir = path.join(parent, 'data');
   const snapshot = path.join(parent, 'snapshot');
@@ -48,14 +48,14 @@ test('a 1->2 fixture migration backs up the whole data directory and records the
     assert.equal(diff.status, 0, `backup must match the pre-migration data dir; diff: ${diff.stdout}`);
     assert.equal(diff.stdout, '');
 
-    assert.equal(readSchemaVersion(dataDir), 2);
+    assert.equal(readSchemaVersion(dataDir), 3);
 
     const entries = readLedger(dataDir);
-    assert.equal(entries.length, 2, 'the baseline line and the 1->2 line are both kept');
+    assert.equal(entries.length, 2, 'the baseline line and the fixture line are both kept');
     const last = entries[1];
     assert.ok(last !== undefined);
-    assert.equal(last['from'], 1);
-    assert.equal(last['to'], 2);
+    assert.equal(last['from'], 2);
+    assert.equal(last['to'], 3);
     assert.equal(last['result'], 'ok');
     assert.equal(last['backup_path'], backupPath);
     const startedAt = Date.parse(String(last['started_at']));
@@ -71,7 +71,7 @@ test('a 1->2 fixture migration backs up the whole data directory and records the
       const row = db.prepare('SELECT schema_version FROM schema_meta').get() as {
         schema_version: number;
       };
-      assert.equal(row.schema_version, 1);
+      assert.equal(row.schema_version, 2);
     } finally {
       db.close();
     }
@@ -109,8 +109,8 @@ test('a failing migration step rolls the database back and records the failure',
     const last = entries[entries.length - 1];
     assert.ok(last !== undefined);
     assert.equal(last['result'], 'failed');
-    assert.equal(last['from'], 1);
-    assert.equal(last['to'], 2);
+    assert.equal(last['from'], 2);
+    assert.equal(last['to'], 3);
     assert.match(String(last['reason']), /injected migration step failure/);
 
     const backups = readdirSync(parent).filter((name) => name.startsWith('data.backup-'));
@@ -156,8 +156,8 @@ test('backup failure aborts the migration before any schema step runs', async ()
     const last = entries[entries.length - 1];
     assert.ok(last !== undefined);
     assert.equal(last['result'], 'failed');
-    assert.equal(last['from'], 1);
-    assert.equal(last['to'], 2);
+    assert.equal(last['from'], 2);
+    assert.equal(last['to'], 3);
     assert.equal(last['backup_path'], null);
     assert.ok(
       typeof last['reason'] === 'string' && last['reason'].length > 0,
