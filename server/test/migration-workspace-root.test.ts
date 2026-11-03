@@ -114,7 +114,7 @@ function seedV17(dataDir: string): void {
   }
 }
 
-test('a v17 data directory migrates to v18 with the workspace columns and existing rows intact', async () => {
+test('a v17 data directory migrates forward with the workspace columns and existing rows intact', async () => {
   const tmp = await makeTempDir('allibot-migration-workspace-');
   const dataDir = path.join(tmp, 'data');
   const snapshot = path.join(tmp, 'snapshot');
@@ -125,9 +125,9 @@ test('a v17 data directory migrates to v18 with the workspace columns and existi
 
     const migrated = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(migrated.exitCode, 0, migrated.output);
-    assert.match(migrated.stdout, /Schema 版本 18/);
+    assert.match(migrated.stdout, /Schema 版本 20/);
 
-    assert.equal(readSchemaVersion(dataDir), 18, 'the strict +1 step lands at version 18');
+    assert.equal(readSchemaVersion(dataDir), 20, 'the chain lands at the current version');
 
     const siblingBackups = readdirSync(tmp).filter((entry) =>
       entry.startsWith('data.backup-'),
@@ -156,11 +156,11 @@ test('a v17 data directory migrates to v18 with the workspace columns and existi
     const ledger = readLedger(dataDir);
     const last = ledger[ledger.length - 1]!;
     assert.equal(last['from'], 17);
-    assert.equal(last['to'], 18);
+    assert.equal(last['to'], 20);
     assert.equal(last['result'], 'ok');
     assert.equal(typeof last['backup_path'], 'string');
     assert.equal(
-      ledger.filter((row) => row['to'] === 18).length,
+      ledger.filter((row) => row['to'] === 20).length,
       1,
       'exactly one ledger line is appended for this migration',
     );
@@ -262,17 +262,17 @@ test('a v17 data directory migrates to v18 with the workspace columns and existi
   }
 });
 
-test('an empty data directory migrates to v18 with no backup and one ledger line', async () => {
+test('an empty data directory migrates to the current version with no backup and one ledger line', async () => {
   const dataDir = await makeTempDir('allibot-migration-workspace-empty-');
   try {
     const migrated = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(migrated.exitCode, 0, migrated.output);
-    assert.equal(readSchemaVersion(dataDir), 18);
+    assert.equal(readSchemaVersion(dataDir), 20);
     assert.deepEqual(foreignKeyViolations(dataDir), []);
     const ledger = readLedger(dataDir);
     assert.equal(ledger.length, 1);
     assert.equal(ledger[0]!['from'], null);
-    assert.equal(ledger[0]!['to'], 18);
+    assert.equal(ledger[0]!['to'], 20);
     assert.equal(ledger[0]!['result'], 'ok');
     assert.equal(ledger[0]!['backup_path'], null);
   } finally {

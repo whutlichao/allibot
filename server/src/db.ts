@@ -7,7 +7,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 20;
 
 export interface MigrationStep {
   readonly to: number;
@@ -857,6 +857,106 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
           CHECK (allow_local_shell IN (0, 1));
         ALTER TABLE agent_config ADD COLUMN workspace_backend TEXT
           CHECK (workspace_backend IS NULL OR workspace_backend IN ('local', 'docker'));
+      `);
+    },
+  },
+  {
+    // The permission ticket (#44 / T18) adds the three product modes, the
+    // Agent override (NULL = follow the channel) and the rule table. The
+    // mode CHECKs are the vocabulary gate at the database; the write path adds
+    // the readable 400 for BYPASS / DONT_ASK / unknown values. `pattern` is
+    // NOT NULL but may be the empty string: empty means "every call of this
+    // tool". A rule belongs to a real channel or Agent; the triggers are the
+    // backstop for that scope-existence invariant.
+    to: 19,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE channel ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'ask-writes'
+          CHECK (permission_mode IN ('read-only', 'ask-writes', 'trusted-writes'));
+        ALTER TABLE agent_config ADD COLUMN permission_mode TEXT
+          CHECK (permission_mode IS NULL
+                 OR permission_mode IN ('read-only', 'ask-writes', 'trusted-writes'));
+
+        CREATE TABLE permission_rule (
+          id TEXT PRIMARY KEY,
+          scope_kind TEXT NOT NULL CHECK (scope_kind IN ('channel', 'agent')),
+          scope_id TEXT NOT NULL,
+          tool_name TEXT NOT NULL CHECK (length(tool_name) > 0),
+          pattern TEXT NOT NULL,
+          behavior TEXT NOT NULL CHECK (behavior IN ('allow', 'deny', 'ask')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (scope_kind, scope_id, tool_name, pattern)
+        );
+        CREATE INDEX permission_rule_scope ON permission_rule (scope_kind, scope_id);
+
+        -- The scope must name a real channel for channel rules and a real
+        -- agent member for Agent rules; a mismatched or unknown id aborts.
+        CREATE TRIGGER permission_rule_scope_insert
+        BEFORE INSERT ON permission_rule
+        FOR EACH ROW
+        WHEN NOT (
+          (NEW.scope_kind = 'channel'
+            AND EXISTS (SELECT 1 FROM channel WHERE id = NEW.scope_id))
+          OR (NEW.scope_kind = 'agent'
+            AND EXISTS (SELECT 1 FROM member WHERE id = NEW.scope_id AND kind = 'agent'))
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'permission_rule scope does not exist');
+        END;
+
+        CREATE TRIGGER permission_rule_scope_update
+        BEFORE UPDATE ON permission_rule
+        FOR EACH ROW
+        WHEN NOT (
+          (NEW.scope_kind = 'channel'
+            AND EXISTS (SELECT 1 FROM channel WHERE id = NEW.scope_id))
+          OR (NEW.scope_kind = 'agent'
+            AND EXISTS (SELECT 1 FROM member WHERE id = NEW.scope_id AND kind = 'agent'))
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'permission_rule scope does not exist');
+        END;
+      `);
+    },
+  },
+  {
+    // The approval HITL record (#44 / T18). `reply_id` is the reply identity,
+    // not a message foreign key: a TeamAssign / SOP reply may never land a
+    // message. `pending` is the only unresolved state; the other four close
+    // with a `resolved_at`. `sop` carries no target (there is no target
+    // context for a run-scoped approval); the other two contexts must name
+    // their target. Both indexes are the list reads: by status and by target.
+    to: 20,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE approval_request (
+          reply_id TEXT PRIMARY KEY,
+          target_id TEXT REFERENCES target (id),
+          context_kind TEXT NOT NULL
+            CHECK (context_kind IN ('round', 'team-assignment', 'sop')),
+          context_id TEXT,
+          tool_calls TEXT NOT NULL
+            CHECK (json_valid(tool_calls) AND json_type(tool_calls) = 'array'),
+          decisions TEXT NOT NULL DEFAULT '[]'
+            CHECK (json_valid(decisions) AND json_type(decisions) = 'array'),
+          status TEXT NOT NULL
+            CHECK (status IN ('pending', 'confirmed', 'denied', 'failed', 'expired')),
+          requested_at TEXT NOT NULL,
+          resolved_at TEXT,
+          CHECK (
+            (status = 'pending' AND resolved_at IS NULL)
+            OR (status <> 'pending' AND resolved_at IS NOT NULL)
+          ),
+          CHECK (
+            (context_kind = 'sop' AND target_id IS NULL)
+            OR (context_kind <> 'sop' AND target_id IS NOT NULL)
+          )
+        );
+        CREATE INDEX approval_request_status_requested
+          ON approval_request (status, requested_at);
+        CREATE INDEX approval_request_target_requested
+          ON approval_request (target_id, requested_at);
       `);
     },
   },
