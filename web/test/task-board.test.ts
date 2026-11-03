@@ -190,6 +190,15 @@ test('the channel filter narrows the board without changing the one-channel owne
       .every((row) => row.channel_id === CHANNEL_B),
     'filtering only narrows the view; every row keeps its channel_id',
   );
+
+  const filterOptions = [...filtered.matchAll(/<option[^>]*value="([^"]*)"/g)].map(
+    (match) => match[1]!,
+  );
+  assert.deepEqual(
+    filterOptions,
+    ['', CHANNEL_A, CHANNEL_B, ARCHIVED_CHANNEL],
+    'every channel of the reading is filterable, archived channels included',
+  );
 });
 
 test('the transition menu is exactly the backend allowed_transitions', () => {
@@ -215,6 +224,21 @@ test('the transition menu is exactly the backend allowed_transitions', () => {
     !cardHtml(html, 'task-closed').includes('data-transition-to'),
     'closed is terminal: its card has no transition entry',
   );
+});
+
+test('the menu follows the payload even when it disagrees with any built-in table', () => {
+  // 后端写路径才是裁决者：即便载荷给出的集合与任何本地认知不同，看板也只
+  // 暴露载荷里的目标。这条测试盯住「前端不持迁移表副本」。
+  const divergent = task('in_review', {
+    id: 'task-divergent',
+    title: '载荷说可回退',
+    allowed_transitions: ['todo'],
+  });
+
+  const html = render({ tasks: [divergent] });
+  assert.deepEqual(transitionTargets(html, divergent.id), ['todo']);
+  assert.equal(canDropTask(divergent, 'todo'), true);
+  assert.equal(canDropTask(divergent, 'done'), false, 'an unlisted target stays refused');
 });
 
 test('an illegal drop target is refused before any write', async () => {
