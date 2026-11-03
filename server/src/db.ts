@@ -7,7 +7,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 export interface MigrationStep {
   readonly to: number;
@@ -957,6 +957,63 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
           ON approval_request (status, requested_at);
         CREATE INDEX approval_request_target_requested
           ON approval_request (target_id, requested_at);
+      `);
+    },
+  },
+  {
+    // The MCP / Skill ticket (#47 / T19). `mcp_server` is deliberately only a
+    // history and migration source: ADR-0008 makes the Agent-home mcp.json the
+    // single source of truth, and no runtime path reads this table. The UNIQUE
+    // pair is the old declaration key; the config JSON is opaque here because
+    // the file schema owns the entry shape.
+    //
+    // `skill` is metadata only (installation / assembly are #48); bytes never
+    // enter the database, and the hash is a 64-character lowercase SHA-256.
+    //
+    // The consent table is rebuilt (the v14 precedent) because SQLite cannot
+    // alter a CHECK: the runner turns foreign_keys OFF outside the transaction,
+    // the rebuild runs inside it, and `foreign_key_check` gates the commit. The
+    // existing model rows are copied verbatim.
+    to: 21,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE mcp_server (
+          id TEXT PRIMARY KEY,
+          scope_kind TEXT NOT NULL CHECK (scope_kind IN ('channel', 'agent')),
+          scope_id TEXT NOT NULL,
+          name TEXT NOT NULL CHECK (length(name) > 0),
+          transport TEXT NOT NULL CHECK (transport IN ('stdio', 'http', 'sse')),
+          config TEXT NOT NULL CHECK (json_valid(config)),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          created_at TEXT NOT NULL,
+          UNIQUE (scope_kind, scope_id, name)
+        );
+
+        CREATE TABLE skill (
+          id TEXT PRIMARY KEY,
+          member_id TEXT NOT NULL REFERENCES member (id),
+          name TEXT NOT NULL CHECK (length(name) > 0),
+          content_hash TEXT NOT NULL CHECK (
+            length(content_hash) = 64
+            AND content_hash NOT GLOB '*[^0-9a-f]*'
+          ),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          source TEXT NOT NULL CHECK (source IN ('directory', 'zip', 'agents-skills')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (member_id, name)
+        );
+
+        CREATE TABLE remote_consent_scope_v21 (
+          scope_kind TEXT NOT NULL CHECK (scope_kind IN ('model', 'mcp', 'docker')),
+          scope_id TEXT NOT NULL CHECK (length(scope_id) > 0),
+          confirmed_at TEXT NOT NULL,
+          PRIMARY KEY (scope_kind, scope_id)
+        );
+        INSERT INTO remote_consent_scope_v21 (scope_kind, scope_id, confirmed_at)
+          SELECT scope_kind, scope_id, confirmed_at FROM remote_consent_scope;
+        DROP TABLE remote_consent_scope;
+        ALTER TABLE remote_consent_scope_v21 RENAME TO remote_consent_scope;
       `);
     },
   },
