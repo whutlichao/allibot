@@ -1,5 +1,6 @@
 import {
   t,
+  type AgentMcpView,
   type AgentRuleSectionKind,
   type AgentRulesView,
   type AgentView,
@@ -20,6 +21,8 @@ import {
   type AgentDetailTab,
 } from './agent-detail.ts';
 import { ruleSectionStatus } from './agent-rules.ts';
+import { McpPanel } from './McpPanel.ts';
+import type { McpSaveBody } from './mcp-tab.ts';
 import { PermissionRulesEditor } from './PermissionRulesEditor.ts';
 import { agentPermissionModePatch, permissionModeOptions } from './permissions.ts';
 import { StatusPoint } from './StatusPoint.ts';
@@ -59,14 +62,18 @@ export interface AgentDetailPanelProps {
   onPermissionRulesChange?: (rules: PermissionRuleInput[]) => void | Promise<void>;
   /** The raw Agent permission-mode override write (null = follow channel). */
   onPermissionModeChange?: (mode: PermissionMode | null) => void | Promise<void>;
+  /** The Agent-home mcp.json reading (#47); null while it is loading. */
+  mcp?: AgentMcpView | null;
+  /** The one mcp.json write shared by the structured form and raw textarea. */
+  onMcpChange?: (body: McpSaveBody) => Promise<AgentMcpView | void>;
 }
 
 /**
  * Agent 详情页签（Agent Detail Tab）：同一详情面的三个分组，固定顺序
  * 基础信息和配置 → skills → mcp。页签是呈现层状态，不写 URL、不重新
  * 拉取整页；三个分组始终挂载，切换只改变哪一个可见，因此输入框里的
- * 未提交草稿不会丢。skills / mcp 只陈述依赖规格 T11（M2），不放控件、
- * 不伪造数据。
+ * 未提交草稿不会丢。skills 仍是 T11 占位；mcp 上块是结构化条目表单，
+ * 下块是同一份家目录 mcp.json 的原文文本域。
  *
  * 这里用 createElement 而不是 JSX：Node 的类型剥离不处理 JSX，
  * 组件级 SSR 契约测试需要直接 import 本文件。
@@ -82,6 +89,8 @@ export function AgentDetailPanel({
   permissionRules,
   onPermissionRulesChange,
   onPermissionModeChange,
+  mcp = null,
+  onMcpChange,
 }: AgentDetailPanelProps) {
   const [state, setState] = useState(() =>
     initialAgentDetailState(agent, initialTab, initialDraft),
@@ -475,7 +484,7 @@ export function AgentDetailPanel({
     );
   }
 
-  function placeholderPanel(tab: 'skills' | 'mcp'): ReactNode {
+  function placeholderPanel(tab: 'skills'): ReactNode {
     return createElement(
       'div',
       {
@@ -494,6 +503,19 @@ export function AgentDetailPanel({
         { className: 'agent-detail__placeholder-body' },
         t(locale, 'workspace.agentDetail.t11.body'),
       ),
+    );
+  }
+
+  function mcpPanel(): ReactNode {
+    return createElement(
+      'div',
+      {
+        className: 'agent-detail__panel',
+        role: 'tabpanel',
+        'data-tab-panel': 'mcp',
+        hidden: state.tab !== 'mcp',
+      },
+      createElement(McpPanel, { locale, mcp, onSave: onMcpChange }),
     );
   }
 
@@ -553,6 +575,6 @@ export function AgentDetailPanel({
         ),
     basicPanel(),
     placeholderPanel('skills'),
-    placeholderPanel('mcp'),
+    mcpPanel(),
   );
 }
