@@ -4,10 +4,9 @@ import type { RoundInput, RoundProvider, RoundResult } from './agent-seam.js';
 import { tFromDb } from './copy.js';
 import {
   PROVIDER_CREDENTIAL_ENV,
-  parseModelIdentifier,
+  checkProviderAvailability,
   providerBaseUrl,
   readCredential,
-  readProviderConsent,
 } from './providers.js';
 
 /**
@@ -47,26 +46,45 @@ export function resolveAvailability(
   input: RoundInput,
   env: NodeJS.ProcessEnv,
 ): AvailabilityResult {
-  const parsed = parseModelIdentifier(input.member.model);
-  if (parsed === null) {
-    return { ok: false, reason: tFromDb(db, 'round.model.missing') };
+  const availability = checkProviderAvailability(db, input.member.model, env);
+  if (!availability.ok) {
+    switch (availability.reason) {
+      case 'model-missing':
+        return { ok: false, reason: tFromDb(db, 'round.model.missing') };
+      case 'consent-missing':
+        return {
+          ok: false,
+          reason: tFromDb(db, 'round.consent.missing', { provider: availability.provider }),
+        };
+      case 'credential-missing':
+        return {
+          ok: false,
+          reason: tFromDb(db, 'round.credential.missing', {
+            env: availability.credentialEnv,
+          }),
+        };
+    }
   }
-  const { provider, model } = parsed;
-  if (readProviderConsent(db, provider) === null) {
-    return { ok: false, reason: tFromDb(db, 'round.consent.missing', { provider }) };
-  }
-  const credential = readCredential(provider, env);
+  // The check above proved the credential present; reading it again keeps the
+  // availability answer free of the secret, because the status point reads the
+  // same answer and must never hold a credential.
+  const credential = readCredential(availability.provider, env);
   if (credential === null) {
     return {
       ok: false,
       reason: tFromDb(db, 'round.credential.missing', {
-        env: PROVIDER_CREDENTIAL_ENV[provider],
+        env: PROVIDER_CREDENTIAL_ENV[availability.provider],
       }),
     };
   }
   return {
     ok: true,
-    available: { provider, model, credential, baseUrl: providerBaseUrl(provider, env) },
+    available: {
+      provider: availability.provider,
+      model: availability.model,
+      credential,
+      baseUrl: providerBaseUrl(availability.provider, env),
+    },
   };
 }
 
