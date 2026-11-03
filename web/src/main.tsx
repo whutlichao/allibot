@@ -1,8 +1,18 @@
-import { t, type WorkspaceSettingsView } from '@allibot/shared';
+import {
+  t,
+  type WorkspaceSettingsView,
+  type WorkspaceView,
+} from '@allibot/shared';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/index.css';
 import { App } from './App.ts';
+import {
+  allNavEntries,
+  buildWorkspaceNav,
+  initialTargetId,
+} from './workspace/model.ts';
+import { shouldRefreshWorkspace } from './workspace/message-sync.ts';
 
 const DEFAULT_SETTINGS: WorkspaceSettingsView = {
   locale: 'zh-CN',
@@ -17,14 +27,12 @@ if (rootElement === null) {
 
 const root = createRoot(rootElement);
 
-/** 工作区设置落库、后端是唯一正本：壳启动时读同一份取值。 */
-async function readSettings(): Promise<WorkspaceSettingsView> {
-  const response = await fetch('/api/settings');
-  if (!response.ok) {
-    throw new Error(`GET /api/settings failed with ${response.status}`);
-  }
-  return (await response.json()) as WorkspaceSettingsView;
-}
+/** The shell's whole state: one workspace reading, one selected target. */
+let currentWorkspace: WorkspaceView | null = null;
+let currentSettings: WorkspaceSettingsView = DEFAULT_SETTINGS;
+let currentTargetId: string | null = null;
+let currentViewportWidth = window.innerWidth;
+let refreshGeneration = 0;
 
 async function writeSettings(
   patch: Partial<WorkspaceSettingsView>,
@@ -40,27 +48,75 @@ async function writeSettings(
   return (await response.json()) as WorkspaceSettingsView;
 }
 
-function render(settings: WorkspaceSettingsView, failed: { load?: boolean; save?: boolean } = {}): void {
+function render(saveFailed = false): void {
   root.render(
     <StrictMode>
       <App
-        settings={settings}
-        saveFailed={failed.save === true}
+        settings={currentSettings}
+        workspace={currentWorkspace ?? undefined}
+        activeTargetId={currentTargetId}
+        viewportWidth={currentViewportWidth}
+        saveFailed={saveFailed}
+        onSelectTarget={(targetId) => {
+          currentTargetId = targetId;
+          render();
+        }}
         onSettingsChange={(patch) => {
-          // 先按返回值重渲染：后端是正本，不乐观地本地改写。
+          // 后端是正本：先读返回值，再重渲染。
           writeSettings(patch)
-            .then((saved) => render(saved))
-            .catch(() => render(settings, { save: true }));
+            .then((saved) => {
+              currentSettings = saved;
+              if (currentWorkspace !== null) {
+                currentWorkspace = { ...currentWorkspace, settings: saved };
+              }
+              render();
+            })
+            .catch(() => render(true));
+        }}
+        onLiveEvent={(event) => {
+          if (shouldRefreshWorkspace(event.event)) {
+            void refreshWorkspace().catch((error: unknown) => {
+              console.error('workspace refresh failed', error);
+            });
+          }
         }}
       />
     </StrictMode>,
   );
 }
 
-readSettings()
-  .then((settings) => render(settings))
-  .catch(() => {
-    // 后端不可达时壳仍要显示可读文案；它说明设置没读到，而不是静默空白。
-    console.error(t(DEFAULT_SETTINGS.locale, 'settings.error.load'));
-    render(DEFAULT_SETTINGS, { load: true, save: true });
-  });
+/**
+ * Re-read the one workspace reading (D1.9): SSE frames carry facts, not the
+ * reading itself, so unread / task / status changes re-fetch the snapshot
+ * instead of growing a local count.
+ */
+async function refreshWorkspace(): Promise<void> {
+  const generation = ++refreshGeneration;
+  const response = await fetch('/api/workspace');
+  if (!response.ok) {
+    throw new Error(`GET /api/workspace failed with ${response.status}`);
+  }
+  const reading = (await response.json()) as WorkspaceView;
+  if (generation !== refreshGeneration) {
+    return;
+  }
+
+  currentWorkspace = reading;
+  currentSettings = reading.settings;
+  const targets = new Set(allNavEntries(buildWorkspaceNav(reading)).map((entry) => entry.targetId));
+  if (currentTargetId === null || !targets.has(currentTargetId)) {
+    currentTargetId = initialTargetId(reading);
+  }
+  render();
+}
+
+window.addEventListener('resize', () => {
+  currentViewportWidth = window.innerWidth;
+  render();
+});
+
+refreshWorkspace().catch(() => {
+  // 后端不可达时壳仍显示可读文案；它说明读数没读到，而不是静默空白。
+  console.error(t(DEFAULT_SETTINGS.locale, 'settings.error.load'));
+  render(true);
+});
