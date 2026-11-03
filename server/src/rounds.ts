@@ -3,12 +3,14 @@ import type Database from 'better-sqlite3';
 import type {
   RoundInput,
   RoundMember,
+  RoundMemory,
   RoundMessage,
   RoundProvider,
   RoundResult,
   WakeReason,
 } from './agent-seam.js';
 import { tFromDb } from './copy.js';
+import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
 
@@ -278,8 +280,10 @@ export async function runRound(
   const startedAt = new Date().toISOString();
 
   let result: RoundResult;
+  let roundInput: RoundInput | null = null;
   try {
-    result = await provider.runRound(readRoundInput(db, wake));
+    roundInput = readRoundInput(db, wake);
+    result = await provider.runRound(roundInput);
   } catch (error) {
     // A wake that arrived after the adapter settled but before this round's
     // transaction commits still folds into this round; a crash here must not
@@ -289,7 +293,7 @@ export async function runRound(
 
   let committed: RoundOutcomeRow;
   try {
-    committed = commitRound(db, wake, turn, startedAt, result);
+    committed = commitRound(db, wake, turn, startedAt, result, roundInput);
   } finally {
     inFlight.delete(wake.memberId);
   }
@@ -347,12 +351,44 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     body: row.body,
   }));
 
-  return { member, targetId: wake.targetId, baseSeq: wake.fromSeq, reason: wake.reason, messages };
+  // Recall happens before the round runs and only informs its understanding
+  // (D5.2): it reads this round's input (the new messages, the task title and
+  // the recent context) and never writes, wakes or spends budget.
+  const memories = recallForRound(db, member.id, wake.targetId, messages);
+  const systemPrompt = assembleSystemPrompt(db, member, memories);
+
+  return {
+    member,
+    targetId: wake.targetId,
+    baseSeq: wake.fromSeq,
+    reason: wake.reason,
+    messages,
+    memories,
+    systemPrompt,
+  };
+}
+
+/**
+ * The one prompt assembly path on the seam: the stored
+ * `agent_config.system_prompt`, then the memory section when this round
+ * recalled cards. The memory section is appended only — it never replaces the
+ * stored prompt, so a member without recall reads exactly as it did before.
+ */
+function assembleSystemPrompt(
+  db: Database.Database,
+  member: RoundMember,
+  memories: readonly RoundMemory[],
+): string {
+  const memorySection = memoryPromptSection(db, memories);
+  return [member.system_prompt.trim(), ...(memorySection === null ? [] : [memorySection])]
+    .filter((section) => section.length > 0)
+    .join('\n\n');
 }
 
 /**
  * Everything a round writes shares one transaction: the optional join, the
- * reply, the folded `merged` row and the round's own outcome.
+ * reply, the folded `merged` row, the round's own outcome and the one memory
+ * card the round closes with.
  *
  * The wakes that arrived while this round was running are not queued and not
  * replayed: they fold into exactly one `merged` row, whose base seq is the
@@ -364,11 +400,26 @@ function commitRound(
   turn: Turn,
   startedAt: string,
   result: RoundResult,
+  roundInput: RoundInput | null,
 ): RoundOutcomeRow {
   const write = db.transaction((): RoundOutcomeRow => {
     const joinedSeq = commitJoin(db, wake, result);
-    const replySeq = commitReply(db, wake, result);
+    const reply = commitReply(db, wake, result);
     const finishedAt = new Date().toISOString();
+
+    // Long-term memory is written back deterministically at round close
+    // (D5.1): the trigger excerpt plus this member's reply excerpt, or the
+    // "no reply" wording for an ignored / failed round. It never calls a model
+    // and has no switch; a round whose input could not even be read writes no
+    // card, because nothing was understood.
+    if (roundInput !== null) {
+      writeRoundMemoryCard(db, {
+        memberId: wake.memberId,
+        targetId: wake.targetId,
+        triggerBody: triggerBody(roundInput),
+        reply,
+      });
+    }
 
     if (turn.repeats.length > 0) {
       insertOutcome(db, {
@@ -390,7 +441,7 @@ function commitRound(
       wake,
       baseSeq: wake.fromSeq,
       status: result.verdict,
-      reason: roundReason(db, wake, result, joinedSeq, replySeq),
+      reason: roundReason(db, wake, result, joinedSeq, reply?.seq ?? null),
       merged: 0,
       startedAt,
       finishedAt,
@@ -442,7 +493,7 @@ function commitJoin(db: Database.Database, wake: Wake, result: RoundResult): num
     'system',
     ownerId(db),
     tFromDb(db, 'system.member.piercedJoin', { name: member.display_name }),
-  );
+  ).seq;
 }
 
 function readTargetKind(db: Database.Database, targetId: string): string {
@@ -452,19 +503,35 @@ function readTargetKind(db: Database.Database, targetId: string): string {
   return row?.kind ?? '';
 }
 
-function commitReply(db: Database.Database, wake: Wake, result: RoundResult): number | null {
+function commitReply(
+  db: Database.Database,
+  wake: Wake,
+  result: RoundResult,
+): { id: string; seq: number; body: string } | null {
   if (result.verdict !== 'replied' || !hasBody(result)) {
     return null;
   }
   // 一轮 ↔ 至多一条 target 消息: the seam may hand over several pending
   // replies, and this write path lands the first one. Streaming the rest is
   // the AG-UI ticket's shape, not a second message per round here.
-  return insertMessage(db, wake.targetId, 'agent', wake.memberId, result.replies[0]!.trim());
+  const body = result.replies[0]!.trim();
+  return { ...insertMessage(db, wake.targetId, 'agent', wake.memberId, body), body };
 }
 
 function hasBody(result: RoundResult): boolean {
   const body = result.replies[0];
   return result.verdict === 'replied' && body !== undefined && body.trim().length > 0;
+}
+
+/**
+ * The body the round was woken by: the message at the wake's `baseSeq`. A round
+ * whose first read message already moved past it (a pierced wake is the only
+ * shape today) falls back to the oldest message it did read, so the card always
+ * carries a trigger excerpt.
+ */
+function triggerBody(input: RoundInput): string {
+  const exact = input.messages.find((message) => message.seq === input.baseSeq);
+  return exact?.body ?? input.messages[0]?.body ?? '';
 }
 
 /**
@@ -480,8 +547,8 @@ function insertMessage(
   kind: 'agent' | 'system',
   authorMemberId: string,
   body: string,
-): number {
-  return insertMessageRow(db, { targetId, kind, authorMemberId, body }).seq;
+): { id: string; seq: number } {
+  return insertMessageRow(db, { targetId, kind, authorMemberId, body });
 }
 
 function ownerId(db: Database.Database): string {

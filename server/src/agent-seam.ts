@@ -7,6 +7,11 @@
  * ticket ships, and the real provider adapter arrives behind the same
  * interface without changing it. Nothing here knows about HTTP, SQLite or the
  * scripted double's four behaviours.
+ *
+ * Long-term memory (#17) extends the input side only: a round now also carries
+ * the memory cards recalled for it and the assembled system prompt, the same
+ * way a task-thread round carries task context. The output shape — zero or
+ * more pending replies plus one round result — is unchanged.
  */
 
 /**
@@ -48,6 +53,28 @@ export interface RoundInput {
   reason: WakeReason;
   /** The target's messages from `baseSeq` on, oldest first, read at round start. */
   messages: readonly RoundMessage[];
+  /**
+   * The member's long-term memory cards recalled for this round (D5.2), best
+   * match first. They are assembled into the prompt's memory section by the
+   * seam; recall only informs this round's understanding and changes nothing
+   * else about it.
+   */
+  memories: readonly RoundMemory[];
+  /**
+   * The assembled system prompt the adapter hands the model: the stored
+   * `agent_config.system_prompt` plus the memory section when this round
+   * recalled cards. The round input carries it so the seam stays the one prompt
+   * assembly path.
+   */
+  systemPrompt: string;
+}
+
+/** One recalled memory card as a round reads it. */
+export interface RoundMemory {
+  id: string;
+  content: string;
+  /** The card keywords this round's input matched. */
+  matched_keywords: readonly string[];
 }
 
 /** The three verdicts a member round can reach in this ticket. */

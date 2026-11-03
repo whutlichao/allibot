@@ -69,7 +69,7 @@ test('migrating an empty data dir adds the setting table seeded with the three w
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 8);
+    assert.equal(readSchemaVersion(dataDir), 9);
     const tables = tableNames(dataDir);
     assert.ok(tables.includes('setting'), `setting table is missing; tables: ${tables.join(', ')}`);
     assert.deepEqual(columnNames(dataDir, 'setting'), ['key', 'value']);
@@ -84,7 +84,7 @@ test('migrating an empty data dir adds the setting table seeded with the three w
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 8);
+    assert.equal(entries[0]?.['to'], 9);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -134,7 +134,7 @@ test('a version 5 data dir upgrades to version 6 with a backup that keeps messag
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 8);
+    assert.equal(readSchemaVersion(dataDir), 9);
     assert.ok(tableNames(dataDir).includes('setting'));
     assert.ok(
       tableNames(dataDir).includes('attachment'),
@@ -181,7 +181,7 @@ test('a version 5 data dir upgrades to version 6 with a backup that keeps messag
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 5);
-    assert.equal(last?.['to'], 8);
+    assert.equal(last?.['to'], 9);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);
