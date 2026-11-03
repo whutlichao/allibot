@@ -168,6 +168,9 @@ export const ZH_CN = {
   // 频道里的指针消息正文：它是 system，不计未读、不唤醒。
   'task.pointer.body': { text: '已创建任务「{title}」，在这里进入任务线程。', params: ['title'] },
 
+  // 提醒到点的系统事件消息正文：作者恒为 owner，不唤醒、不计未读。
+  'reminder.due.body': { text: '提醒到点：{text}', params: ['text'] },
+
   // 任务状态在系统事件消息里的可读标签（承重词，不用看板列名替代）。
   'task.status.todo': { text: '待认领', params: [] },
   'task.status.inProgress': { text: '进行中', params: [] },

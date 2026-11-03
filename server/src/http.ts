@@ -43,6 +43,7 @@ import {
   parseProviderParam,
   remoteDataFlowView,
 } from './providers.js';
+import { createReminder, deleteReminder, listReminders } from './reminders.js';
 import { dispatchWakes, type InFlightRounds } from './rounds.js';
 import { parseSearchQuery, searchWorkspace } from './search.js';
 import { getSettings, updateSettings } from './settings.js';
@@ -174,6 +175,7 @@ const CHANNEL_ID = '([^/]+)';
 const TARGET_ID = '([^/]+)';
 const ATTACHMENT_ID = '([^/]+)';
 const TASK_ID = '([^/]+)';
+const REMINDER_ID = '([^/]+)';
 
 const ROUTES: readonly Route[] = [
   {
@@ -387,6 +389,33 @@ const ROUTES: readonly Route[] = [
         200,
         updateTask(db, decodeId(params[0]), await readJsonBody(request)),
       );
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/reminders$/,
+    handle: async (_request, response, { db }) => {
+      sendJson(response, 200, listReminders(db));
+    },
+  },
+  {
+    // Creating a reminder is a pure config write: no message, no wake, no
+    // budget change, no target and no unread. The due fact arrives later.
+    method: 'POST',
+    pattern: /^\/api\/reminders$/,
+    handle: async (request, response, { db }) => {
+      sendJson(response, 201, createReminder(db, await readJsonBody(request)));
+    },
+  },
+  {
+    // Deleting a delivered reminder leaves its system message in place: the
+    // message log is append-only.
+    method: 'DELETE',
+    pattern: new RegExp(`^/api/reminders/${REMINDER_ID}$`),
+    handle: async (_request, response, { db }, ...params) => {
+      deleteReminder(db, decodeId(params[0]));
+      response.writeHead(204);
+      response.end();
     },
   },
   {

@@ -1,5 +1,6 @@
 import { parseArgs } from 'node:util';
 import { DEFAULT_SSE_LIFETIME_MS } from './events.js';
+import { DEFAULT_REMINDER_TICK_MS } from './reminders.js';
 import { SCRIPTED_BEHAVIORS, type ScriptedBehavior } from './scripted-provider.js';
 
 export type CliCommand = 'serve' | 'migrate';
@@ -53,6 +54,11 @@ export interface CliOptions {
    * injects a short value instead of waiting.
    */
   sseLifetimeMs: number;
+  /**
+   * How often the process looks for due reminders. Production keeps the
+   * 30-second default; a test injects a short interval instead of waiting.
+   */
+  reminderTickMs: number;
 }
 
 const DEFAULT_PORT = 3000;
@@ -73,7 +79,7 @@ const USAGE =
   '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task>] ' +
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
-  '[--sse-lifetime-ms <ms>]';
+  '[--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -92,6 +98,7 @@ export function parseCliArgs(
       'scripted-echo-prompt': { type: 'boolean' },
       'scripted-report-context': { type: 'boolean' },
       'sse-lifetime-ms': { type: 'string' },
+      'reminder-tick-ms': { type: 'string' },
     },
     strict: true,
     allowPositionals: true,
@@ -112,6 +119,7 @@ export function parseCliArgs(
     scriptedEchoPrompt: values['scripted-echo-prompt'] === true,
     scriptedReportContext: values['scripted-report-context'] === true,
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
+    reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),
   };
 }
 
@@ -184,6 +192,17 @@ function parseDelayMs(raw: string | undefined): number {
   }
   if (!/^\d+$/.test(raw)) {
     throw new Error(`invalid --scripted-delay-ms value: ${raw}`);
+  }
+  return Number(raw);
+}
+
+/** A tick interval is a positive integer; 0 would spin the timer. */
+function parseReminderTickMs(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_REMINDER_TICK_MS;
+  }
+  if (!/^\d+$/.test(raw) || Number(raw) === 0) {
+    throw new Error(`invalid --reminder-tick-ms value: ${raw}`);
   }
   return Number(raw);
 }

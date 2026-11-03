@@ -315,6 +315,34 @@ export interface WorkspaceUnreadView {
   unread_by_target: Record<string, number>;
 }
 
+/**
+ * 提醒 (Reminder) as the human face returns it. `due_at_local` is the fixed
+ * `YYYY-MM-DDTHH:mm` wall time the owner set, interpreted in the machine's
+ * local timezone; `created_at` is the UTC audit stamp. `delivered_at` is the
+ * due marker (NULL = not due yet) and `missed` records a reminder the backend
+ * found more than 24 hours late, which is marked but never delivered.
+ */
+export interface ReminderView {
+  id: string;
+  channel_id: string | null;
+  due_at_local: string;
+  text: string;
+  delivered_at: string | null;
+  missed: boolean;
+  created_at: string;
+}
+
+/**
+ * `GET /api/reminders` groups the rows by their due state: pending has no
+ * delivered_at, delivered has one inside the 24-hour catch-up window, and
+ * missed is a reminder found beyond that window.
+ */
+export interface ReminderListView {
+  pending: ReminderView[];
+  delivered: ReminderView[];
+  missed: ReminderView[];
+}
+
 export {
   MESSAGE_DENSITIES,
   SUPPORTED_LOCALES,
