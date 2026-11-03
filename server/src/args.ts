@@ -5,7 +5,7 @@ import { DEFAULT_SSE_LIFETIME_MS } from './events.js';
 import { DEFAULT_REMINDER_TICK_MS } from './reminders.js';
 import { SCRIPTED_BEHAVIORS, type ScriptedBehavior } from './scripted-provider.js';
 
-export type CliCommand = 'serve' | 'migrate';
+export type CliCommand = 'serve' | 'migrate' | 'export-mcp';
 
 /**
  * The member-face adapter the server runs. `model` is the production default:
@@ -111,6 +111,12 @@ export interface CliOptions {
    * lifetime / reminder tick injections.
    */
   approvalTimeoutMs: number;
+  /**
+   * `export-mcp` write switch. Writing requires both `--apply` and `--yes`;
+   * the command defaults to a dry run (D6.2).
+   */
+  apply: boolean;
+  yes: boolean;
 }
 
 const DEFAULT_PORT = 3000;
@@ -125,7 +131,8 @@ const PROVIDER_MODES: readonly ProviderMode[] = ['scripted', 'model'];
 const DEFAULT_SCRIPTED_PROVIDER: ScriptedBehavior = 'ignore';
 const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
-  'usage: allibot <serve|--migrate> [--data-dir <path>] [--home-dir <path>] [--port <port>] ' +
+  'usage: allibot <serve|--migrate|export-mcp> [--data-dir <path>] [--home-dir <path>] ' +
+  '[--port <port>] [--apply] [--yes] ' +
   '[--provider <scripted|model>] ' +
   '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|workspace|permission|mcp-approval|mcp|team-approval>] ' +
   '[--scripted-delay-ms <ms>] ' +
@@ -163,6 +170,8 @@ export function parseCliArgs(
       'reminder-tick-ms': { type: 'string' },
       'fixed-clock': { type: 'string' },
       'approval-timeout-ms': { type: 'string' },
+      apply: { type: 'boolean' },
+      yes: { type: 'boolean' },
     },
     strict: true,
     allowPositionals: true,
@@ -210,6 +219,8 @@ export function parseCliArgs(
     reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),
     fixedClock: parseFixedClock(values['fixed-clock']),
     approvalTimeoutMs: parseApprovalTimeoutMs(values['approval-timeout-ms']),
+    apply: values.apply === true,
+    yes: values.yes === true,
   };
 }
 
@@ -237,6 +248,12 @@ function resolveCommand(migrate: boolean, positional: string | undefined): CliCo
   }
   if (positional === 'serve') {
     return 'serve';
+  }
+  if (positional === 'export-mcp') {
+    return 'export-mcp';
+  }
+  if (positional === 'migrate-mcp') {
+    throw new Error('migrate-mcp 已退役；请使用 export-mcp（默认 dry-run）。');
   }
   if (positional === undefined) {
     throw new Error(USAGE);

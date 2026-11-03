@@ -418,7 +418,7 @@ function sortEntries(entries: readonly McpServerEntry[]): McpServerEntry[] {
   return [...entries].sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 }
 
-function sameEntries(
+export function sameEntries(
   left: readonly McpServerEntry[],
   right: readonly McpServerEntry[],
 ): boolean {
