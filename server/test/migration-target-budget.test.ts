@@ -45,14 +45,14 @@ test('migrating an empty data dir adds the per-target budget table', async () =>
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
     assert.deepEqual(columnNames(dataDir, 'target_budget'), TARGET_BUDGET_COLUMNS);
     assert.equal(countRows(dataDir, 'target_budget'), 0, 'the migration seeds no budget rows');
 
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 9);
+    assert.equal(entries[0]?.['to'], 10);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -105,21 +105,21 @@ test('target_budget keeps one row per target and refuses a used count above the 
   }
 });
 
-test('a version 8 data dir upgrades to version 9 with a backup that keeps channel and message rows', async () => {
+test('a version 9 data dir upgrades to version 10 with a backup that keeps channel and message rows', async () => {
   const parent = await makeTempDir('allibot-target-budget-upgrade-');
   const dataDir = path.join(parent, 'data');
 
   try {
     mkdirSync(dataDir);
-    const baseline = spawnSync(process.execPath, [MIGRATION_FIXTURE, 'v8', dataDir], {
+    const baseline = spawnSync(process.execPath, [MIGRATION_FIXTURE, 'v9', dataDir], {
       encoding: 'utf8',
     });
     assert.equal(
       baseline.status,
       0,
-      `the version-8 fixture should succeed; output: ${baseline.stdout}${baseline.stderr}`,
+      `the version-9 fixture should succeed; output: ${baseline.stdout}${baseline.stderr}`,
     );
-    assert.equal(readSchemaVersion(dataDir), 8);
+    assert.equal(readSchemaVersion(dataDir), 9);
 
     const seeded = new Database(path.join(dataDir, 'allibot.db'));
     try {
@@ -149,7 +149,7 @@ test('a version 8 data dir upgrades to version 9 with a backup that keeps channe
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
     assert.deepEqual(columnNames(dataDir, 'target_budget'), TARGET_BUDGET_COLUMNS);
     assert.equal(countRows(dataDir, "message WHERE id = 'kept-message'"), 1);
     assert.equal(countRows(dataDir, 'target_budget'), 0, 'the upgrade seeds no budget row');
@@ -165,7 +165,7 @@ test('a version 8 data dir upgrades to version 9 with a backup that keeps channe
           schema_version: number;
         }
       ).schema_version;
-      assert.equal(version, 8, 'the backup keeps the pre-migration schema version');
+      assert.equal(version, 9, 'the backup keeps the pre-migration schema version');
       const tables = (
         backupDb.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
           name: string;
@@ -178,8 +178,8 @@ test('a version 8 data dir upgrades to version 9 with a backup that keeps channe
 
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
-    assert.equal(last?.['from'], 8);
-    assert.equal(last?.['to'], 9);
+    assert.equal(last?.['from'], 9);
+    assert.equal(last?.['to'], 10);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);

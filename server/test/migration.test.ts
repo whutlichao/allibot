@@ -24,7 +24,7 @@ test('migrate initializes an empty data directory at the current schema version 
     const result = runCli(['--migrate', '--data-dir', dataDir]);
 
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
     assert.equal(existsSync(path.join(dataDir, 'schema-migrations.jsonl')), true);
 
     const entries = readLedger(dataDir);
@@ -33,7 +33,7 @@ test('migrate initializes an empty data directory at the current schema version 
     const entry = entries[0];
     assert.ok(entry !== undefined);
     assert.equal(entry['from'], null);
-    assert.equal(entry['to'], 9);
+    assert.equal(entry['to'], 10);
     assert.equal(entry['result'], 'ok');
     assert.equal(entry['backup_path'], null);
 
@@ -60,7 +60,7 @@ test('initializing a non-empty data directory backs it up first without copying 
     const result = runCli(['--migrate', '--data-dir', dataDir]);
 
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
 
     const backups = readdirSync(parent).filter((name) => name.startsWith('data.backup-'));
     assert.equal(backups.length, 1, `expected exactly one backup directory, saw: ${backups.join(', ')}`);
@@ -73,7 +73,7 @@ test('initializing a non-empty data directory backs it up first without copying 
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 9);
+    assert.equal(entries[0]?.['to'], 10);
     assert.equal(entries[0]?.['result'], 'ok');
     assert.equal(entries[0]?.['backup_path'], backupPath);
   } finally {
@@ -91,8 +91,8 @@ test('migrate is idempotent: a second run reports the current version and append
     const second = runCli(['--migrate', '--data-dir', dataDir]);
 
     assert.equal(second.exitCode, 0, `second migrate should exit 0; output: ${second.output}`);
-    assert.match(second.output, /已是 Schema 版本 9/);
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.match(second.output, /已是 Schema 版本 10/);
+    assert.equal(readSchemaVersion(dataDir), 10);
     assert.deepEqual(
       readLedger(dataDir),
       ledgerAfterFirst,

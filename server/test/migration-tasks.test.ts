@@ -108,7 +108,7 @@ test('migrating an empty data dir adds the task table with its guards and the po
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
     const tables = tableNames(dataDir);
     assert.ok(tables.includes('task'), `task table is missing; tables: ${tables.join(', ')}`);
     assert.deepEqual(columnNames(dataDir, 'task'), TASK_COLUMNS);
@@ -138,7 +138,7 @@ test('migrating an empty data dir adds the task table with its guards and the po
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 9);
+    assert.equal(entries[0]?.['to'], 10);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -188,7 +188,7 @@ test('a version 6 data dir upgrades to the current version with a backup that ke
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
     assert.deepEqual(columnNames(dataDir, 'task'), TASK_COLUMNS);
     assert.equal(countRows(dataDir, "message WHERE id = 'kept-message'"), 1);
 
@@ -217,7 +217,7 @@ test('a version 6 data dir upgrades to the current version with a backup that ke
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 6);
-    assert.equal(last?.['to'], 9);
+    assert.equal(last?.['to'], 10);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);
