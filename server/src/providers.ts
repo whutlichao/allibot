@@ -90,56 +90,6 @@ export function readCredential(provider: AgentProvider, env: NodeJS.ProcessEnv):
   return raw === undefined || raw.trim().length === 0 ? null : raw;
 }
 
-/** The resolved inputs one model call needs. The credential never leaves the process. */
-export interface ProviderAvailability {
-  provider: AgentProvider;
-  model: string;
-  /** The credential the request carries; never logged, never rendered. */
-  credential: string;
-  baseUrl: string;
-}
-
-export type AvailabilityResult =
-  | { ok: true; available: ProviderAvailability }
-  | { ok: false; reason: string };
-
-/**
- * 可用性 (Availability): whether an Agent can take a model round at all.
- *
- * D1.12 defines the offline conditions — no model configured, the remote
- * provider's data-flow consent not confirmed, the credential missing — and the
- * claim gate (D1.13) reads exactly this `ok`. The three refusals keep their own
- * readable copy; this function never opens a socket and never exposes a
- * credential value.
- */
-export function resolveAgentAvailability(
-  db: Database.Database,
-  model: string | null,
-  env: NodeJS.ProcessEnv,
-): AvailabilityResult {
-  const parsed = parseModelIdentifier(model);
-  if (parsed === null) {
-    return { ok: false, reason: tFromDb(db, 'round.model.missing') };
-  }
-  const { provider, model: modelName } = parsed;
-  if (readProviderConsent(db, provider) === null) {
-    return { ok: false, reason: tFromDb(db, 'round.consent.missing', { provider }) };
-  }
-  const credential = readCredential(provider, env);
-  if (credential === null) {
-    return {
-      ok: false,
-      reason: tFromDb(db, 'round.credential.missing', {
-        env: PROVIDER_CREDENTIAL_ENV[provider],
-      }),
-    };
-  }
-  return {
-    ok: true,
-    available: { provider, model: modelName, credential, baseUrl: providerBaseUrl(provider, env) },
-  };
-}
-
 /** 一个 provider 实际调用的端点：环境变量覆盖优先，否则是默认接收方。 */
 export function providerBaseUrl(provider: AgentProvider, env: NodeJS.ProcessEnv): string {
   const override = env[PROVIDER_BASE_URL_ENV[provider]];
@@ -161,6 +111,48 @@ export function readProviderConsent(
     )
     .get(provider) as { confirmed_at: string } | undefined;
   return row?.confirmed_at ?? null;
+}
+
+/**
+ * The first availability fact that stops a provider call. This one function is
+ * read by both the real adapter (which refuses the round) and the status point
+ * (which reads offline), so "the Agent is offline because X" and "the round was
+ * refused because X" can never name different facts. The order is the order the
+ * adapter refuses in: no model, then no consent, then no credential.
+ */
+export type ProviderAvailability =
+  | { ok: true; provider: AgentProvider; model: string }
+  | { ok: false; reason: 'model-missing' }
+  | { ok: false; reason: 'consent-missing'; provider: AgentProvider }
+  | {
+      ok: false;
+      reason: 'credential-missing';
+      provider: AgentProvider;
+      credentialEnv: string;
+    };
+
+/** Whether this model may call its provider right now (D1.10 / D1.12). */
+export function checkProviderAvailability(
+  db: Database.Database,
+  model: string | null,
+  env: NodeJS.ProcessEnv,
+): ProviderAvailability {
+  const parsed = parseModelIdentifier(model);
+  if (parsed === null) {
+    return { ok: false, reason: 'model-missing' };
+  }
+  if (readProviderConsent(db, parsed.provider) === null) {
+    return { ok: false, reason: 'consent-missing', provider: parsed.provider };
+  }
+  if (credentialStatus(parsed.provider, env) === 'missing') {
+    return {
+      ok: false,
+      reason: 'credential-missing',
+      provider: parsed.provider,
+      credentialEnv: PROVIDER_CREDENTIAL_ENV[parsed.provider],
+    };
+  }
+  return { ok: true, provider: parsed.provider, model: parsed.model };
 }
 
 /**

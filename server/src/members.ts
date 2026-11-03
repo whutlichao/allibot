@@ -3,6 +3,8 @@ import { AGENT_PROVIDERS, type AgentView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { credentialStatus, parseModelIdentifier } from './providers.js';
+import type { InFlightRounds } from './rounds.js';
+import { readStatusPoint } from './status.js';
 
 /**
  * Built-in agent_config defaults. The context window matches the spec's
@@ -63,30 +65,38 @@ WHERE m.kind = 'agent'`;
 
 export function listAgents(
   db: Database.Database,
-  options: { includeDeleted: boolean; env?: NodeJS.ProcessEnv },
+  options: {
+    includeDeleted: boolean;
+    env?: NodeJS.ProcessEnv;
+    /** The process-local in-flight registry the status point reads. */
+    inFlight: InFlightRounds;
+  },
 ): AgentView[] {
   const visibility = options.includeDeleted ? '' : ` AND ${liveMemberClause('m')}`;
   const rows = db
     .prepare(`${AGENT_SELECT}${visibility} ORDER BY m.created_at, m.rowid`)
     .all() as AgentRow[];
-  return rows.map((row) => toAgentView(row, options.env ?? process.env));
+  const env = options.env ?? process.env;
+  return rows.map((row) => toAgentView(db, row, env, options.inFlight));
 }
 
 export function getAgent(
   db: Database.Database,
   id: string,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv,
+  inFlight: InFlightRounds,
 ): AgentView | null {
   const row = db
     .prepare(`${AGENT_SELECT} AND m.id = ? AND ${liveMemberClause('m')}`)
     .get(id) as AgentRow | undefined;
-  return row === undefined ? null : toAgentView(row, env);
+  return row === undefined ? null : toAgentView(db, row, env, inFlight);
 }
 
 export function createAgent(
   db: Database.Database,
   body: unknown,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv,
+  inFlight: InFlightRounds,
 ): AgentView {
   const input = parseCreateInput(body);
   const create = db.transaction((): string => {
@@ -115,7 +125,7 @@ export function createAgent(
     return id;
   });
   const id = create();
-  const agent = getAgent(db, id, env);
+  const agent = getAgent(db, id, env, inFlight);
   if (agent === null) {
     throw new Error('created Agent could not be read back');
   }
@@ -126,7 +136,8 @@ export function updateAgent(
   db: Database.Database,
   id: string,
   body: unknown,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv,
+  inFlight: InFlightRounds,
 ): AgentView {
   const patch = parsePatchInput(body);
   const update = db.transaction((): boolean => {
@@ -161,7 +172,7 @@ export function updateAgent(
   if (!update()) {
     throw ApiFailure.notFound(`agent not found: ${id}`);
   }
-  const agent = getAgent(db, id, env);
+  const agent = getAgent(db, id, env, inFlight);
   if (agent === null) {
     throw new Error('updated Agent could not be read back');
   }
@@ -424,8 +435,14 @@ function nextAvatarSlot(db: Database.Database): number {
   return bestSlot;
 }
 
-function toAgentView(row: AgentRow, env: NodeJS.ProcessEnv): AgentView {
+function toAgentView(
+  db: Database.Database,
+  row: AgentRow,
+  env: NodeJS.ProcessEnv,
+  inFlight: InFlightRounds,
+): AgentView {
   return {
+    ...readStatusPoint(db, row, env, inFlight),
     id: row.id,
     kind: 'agent',
     display_name: row.display_name,

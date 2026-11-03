@@ -9,7 +9,7 @@ import { publishMessageCreated } from './events.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
 import { appendMessage } from './messages.js';
-import { resolveAgentAvailability } from './providers.js';
+import { checkProviderAvailability } from './providers.js';
 import type { Wake } from './rounds.js';
 
 /**
@@ -293,7 +293,9 @@ function selectClaimer(
     )
     .all(channelId) as ClaimCandidate[];
   for (const candidate of candidates) {
-    if (resolveAgentAvailability(db, candidate.model, env).ok) {
+    // The same availability fact the status point reads as `offline` (#23):
+    // no model, no provider consent, or no credential means no claim.
+    if (checkProviderAvailability(db, candidate.model, env).ok) {
       return candidate;
     }
   }
