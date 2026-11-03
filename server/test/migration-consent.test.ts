@@ -70,7 +70,7 @@ test('migrating an empty data dir adds remote_consent_scope and reaches the curr
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 11);
+    assert.equal(readSchemaVersion(dataDir), 12);
     assert.deepEqual(columnNames(dataDir, 'remote_consent_scope'), [
       'scope_kind',
       'scope_id',
@@ -89,7 +89,7 @@ test('migrating an empty data dir adds remote_consent_scope and reaches the curr
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 11);
+    assert.equal(entries[0]?.['to'], 12);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -140,7 +140,7 @@ test('a version 9 data dir upgrades to version 10 with a backup that keeps chann
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 11);
+    assert.equal(readSchemaVersion(dataDir), 12);
     assert.deepEqual(columnNames(dataDir, 'remote_consent_scope'), [
       'scope_kind',
       'scope_id',
@@ -173,7 +173,7 @@ test('a version 9 data dir upgrades to version 10 with a backup that keeps chann
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 9);
-    assert.equal(last?.['to'], 11);
+    assert.equal(last?.['to'], 12);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);

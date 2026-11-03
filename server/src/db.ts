@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 export interface MigrationStep {
   readonly to: number;
@@ -463,6 +463,33 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
           confirmed_at TEXT NOT NULL,
           PRIMARY KEY (scope_kind, scope_id)
         );
+      `);
+    },
+  },
+  {
+    // The read-position ticket lands here as the next strict +1 of the chain.
+    to: 12,
+    apply(db) {
+      db.exec(`
+        -- 已读位置 (Read Position): one row per member per target, the canonical
+        -- "how far has this member read" number. The owner's row is the unread
+        -- badge's baseline and an Agent's row is its consumption cursor — the
+        -- same table, two different facts, so neither reads the other's row.
+        --
+        -- The position only ever moves monotonically inside one target and is
+        -- clamped to the target's current maximum seq by the write path, so a
+        -- "future message is already read" state cannot be constructed here.
+        CREATE TABLE read_position (
+          member_id TEXT NOT NULL REFERENCES member (id),
+          target_id TEXT NOT NULL REFERENCES target (id),
+          last_read_seq INTEGER NOT NULL CHECK (last_read_seq >= 0),
+          PRIMARY KEY (member_id, target_id)
+        );
+
+        -- Unread reads one member's positions across targets; a target's
+        -- positions are read when a round closes, so the target gets its own
+        -- lookup.
+        CREATE INDEX read_position_target ON read_position (target_id);
       `);
     },
   },
