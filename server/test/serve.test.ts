@@ -11,7 +11,7 @@ import {
 test('serve refuses to start when the database is missing and points at --migrate', async () => {
   const dataDir = await makeTempDir('allibot-serve-missing-');
   try {
-    const result = runCli(['serve', '--data-dir', dataDir], { timeoutMs: 2_000 });
+    const result = runCli(['serve', '--data-dir', dataDir]);
 
     assert.notEqual(result.exitCode, 0, `serve without a database must fail; output: ${result.output}`);
     assert.match(result.output, /--migrate/);
