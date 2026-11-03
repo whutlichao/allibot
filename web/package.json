@@ -12,7 +12,8 @@
     "test:strings": "node --import ./test/support/register-css.mjs --test test/strings.test.ts",
     "test:web-render": "node --test test/web-render.test.ts",
     "test:agui-contract": "node --import ./test/support/register-css.mjs --test test/copilotkit-contract.test.ts",
-    "test:workspace-shell": "node --import ./test/support/register-css.mjs --test test/workspace-shell.test.ts"
+    "test:workspace-shell": "node --import ./test/support/register-css.mjs --test test/workspace-shell.test.ts",
+    "test:agent-detail": "node --import ./test/support/register-css.mjs --test test/agent-detail.test.ts"
   },
   "dependencies": {
     "@allibot/shared": "*",
