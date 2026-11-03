@@ -87,6 +87,14 @@ export interface ScriptedProviderOptions {
   reportCalls?: boolean;
   /** The member a `transfer-task` round hands the task to (test injection). */
   transferMemberId?: string;
+  /**
+   * Append the team reading of the round: the prompt composition order (the
+   * three rule pieces, leader duties), the tool set and the assignment context.
+   * It is how a test observes the leader prompt / tools through the ordinary
+   * reply body; like every other report it is a capability of the double, never
+   * a production branch.
+   */
+  reportTeam?: boolean;
 }
 
 /** The default scripted reply: deterministic, readable and free of model calls. */
@@ -174,7 +182,7 @@ function replyResult(
   // Each capture rides the first body: the reply message is the only face a
   // test can read the round's input from.
   const [first, ...rest] = bodies;
-  const sections = [`${first}${contextReport(input, options)}${callReport}`];
+  const sections = [`${first}${contextReport(input, options)}${callReport}${teamReport(input, options)}`];
   if (options.echoPrompt === true) {
     sections[0] = `${sections[0]} [system-prompt] ${input.systemPrompt}`;
   }
@@ -182,8 +190,33 @@ function replyResult(
 }
 
 /**
- * The double's report of the window it was handed. `reread` is true once the
- * window still carries a message older than the trigger that this member's
+ * The double's report of the team reading it was handed: the tool set, the
+ * assignment context and the prompt composition order. The rules order is the
+ * seam's own declared order (D3.7); the two workspace pieces are `absent`
+ * until the Agent-home / project layer exists (#43).
+ */
+function teamReport(input: RoundInput, options: ScriptedProviderOptions): string {
+  if (options.reportTeam !== true) {
+    return '';
+  }
+  const team = input.team;
+  const prompt = input.promptSections;
+  return (
+    `\n[team] leader:${String(team?.is_leader ?? false)}` +
+    ` task:${team?.task_id ?? '-'}` +
+    ` run:${team?.team_run_id ?? '-'}` +
+    ` assignment:${team?.assignment?.assignment_id ?? '-'}` +
+    `\n[rules] global:${prompt.rulesBase === null ? 'absent' : 'present'}` +
+    ` > system:${prompt.systemPrompt.length > 0 ? 'present' : 'absent'}` +
+    ` > project:${prompt.projectSupplement === null ? 'absent' : 'present'}` +
+    `\n[leader] duties:${prompt.leaderDuties === null ? 'absent' : 'present'}` +
+    `\n[tools] ${input.tools.length === 0 ? '-' : input.tools.join(',')}`
+  );
+}
+
+/**
+ * The double's report of a context window it was handed. `reread` is true once
+ * the window still carries a message older than the trigger that this member's
  * cursor has not passed — the message an earlier failed round read but did not
  * consume, so this round reads it again. Nothing about the window is derived
  * here beyond what the input states.

@@ -6,9 +6,11 @@ import type {
   RoundMember,
   RoundMemory,
   RoundMessage,
+  RoundPromptSections,
   RoundProvider,
   RoundResult,
   RoundTargetKind,
+  RoundTeamContext,
   WakeReason,
 } from './agent-seam.js';
 import { budgetExhaustedReason, tryConsumeJump, type BudgetRow } from './budget.js';
@@ -636,7 +638,7 @@ export async function runRound(
   let result: RoundResult;
   let interrupted = false;
   try {
-    input = readRoundInput(db, wake);
+    input = readRoundInput(db, wake, { teamRun });
     const settled = await runProviderRound(provider, input, signal);
     interrupted = settled.interrupted;
     result = settled.result;
@@ -789,7 +791,11 @@ export interface RoundOutcomeRow {
   merged: number;
 }
 
-function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
+function readRoundInput(
+  db: Database.Database,
+  wake: Wake,
+  context: { teamRun: StartedTeamRun | null } = { teamRun: null },
+): RoundInput {
   const member = db
     .prepare(
       `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
@@ -815,10 +821,43 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
   // (D5.2): it reads this round's input and never writes, wakes or spends
   // budget.
   const memories = recallForRound(db, member.id, wake.targetId, messages);
+
+  // 队长提示与工具集 (#39 / D3.7): the team reading is the same target state the
+  // wake surface used. The leader is the only round that carries TeamAssign;
+  // transfer_task belongs to the task's current assignee, so a leader who is
+  // not the assignee does not see it.
+  const teamState = readTeamTargetState(db, wake.targetId, process.env);
+  const isLeader =
+    teamState !== null && teamState.available && teamState.leaderMemberId === member.id;
+  const tools = readRoundTools(db, member.id, wake.targetId, targetKind, isLeader);
+  const team: RoundTeamContext | null =
+    teamState === null
+      ? null
+      : {
+          leader_member_id:
+            teamState.leaderMemberId.length === 0 ? null : teamState.leaderMemberId,
+          is_leader: isLeader,
+          task_id: teamState.taskId,
+          team_run_id: context.teamRun?.id ?? null,
+          assignment: null,
+          assign: null,
+        };
+  const prompt = composeSystemPrompt(
+    db,
+    member,
+    targetKind,
+    triggeredByHuman,
+    wake.reason,
+    memories,
+    { isLeader, assignmentInstruction: null },
+  );
   return {
     member,
     targetId: wake.targetId,
     targetKind,
+    channelMode: teamState === null ? 'autonomous' : 'team',
+    tools,
+    team,
     baseSeq: wake.fromSeq,
     reason: wake.reason,
     discipline,
@@ -826,15 +865,37 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     messages,
     consumedSeq,
     memories,
-    systemPrompt: composeSystemPrompt(
-      db,
-      member,
-      targetKind,
-      triggeredByHuman,
-      wake.reason,
-      memories,
-    ),
+    systemPrompt: prompt.systemPrompt,
+    promptSections: prompt.sections,
   };
+}
+
+/**
+ * The tools one round may call (D3.7). `TeamAssign` is the leader's own tool;
+ * `transfer_task` is the structured action of the task's current assignee, so
+ * it is absent from a leader round that did not take the task. Plan tools
+ * arrive with #40.
+ */
+function readRoundTools(
+  db: Database.Database,
+  memberId: string,
+  targetId: string,
+  targetKind: RoundTargetKind,
+  isLeader: boolean,
+): readonly string[] {
+  const tools: string[] = [];
+  if (isLeader) {
+    tools.push('TeamAssign');
+  }
+  if (targetKind === 'task') {
+    const task = db
+      .prepare('SELECT assignee_member_id FROM task WHERE target_id = ?')
+      .get(targetId) as { assignee_member_id: string | null } | undefined;
+    if (task?.assignee_member_id === memberId) {
+      tools.push('transfer_task');
+    }
+  }
+  return tools;
 }
 
 /**
@@ -907,17 +968,18 @@ function wokeByHuman(db: Database.Database, wake: Wake): boolean {
 }
 
 /**
- * The system prompt a round is handed: the stored Agent prompt, the target's
- * response discipline, the mandatory-answer sentence, and the memory section
- * when this round recalled cards.
+ * The system prompt a round is handed. It states its own composition (D3.7 /
+ * D5.2) as `RoundPromptSections`: the global rules base → the stored
+ * `agent_config.system_prompt` → the project supplement, then the display-name
+ * identity sentence, the target's response discipline, the mandatory-answer
+ * sentences, the leader duties on a leader round, the assignment paragraph on
+ * a TeamAssign sub-round, and finally the recalled-memory section.
  *
- * A DM is stated one-to-one with an explicit mandatory answer (the glossary's
- * "一对一口径 + 显式必答句") instead of the channel rubric: a DM never claims
- * to be a multi-member channel and has no "not mentioned therefore silent"
- * case. A channel keeps the silence rubric verbatim; a human-message round
- * appends the human-message mandatory sentence as its own paragraph, and no
- * other channel round gets that copy. The memory section is appended only — it
- * never replaces the stored prompt (D5.2).
+ * The global base and the project supplement are absent until the Agent-home /
+ * workspace layer exists (#43); they are absent pieces, never empty ones. A DM
+ * is stated one-to-one with an explicit mandatory answer (the glossary's
+ * "一对一口径 + 显式必答句") instead of the channel rubric. The memory section
+ * is appended only — it never replaces the stored prompt (D5.2).
  */
 function composeSystemPrompt(
   db: Database.Database,
@@ -926,29 +988,58 @@ function composeSystemPrompt(
   triggeredByHuman: boolean,
   reason: WakeReason,
   memories: readonly RoundMemory[],
-): string {
-  const sections = [member.system_prompt.trim()];
+  options: { isLeader: boolean; assignmentInstruction: string | null },
+): { systemPrompt: string; sections: RoundPromptSections } {
+  const targetDiscipline =
+    targetKind === 'dm'
+      ? tFromDb(db, 'prompt.dm.oneToOne')
+      : tFromDb(db, 'prompt.channel.rubric');
+  const mandatory: string[] = [];
   if (targetKind === 'dm') {
-    sections.push(tFromDb(db, 'prompt.dm.oneToOne'));
-    sections.push(
+    mandatory.push(
       triggeredByHuman
         ? tFromDb(db, 'prompt.humanMessage.mandatory')
         : tFromDb(db, 'prompt.dm.mandatory'),
     );
   } else {
-    sections.push(tFromDb(db, 'prompt.channel.rubric'));
     if (triggeredByHuman) {
-      sections.push(tFromDb(db, 'prompt.humanMessage.mandatory'));
+      mandatory.push(tFromDb(db, 'prompt.humanMessage.mandatory'));
     }
     if (reason === 'team-change') {
-      sections.push(tFromDb(db, 'prompt.teamChange.mandatory'));
+      mandatory.push(tFromDb(db, 'prompt.teamChange.mandatory'));
     }
   }
-  const memorySection = memoryPromptSection(db, memories);
-  if (memorySection !== null) {
-    sections.push(memorySection);
-  }
-  return sections.filter((section) => section.length > 0).join('\n\n');
+  const sections: RoundPromptSections = {
+    rulesBase: null,
+    systemPrompt: member.system_prompt.trim(),
+    projectSupplement: null,
+    identity: tFromDb(db, 'prompt.identity', { name: member.display_name }),
+    targetDiscipline,
+    mandatory,
+    leaderDuties: options.isLeader ? tFromDb(db, 'prompt.teamLeader.duties') : null,
+    assignment:
+      options.assignmentInstruction === null
+        ? null
+        : tFromDb(db, 'prompt.teamAssignment.context', {
+            instruction: options.assignmentInstruction,
+          }),
+    memory: memoryPromptSection(db, memories),
+  };
+  const parts = [
+    sections.rulesBase,
+    sections.systemPrompt.length > 0 ? sections.systemPrompt : null,
+    sections.projectSupplement,
+    sections.identity,
+    sections.targetDiscipline,
+    ...sections.mandatory,
+    sections.leaderDuties,
+    sections.assignment,
+    sections.memory,
+  ];
+  return {
+    systemPrompt: parts.filter((part): part is string => part !== null && part.length > 0).join('\n\n'),
+    sections,
+  };
 }
 
 /**

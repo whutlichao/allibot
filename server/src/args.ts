@@ -59,6 +59,13 @@ export interface CliOptions {
    */
   scriptedReportCalls: boolean;
   /**
+   * Have the scripted reply carry the team reading (prompt composition order,
+   * tool set, assignment context). Like the other reports it is an adapter
+   * capability a test uses to observe the round's input, never a production
+   * branch.
+   */
+  scriptedReportTeam: boolean;
+  /**
    * The member a scripted `transfer-task` round hands the task to. Like every
    * `--scripted-*` value it only configures the test double, never production.
    */
@@ -93,7 +100,7 @@ const USAGE =
   '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task>] ' +
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
-  '[--scripted-report-calls] [--scripted-transfer-member <member-id>] ' +
+  '[--scripted-report-calls] [--scripted-report-team] [--scripted-transfer-member <member-id>] ' +
   '[--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
 
 export function parseCliArgs(
@@ -113,6 +120,7 @@ export function parseCliArgs(
       'scripted-echo-prompt': { type: 'boolean' },
       'scripted-report-context': { type: 'boolean' },
       'scripted-report-calls': { type: 'boolean' },
+      'scripted-report-team': { type: 'boolean' },
       'scripted-transfer-member': { type: 'string' },
       'sse-lifetime-ms': { type: 'string' },
       'reminder-tick-ms': { type: 'string' },
@@ -137,6 +145,7 @@ export function parseCliArgs(
         values['scripted-echo-prompt'] === true ||
         values['scripted-report-context'] === true ||
         values['scripted-report-calls'] === true ||
+        values['scripted-report-team'] === true ||
         values['scripted-transfer-member'] !== undefined,
     ),
     scriptedProvider: parseScriptedProvider(values['scripted-provider']),
@@ -145,6 +154,7 @@ export function parseCliArgs(
     scriptedEchoPrompt: values['scripted-echo-prompt'] === true,
     scriptedReportContext: values['scripted-report-context'] === true,
     scriptedReportCalls: values['scripted-report-calls'] === true,
+    scriptedReportTeam: values['scripted-report-team'] === true,
     scriptedTransferMemberId: parseScriptedTransferMember(values['scripted-transfer-member']),
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
     reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),

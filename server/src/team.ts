@@ -113,6 +113,53 @@ export function readLeaderAvailability(
   leaderId: string,
   env: NodeJS.ProcessEnv,
 ): LeaderAvailability {
+  return readAgentAvailability(db, channelId, leaderId, env, 'leader');
+}
+
+/**
+ * The TeamAssign target's availability (D3.4 step 1): the target must be a live
+ * Agent member of the channel / task channel, and its model provider must be
+ * ready. It is the same D3.8 fact set as the leader check, with member-facing
+ * copy so a failed assignment never says "the leader is disabled".
+ */
+export function readTeamMemberAvailability(
+  db: Database.Database,
+  channelId: string,
+  memberId: string,
+  env: NodeJS.ProcessEnv,
+): LeaderAvailability {
+  return readAgentAvailability(db, channelId, memberId, env, 'member');
+}
+
+function readAgentAvailability(
+  db: Database.Database,
+  channelId: string,
+  memberId: string,
+  env: NodeJS.ProcessEnv,
+  subject: 'leader' | 'member',
+): LeaderAvailability {
+  const keys =
+    subject === 'leader'
+      ? {
+          missing: 'team.invalid.leaderMissing',
+          notAgent: 'team.invalid.leaderNotAgent',
+          deleted: 'team.invalid.leaderDeleted',
+          disabled: 'team.invalid.leaderDisabled',
+          notMember: 'team.invalid.leaderNotMember',
+          modelMissing: 'team.invalid.modelMissing',
+          consentMissing: 'team.invalid.consentMissing',
+          credentialMissing: 'team.invalid.credentialMissing',
+        } as const
+      : {
+          missing: 'team.member.missing',
+          notAgent: 'team.member.notAgent',
+          deleted: 'team.member.deleted',
+          disabled: 'team.member.disabled',
+          notMember: 'team.member.notMember',
+          modelMissing: 'team.member.modelMissing',
+          consentMissing: 'team.member.consentMissing',
+          credentialMissing: 'team.member.credentialMissing',
+        } as const;
   const member = db
     .prepare(
       `SELECT m.id, m.kind, m.deleted_at, c.enabled, c.model
@@ -120,7 +167,7 @@ export function readLeaderAvailability(
          LEFT JOIN agent_config c ON c.member_id = m.id
         WHERE m.id = ?`,
     )
-    .get(leaderId) as
+    .get(memberId) as
     | {
         id: string;
         kind: string;
@@ -130,34 +177,34 @@ export function readLeaderAvailability(
       }
     | undefined;
   if (member === undefined) {
-    return { ok: false, reason: tFromDb(db, 'team.invalid.leaderMissing') };
+    return { ok: false, reason: tFromDb(db, keys.missing) };
   }
   if (member.kind !== 'agent' || member.enabled === null) {
-    return { ok: false, reason: tFromDb(db, 'team.invalid.leaderNotAgent') };
+    return { ok: false, reason: tFromDb(db, keys.notAgent) };
   }
   if (member.deleted_at !== null) {
-    return { ok: false, reason: tFromDb(db, 'team.invalid.leaderDeleted') };
+    return { ok: false, reason: tFromDb(db, keys.deleted) };
   }
   if (member.enabled === 0) {
-    return { ok: false, reason: tFromDb(db, 'team.invalid.leaderDisabled') };
+    return { ok: false, reason: tFromDb(db, keys.disabled) };
   }
   const membership = db
     .prepare('SELECT 1 FROM target_member WHERE target_id = ? AND member_id = ?')
-    .get(channelId, leaderId);
+    .get(channelId, memberId);
   if (membership === undefined) {
-    return { ok: false, reason: tFromDb(db, 'team.invalid.leaderNotMember') };
+    return { ok: false, reason: tFromDb(db, keys.notMember) };
   }
   const provider = checkProviderAvailability(db, member.model, env);
   if (!provider.ok) {
     switch (provider.reason) {
       case 'model-missing':
-        return { ok: false, reason: tFromDb(db, 'team.invalid.modelMissing') };
+        return { ok: false, reason: tFromDb(db, keys.modelMissing) };
       case 'consent-missing':
-        return { ok: false, reason: tFromDb(db, 'team.invalid.consentMissing') };
+        return { ok: false, reason: tFromDb(db, keys.consentMissing) };
       case 'credential-missing':
         return {
           ok: false,
-          reason: tFromDb(db, 'team.invalid.credentialMissing', {
+          reason: tFromDb(db, keys.credentialMissing, {
             credential_env: PROVIDER_CREDENTIAL_ENV[provider.provider],
           }),
         };
