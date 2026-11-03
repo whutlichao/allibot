@@ -4,7 +4,8 @@ import { migrationLedgerPath } from './data-dir.js';
 export interface MigrationAuditRecord {
   from: number | null;
   to: number;
-  result: 'ok';
+  result: 'ok' | 'failed';
+  reason?: string;
   backup_path: string | null;
   started_at: string;
   finished_at: string;

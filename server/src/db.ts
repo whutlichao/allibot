@@ -1,12 +1,35 @@
 import Database from 'better-sqlite3';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { appendMigrationRecord } from './audit.js';
+import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
+import { LOCK_FILENAME } from './lock.js';
 
 export const SCHEMA_VERSION = 1;
 
+export interface MigrationStep {
+  readonly to: number;
+  apply: (db: Database.Database) => void;
+}
+
+/**
+ * The production step chain. Every future schema change appends exactly one
+ * step at the tail with the next strict +1 number; the baseline step creates
+ * schema_meta. Test-only fixtures pass their own appended step instead of
+ * changing this chain.
+ */
+export const MIGRATION_STEPS: readonly MigrationStep[] = [
+  {
+    to: 1,
+    apply(db) {
+      db.exec('CREATE TABLE schema_meta (schema_version INTEGER NOT NULL)');
+      db.prepare('INSERT INTO schema_meta (schema_version) VALUES (?)').run(1);
+    },
+  },
+];
+
 export type MigrationOutcome =
-  | { status: 'migrated'; to: number }
+  | { status: 'migrated'; from: number | null; to: number; backupPath: string | null }
   | { status: 'already-current'; version: number };
 
 export function databaseExists(dataDir: string): boolean {
@@ -14,42 +37,81 @@ export function databaseExists(dataDir: string): boolean {
 }
 
 export function migrateDataDir(dataDir: string): MigrationOutcome {
+  return runMigrations(dataDir, MIGRATION_STEPS);
+}
+
+/**
+ * Execute a migration step chain against a data directory. A non-empty data
+ * directory is backed up to a sibling directory first; backup failure aborts
+ * the migration. All schema steps and the version bump share one transaction,
+ * and the audit ledger gains exactly one record per attempted migration.
+ *
+ * Exported for the test-only migration fixture: production callers go through
+ * the CLI, which passes the production chain.
+ */
+export function runMigrations(
+  dataDir: string,
+  steps: readonly MigrationStep[] = MIGRATION_STEPS,
+): MigrationOutcome {
   mkdirSync(dataDir, { recursive: true });
 
   const dbPath = databasePath(dataDir);
   const currentVersion = readSchemaVersion(dbPath);
+  const targetVersion = steps[steps.length - 1]?.to ?? 0;
 
-  if (currentVersion !== null) {
-    if (currentVersion === SCHEMA_VERSION) {
-      return { status: 'already-current', version: currentVersion };
-    }
+  if (currentVersion !== null && currentVersion === targetVersion) {
+    return { status: 'already-current', version: currentVersion };
+  }
+  if (currentVersion !== null && currentVersion > targetVersion) {
     throw new Error(
       `version_mismatch: database schema version ${currentVersion} is newer than this build's ` +
-        `schema version ${SCHEMA_VERSION}; refusing to migrate, there is no downgrade path`,
+        `schema version ${targetVersion}; refusing to migrate, there is no downgrade path`,
     );
   }
 
   const startedAt = new Date().toISOString();
-  const db = new Database(dbPath);
+  const pendingSteps = steps.filter((step) => step.to > (currentVersion ?? 0));
+  let backupPath: string | null = null;
+
   try {
-    db.transaction(() => {
-      db.exec('CREATE TABLE schema_meta (schema_version INTEGER NOT NULL)');
-      db.prepare('INSERT INTO schema_meta (schema_version) VALUES (?)').run(SCHEMA_VERSION);
-    })();
-  } finally {
-    db.close();
+    if (!isDataDirEmpty(dataDir)) {
+      backupPath = createDataDirBackup(dataDir, startedAt);
+    }
+
+    const db = new Database(dbPath);
+    try {
+      db.transaction(() => {
+        for (const step of pendingSteps) {
+          step.apply(db);
+        }
+        db.prepare('UPDATE schema_meta SET schema_version = ?').run(targetVersion);
+      })();
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    appendMigrationRecord(dataDir, {
+      from: currentVersion,
+      to: targetVersion,
+      result: 'failed',
+      reason: errorMessage(error),
+      backup_path: backupPath,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+    });
+    throw error;
   }
 
   appendMigrationRecord(dataDir, {
-    from: null,
-    to: SCHEMA_VERSION,
+    from: currentVersion,
+    to: targetVersion,
     result: 'ok',
-    backup_path: null,
+    backup_path: backupPath,
     started_at: startedAt,
     finished_at: new Date().toISOString(),
   });
 
-  return { status: 'migrated', to: SCHEMA_VERSION };
+  return { status: 'migrated', from: currentVersion, to: targetVersion, backupPath };
 }
 
 /**
@@ -97,4 +159,16 @@ function readSchemaVersion(dbPath: string): number | null {
   } finally {
     db.close();
   }
+}
+
+/**
+ * The single-writer lock is runtime state, not data: a directory holding only
+ * the lock file counts as empty, so initializing it needs no backup.
+ */
+function isDataDirEmpty(dataDir: string): boolean {
+  return readdirSync(dataDir).every((entry) => entry === LOCK_FILENAME);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
