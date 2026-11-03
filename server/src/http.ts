@@ -22,6 +22,7 @@ import {
   softDeleteAgent,
   updateAgent,
 } from './members.js';
+import { appendMessage, listMessages, parseMessageRequest, parsePageQuery } from './messages.js';
 import {
   joinChannel,
   listChannelMembers,
@@ -160,6 +161,23 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/targets/${CHANNEL_ID}/members$`),
     handle: async (_request, response, { db }, ...params) => {
       sendJson(response, 200, { members: listTargetMembers(db, decodeId(params[0])) });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/targets/${CHANNEL_ID}/messages$`),
+    handle: async (request, response, { db }, ...params) => {
+      const query = parsePageQuery(new URL(request.url ?? '/', `http://${HOST}`).searchParams);
+      sendJson(response, 200, { messages: listMessages(db, decodeId(params[0]), query) });
+    },
+  },
+  {
+    method: 'POST',
+    pattern: new RegExp(`^/api/targets/${CHANNEL_ID}/messages$`),
+    handle: async (request, response, { db }, ...params) => {
+      const targetId = decodeId(params[0]);
+      const result = appendMessage(db, parseMessageRequest(targetId, await readJsonBody(request)));
+      sendJson(response, 201, result);
     },
   },
   {
