@@ -32,8 +32,6 @@ export interface AppendMessageInput {
   /** Defaults to the owner; a system event names the member it is about. */
   authorMemberId?: string | null;
   clientMessageId?: string | null;
-  taskRef?: string | null;
-  taskPointer?: string | null;
 }
 
 interface MessageRow {
@@ -113,7 +111,7 @@ export function appendMessage(
       `INSERT INTO message
          (id, target_id, seq, kind, author_member_id, author_display_name,
           author_avatar_slot, body, created_at, task_ref, task_pointer, client_message_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
     ).run(
       id,
       input.targetId,
@@ -124,16 +122,18 @@ export function appendMessage(
       author.avatar_slot,
       input.body,
       new Date().toISOString(),
-      input.taskRef ?? null,
-      input.taskPointer ?? null,
       input.clientMessageId ?? null,
     );
 
-    const insertMention = db.prepare(
-      `INSERT INTO message_mention (message_id, member_id, start, "end") VALUES (?, ?, ?, ?)`,
-    );
-    for (const mention of parseMentions(input.body, listMentionCandidates(db))) {
-      insertMention.run(id, mention.member_id, mention.start, mention.end);
+    // A system event is a record, not a turn: it wakes nobody, so it carries no
+    // mention ranges even when its text happens to contain an @name.
+    if (input.kind !== 'system') {
+      const insertMention = db.prepare(
+        `INSERT INTO message_mention (message_id, member_id, start, "end") VALUES (?, ?, ?, ?)`,
+      );
+      for (const mention of parseMentions(input.body, listMentionCandidates(db))) {
+        insertMention.run(id, mention.member_id, mention.start, mention.end);
+      }
     }
     return { id, seq };
   });
@@ -228,31 +228,31 @@ function hydrate(db: Database.Database, rows: readonly MessageRow[]): MessageVie
 }
 
 /**
- * The shared target guard. A channel-type target resolves through the channel
- * guards, so a deleted channel is a 404 and an archived channel stays readable.
+ * Resolve the target row. A channel-type target is a shadow row reusing the
+ * channel id, so its state lives in the channel row and is checked through the
+ * channel guards; DM and task targets arrive with their own tickets and flow
+ * through the same two wrappers.
  */
-function assertTargetReadable(db: Database.Database, targetId: string): { kind: string } {
+function readTarget(db: Database.Database, targetId: string): { kind: string } {
   const target = db.prepare('SELECT kind FROM target WHERE id = ?').get(targetId) as
     | { kind: string }
     | undefined;
   if (target === undefined) {
     throw ApiFailure.notFound(`target not found: ${targetId}`);
   }
-  if (target.kind === 'channel') {
-    assertChannelReadable(db, targetId);
-  }
   return target;
 }
 
-/**
- * The write guard reuses the channel helper from #9 in one place: a channel
- * type target must exist (404), not be deleted (404) and not be archived (400).
- * Other target kinds have no extra state yet; DM and task targets arrive with
- * their own tickets but flow through the same guard.
- */
+/** History stays readable on an archived channel; a deleted channel is 404. */
+function assertTargetReadable(db: Database.Database, targetId: string): void {
+  if (readTarget(db, targetId).kind === 'channel') {
+    assertChannelReadable(db, targetId);
+  }
+}
+
+/** The write guard from #9, reused rather than restated: archived is 400, deleted is 404. */
 function assertTargetWritable(db: Database.Database, targetId: string): void {
-  const target = assertTargetReadable(db, targetId);
-  if (target.kind === 'channel') {
+  if (readTarget(db, targetId).kind === 'channel') {
     assertChannelWritable(assertChannelReadable(db, targetId));
   }
 }
