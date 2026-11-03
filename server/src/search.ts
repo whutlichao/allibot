@@ -12,6 +12,10 @@ import { ApiFailure } from './api-error.js';
  * ASCII, exactly the text for everything else, no tokenization, no fuzzy
  * matching, no pinyin, no FTS. SQLite's `lower()` folds ASCII only, which is
  * exactly the rule, and `instr` is the substring test.
+ *
+ * No index is added for the same reason: a substring test is not an indexed
+ * lookup, and M1 data sizes make the scan acceptable. The cap below is the
+ * only bound the endpoint needs until pagination exists.
  */
 
 /**
