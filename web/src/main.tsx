@@ -17,7 +17,12 @@ import {
   initialTargetId,
   targetKind,
 } from './workspace/model.ts';
-import { isTeamTarget, readTeamRuns } from './workspace/team-runs.ts';
+import {
+  applyTeamAssignmentFrame,
+  isTeamTarget,
+  readTeamAssignmentFrame,
+  readTeamRuns,
+} from './workspace/team-runs.ts';
 import { shouldRefreshWorkspace } from './workspace/message-sync.ts';
 import {
   deleteAgent,
@@ -50,7 +55,7 @@ let refreshGeneration = 0;
 /** 当前频道成员表：成员面板 / 名册按需读，不把「未加入」当猜测。 */
 let currentChannelMembers: Record<string, TargetMemberView[]> = {};
 /** 当前 team target 的运行记录；run 是独立读数，不进消息流。 */
-let currentTeamRuns: Record<string, TeamRunView[]> = {};
+let currentTeamRuns: Record<string, readonly TeamRunView[]> = {};
 
 async function loadChannelMembers(channelId: string): Promise<void> {
   currentChannelMembers = {
@@ -187,6 +192,20 @@ function render(saveFailed = false): void {
             .catch(() => render(true));
         }}
         onLiveEvent={(event) => {
+          if (event.event === 'team_assignment') {
+            const frame = readTeamAssignmentFrame(event.data);
+            if (frame === null) {
+              return;
+            }
+            currentTeamRuns = applyTeamAssignmentFrame(currentTeamRuns, frame);
+            render();
+            void loadTeamRuns(frame.target_id)
+              .then(() => render())
+              .catch((error: unknown) => {
+                console.error('team runs read failed', error);
+              });
+            return;
+          }
           if (shouldRefreshWorkspace(event.event)) {
             void refreshWorkspace().catch((error: unknown) => {
               console.error('workspace refresh failed', error);

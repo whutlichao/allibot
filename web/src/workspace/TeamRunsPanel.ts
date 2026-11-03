@@ -6,7 +6,7 @@ import {
   type TeamRunView,
 } from '@allibot/shared';
 import { createElement, type ReactNode } from 'react';
-import { teamRunStatusLabel } from './team-runs.ts';
+import { teamAssignmentStateLabel, teamRunStatusLabel } from './team-runs.ts';
 
 export interface TeamRunsPanelProps {
   runs: readonly TeamRunView[];
@@ -106,5 +106,72 @@ function renderRun(
       createElement('strong', { className: 'team-runs__label' }, t(locale, 'workspace.teamRuns.time')),
       `${run.started_at} → ${run.finished_at ?? '—'}`,
     ),
+    run.assignments.length === 0
+      ? null
+      : createElement(
+          'div',
+          { className: 'team-runs__assignments', 'data-team-assignments': '' },
+          createElement(
+            'h4',
+            { className: 'team-runs__assignments-title' },
+            t(locale, 'workspace.teamRuns.assignments.title'),
+          ),
+          createElement(
+            'ul',
+            { className: 'team-runs__assignment-list' },
+            ...run.assignments.map((assignment) =>
+              createElement(
+                'li',
+                {
+                  key: assignment.id,
+                  className: 'team-runs__assignment',
+                  'data-team-assignment-id': assignment.id,
+                  'data-team-assignment-state': assignment.state,
+                },
+                createElement(
+                  'div',
+                  { className: 'team-runs__assignment-head' },
+                  createElement(
+                    'span',
+                    { className: 'team-runs__assignment-state' },
+                    teamAssignmentStateLabel(locale, assignment.state),
+                  ),
+                  createElement(
+                    'span',
+                    {
+                      className: 'team-runs__assignment-jump',
+                      'data-assignment-jump': assignment.jump_consumed,
+                    },
+                    `${t(locale, 'workspace.teamRuns.assignments.jump')}：${assignment.jump_consumed}`,
+                  ),
+                ),
+                assignment.reply_excerpt === null
+                  ? null
+                  : createElement(
+                      'p',
+                      { className: 'team-runs__assignment-excerpt', 'data-assignment-excerpt': '' },
+                      createElement(
+                        'strong',
+                        { className: 'team-runs__label' },
+                        t(locale, 'workspace.teamRuns.assignments.excerpt'),
+                      ),
+                      assignment.reply_excerpt,
+                    ),
+                assignment.reason === null
+                  ? null
+                  : createElement(
+                      'p',
+                      { className: 'team-runs__assignment-reason' },
+                      createElement(
+                        'strong',
+                        { className: 'team-runs__label' },
+                        t(locale, 'workspace.teamRuns.assignments.reason'),
+                      ),
+                      assignment.reason,
+                    ),
+              ),
+            ),
+          ),
+        ),
   );
 }

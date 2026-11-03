@@ -197,6 +197,23 @@ export const ZH_CN = {
     text: '这次唤醒来自任务变化（建任务 / 改派 / 转派）：作为队长，你必须回应并推进这件事。',
     params: [],
   },
+  // 显示名身份句（D3.7）：与 M1 相同，由 member.display_name 派生，不是库内
+  // 可编辑的系统提示。它属于每一轮，不只在队长轮。
+  'prompt.identity': { text: '你的名字是 {name}。', params: ['name'] },
+  // 队长职责段（#39 / D3.7）：三段规则之后再追加一段，说明 TeamAssign 的用法、
+  // 成员在同一轮运行、结果作为工具结果回来，以及 transfer_task 只属于受派者。
+  'prompt.teamLeader.duties': {
+    text:
+      '你是队长：用 TeamAssign 拆解并分派工作给成员（入参 {member_id, instruction}）；' +
+      '成员会在同一轮内运行，结果作为工具结果回到你这里；成员的产出不会落成频道消息。' +
+      '只有当你自己是当前任务的受派者时，才使用 transfer_task。',
+    params: [],
+  },
+  // TeamAssign 子轮次的输入段落：子任务说明由队长给出，产出只回到队长。
+  'prompt.teamAssignment.context': {
+    text: '你正在执行队长分派的子任务：{instruction}',
+    params: ['instruction'],
+  },
 
   // 示例文案：用来看消息密度在壳里的呈现。
   'message.sample.author': { text: '示例成员', params: [] },
@@ -444,4 +461,52 @@ export const ZH_CN = {
     text: '队长所属模型 provider 缺少凭证（{credential_env}）。',
     params: ['credential_env'],
   },
+  // TeamAssign 目标成员的可用性（#39 / D3.4 第 1 步）：与队长的不可用原因
+  // 分开措辞，因为被分派的是成员，不是队长。
+  'team.member.missing': { text: '目标成员不存在或已被移除。', params: [] },
+  'team.member.notAgent': { text: '目标必须是 Agent 成员。', params: [] },
+  'team.member.deleted': { text: '目标成员已被软删除。', params: [] },
+  'team.member.disabled': { text: '目标成员已被禁用（enabled=0）。', params: [] },
+  'team.member.notMember': { text: '目标成员已不是该频道的成员。', params: [] },
+  'team.member.modelMissing': { text: '目标成员没有配置可用的模型。', params: [] },
+  'team.member.consentMissing': {
+    text: '目标成员所属模型 provider 尚未确认远端数据流告知。',
+    params: [],
+  },
+  'team.member.credentialMissing': {
+    text: '目标成员所属模型 provider 缺少凭证（{credential_env}）。',
+    params: ['credential_env'],
+  },
+  // 分派的固定裁决顺序（D3.4）：先校验调用者与目标，再解析预算 target，
+  // 再原子扣跳；失败落 failed / budget-exhausted，jump_consumed 定格。
+  'team.assignment.reason.notLeader': {
+    text: 'TeamAssign 只能由该频道的队长发起。',
+    params: [],
+  },
+  'team.assignment.reason.self': {
+    text: '不能把子任务分派给队长本人。',
+    params: [],
+  },
+  'team.assignment.budgetExhausted': {
+    text: '分派预算耗尽：本世代已用 {used}/{limit} 跳，本次分派未运行成员。',
+    params: ['used', 'limit'],
+  },
+  'team.assignment.memberFailed': {
+    text: '成员子轮次失败：{reason}',
+    params: ['reason'],
+  },
+  'team.assignment.memberNoOutput': {
+    text: '成员子轮次没有可用的产出。',
+    params: [],
+  },
+  'team.assignment.truncated': { text: '…（摘录已截断）', params: [] },
+  // 运行面板的分派区块（#39）：assignment 是运行记录，不渲染成消息。
+  'workspace.teamRuns.assignments.title': { text: '分派', params: [] },
+  'workspace.teamRuns.assignments.jump': { text: '跳数', params: [] },
+  'workspace.teamRuns.assignments.excerpt': { text: '摘录', params: [] },
+  'workspace.teamRuns.assignments.reason': { text: '原因', params: [] },
+  'workspace.teamRuns.assignments.state.running': { text: '运行中', params: [] },
+  'workspace.teamRuns.assignments.state.completed': { text: '已完成', params: [] },
+  'workspace.teamRuns.assignments.state.failed': { text: '失败', params: [] },
+  'workspace.teamRuns.assignments.state.budgetExhausted': { text: '预算耗尽', params: [] },
 } as const satisfies Record<string, CatalogEntry>;

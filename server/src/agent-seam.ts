@@ -1,3 +1,5 @@
+import type { TeamAssignmentState } from '@allibot/shared';
+
 /**
  * The member-face adapter seam (成员面适配接缝): one member round in, zero or
  * more pending replies plus one round conclusion out.
@@ -66,6 +68,87 @@ export interface RoundMessage {
 }
 
 /**
+ * The ordered pieces the round's system prompt is assembled from. `systemPrompt`
+ * is the joined text the adapter hands the model; this structure states the
+ * composition order the seam used (D3.7 / D5.2): the global rules base →
+ * `agent_config.system_prompt` → the project supplement. The first and third
+ * pieces are absent until the workspace / Agent-home layer exists (#43); a
+ * missing piece is `null`, not an empty section.
+ *
+ * The identity sentence is derived from `member.display_name` (never stored in
+ * the prompt) and precedes the target discipline, exactly like M1.
+ */
+export interface RoundPromptSections {
+  rulesBase: string | null;
+  systemPrompt: string;
+  projectSupplement: string | null;
+  identity: string;
+  targetDiscipline: string;
+  /* Every mandatory-answer sentence this round carries, in append order. */
+  mandatory: readonly string[];
+  /* The leader-duties paragraph; null unless this is the leader's round. */
+  leaderDuties: string | null;
+  /* The one assignment paragraph of a TeamAssign sub-round; null otherwise. */
+  assignment: string | null;
+  /* The recalled-memory section; null when nothing was recalled. */
+  memory: string | null;
+}
+
+/** One TeamAssign call: the tool's stable input shape (D3.4). */
+export interface TeamAssignRequest {
+  member_id: string;
+  instruction: string;
+}
+
+/** Why a TeamAssign call did not run / finish the member sub-round. */
+export type TeamAssignmentErrorCode =
+  | 'not_leader'
+  | 'target_self'
+  | 'target_unavailable'
+  | 'budget_exhausted'
+  | 'member_failed';
+
+/**
+ * The tool result a leader round receives back from one TeamAssign call. The
+ * result is a tool-call result, not an output field of the round (D3.7): the
+ * full member output travels only here and is never persisted; the run record
+ * keeps the truncated excerpt.
+ */
+export interface TeamAssignToolResult {
+  ok: boolean;
+  assignment_id: string | null;
+  member_id: string;
+  state: TeamAssignmentState | null;
+  jump_consumed: 0 | 1;
+  reply_excerpt: string | null;
+  reason: string | null;
+  code: TeamAssignmentErrorCode | null;
+  /** The full member output returned to the leader; never persisted. */
+  output: string | null;
+}
+
+/** One TeamAssign sub-round's own context inside the leader round. */
+export interface RoundAssignmentContext {
+  assignment_id: string;
+  instruction: string;
+}
+
+/**
+ * The team reading of one round (D3.7 / D3.9). It is `null` on an ordinary
+ * autonomous / DM round. `assign` is the TeamAssign tool face and exists only
+ * in the leader's own round; a member sub-round sees its assignment context and
+ * no way to assign further.
+ */
+export interface RoundTeamContext {
+  leader_member_id: string | null;
+  is_leader: boolean;
+  task_id: string | null;
+  team_run_id: string | null;
+  assignment: RoundAssignmentContext | null;
+  assign: ((request: TeamAssignRequest) => Promise<TeamAssignToolResult>) | null;
+}
+
+/**
  * The response discipline (回应判断) computed from the triggering message, not
  * from the wake reason: the reason is readable diagnostics only, and a merged
  * wake keeps the reason of whichever arrived first.
@@ -87,6 +170,19 @@ export interface RoundInput {
   targetId: string;
   /** The kind of target this round runs in; a DM reads a one-to-one prompt. */
   targetKind: RoundTargetKind;
+  /**
+   * The collaboration topology (D3.1): a task / channel target resolves it
+   * through its channel; a DM is always autonomous.
+   */
+  channelMode: 'autonomous' | 'team';
+  /**
+   * The tools this round may call, in stable order (D3.7). `TeamAssign` is the
+   * leader's own tool; `transfer_task` is available only to the task's current
+   * assignee. Plan tools arrive with #40.
+   */
+  tools: readonly string[];
+  /** The team reading of this round; null on an autonomous / DM round. */
+  team: RoundTeamContext | null;
   /** The seq of the message that triggered this wake. */
   baseSeq: number;
   reason: WakeReason;
@@ -132,6 +228,12 @@ export interface RoundInput {
    * seam stays the one prompt assembly path.
    */
   systemPrompt: string;
+  /**
+   * The ordered composition of `systemPrompt` (D3.7): rules base →
+   * `agent_config.system_prompt` → project supplement, then identity, target
+   * discipline, mandatory sentences, leader duties / assignment and memory.
+   */
+  promptSections: RoundPromptSections;
 }
 
 /** One recalled memory card as a round reads it. */

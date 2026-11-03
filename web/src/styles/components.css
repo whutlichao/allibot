@@ -1141,3 +1141,68 @@
   color: var(--faint);
   font-weight: 500;
 }
+
+/* 分派区块（#39）：assignment 是运行记录，展开状态 / 跳数 / 摘录，不是消息。 */
+.team-runs__assignments {
+  border-block-start: 1px dashed var(--border);
+  margin-block-start: 4px;
+  padding-block-start: 4px;
+}
+
+.team-runs__assignments-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--faint);
+  font-weight: 500;
+}
+
+.team-runs__assignment-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.team-runs__assignment {
+  border-inline-start: 2px solid var(--border);
+  padding-inline-start: 6px;
+  display: grid;
+  gap: 3px;
+}
+
+.team-runs__assignment[data-team-assignment-state='failed'] {
+  border-inline-start-color: var(--offline);
+}
+
+.team-runs__assignment[data-team-assignment-state='budget-exhausted'] {
+  border-inline-start-color: var(--working);
+}
+
+.team-runs__assignment[data-team-assignment-state='completed'] {
+  border-inline-start-color: var(--accent);
+}
+
+.team-runs__assignment-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.team-runs__assignment-state {
+  font-weight: 600;
+}
+
+.team-runs__assignment-jump {
+  color: var(--faint);
+}
+
+.team-runs__assignment-excerpt,
+.team-runs__assignment-reason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

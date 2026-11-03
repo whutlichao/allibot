@@ -18,6 +18,7 @@ export const SSE_EVENT_TYPES = [
   'unread.changed',
   'reminder.due',
   'workspace.changed',
+  'team_assignment',
 ] as const;
 
 export type SseEventType = (typeof SSE_EVENT_TYPES)[number];
@@ -125,6 +126,43 @@ export function publishRoundOutcome(outcome: {
       target_id: outcome.target_id,
       member_id: outcome.member_id,
       status: outcome.status,
+    },
+  });
+}
+
+/**
+ * The frame one final TeamAssign assignment produces (D2.5). Only a final state
+ * is published — `running` itself is not a frame, and the live hub never
+ * replays, so a reconnecting client re-reads the run snapshot instead.
+ */
+export function publishTeamAssignment(assignment: {
+  team_run_id: string;
+  id: string;
+  target_id: string;
+  task_id: string | null;
+  member_id: string;
+  state: string;
+  jump_consumed: number;
+  reply_excerpt: string | null;
+  reason: string | null;
+  finished_at: string | null;
+}): void {
+  if (assignment.finished_at === null) {
+    return;
+  }
+  eventHub.publish({
+    event: 'team_assignment',
+    data: {
+      team_run_id: assignment.team_run_id,
+      assignment_id: assignment.id,
+      target_id: assignment.target_id,
+      task_id: assignment.task_id,
+      member_id: assignment.member_id,
+      state: assignment.state,
+      jump_consumed: assignment.jump_consumed,
+      reply_excerpt: assignment.reply_excerpt,
+      reason: assignment.reason,
+      occurred_at: assignment.finished_at,
     },
   });
 }
