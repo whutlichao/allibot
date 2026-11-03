@@ -1,4 +1,10 @@
-import { t, type WorkspaceSettingsView, type WorkspaceView } from '@allibot/shared';
+import {
+  t,
+  type TaskStatus,
+  type TaskView,
+  type WorkspaceSettingsView,
+  type WorkspaceView,
+} from '@allibot/shared';
 import { createElement } from 'react';
 import { Avatar } from './components/Avatar.ts';
 import { SettingsPanel } from './components/SettingsPanel.ts';
@@ -14,6 +20,8 @@ export interface AppProps {
   activeTargetId?: string | null;
   viewportWidth?: number;
   onSelectTarget?: (targetId: string) => void;
+  /** The task board's write entry; the board itself never changes a task row. */
+  onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
   onLiveEvent?: (event: LiveEvent) => void;
 }
 
@@ -33,6 +41,7 @@ export function App({
   activeTargetId,
   viewportWidth,
   onSelectTarget,
+  onTaskTransition,
   onLiveEvent,
 }: AppProps) {
   if (workspace !== undefined) {
@@ -42,6 +51,7 @@ export function App({
       activeTargetId,
       viewportWidth,
       onSelectTarget,
+      onTaskTransition,
       onSettingsChange,
       saveFailed,
       onLiveEvent,

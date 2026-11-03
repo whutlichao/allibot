@@ -1,4 +1,11 @@
-import { t, type Locale, type WorkspaceSettingsView, type WorkspaceView } from '@allibot/shared';
+import {
+  t,
+  type Locale,
+  type TaskStatus,
+  type TaskView,
+  type WorkspaceSettingsView,
+  type WorkspaceView,
+} from '@allibot/shared';
 import { CopilotKitProvider } from '@copilotkit/react-core/v2';
 import { createElement, useState, type ReactNode } from 'react';
 import {
@@ -6,6 +13,7 @@ import {
   AGUI_USE_SINGLE_ENDPOINT,
 } from '../copilotkit-contract.ts';
 import { SettingsPanel } from '../components/SettingsPanel.ts';
+import { TaskBoard } from '../task-board/TaskBoard.ts';
 import { ContextPanel } from './ContextPanel.ts';
 import { WorkspaceChatArea, LiveEventContext, type LiveEventSink } from './WorkspaceChat.ts';
 import { initialTargetId, readTargetContext } from './model.ts';
@@ -31,6 +39,8 @@ export interface WorkspaceShellProps {
   initialDrawer?: WorkspaceDrawer | null;
   viewportWidth?: number;
   onSelectTarget?: (targetId: string) => void;
+  /** The task board's write entry; the board itself never changes a task row. */
+  onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
   onSettingsChange?: (patch: Partial<WorkspaceSettingsView>) => void;
   saveFailed?: boolean;
   onLiveEvent?: LiveEventSink;
@@ -72,6 +82,7 @@ export function WorkspaceShell({
   initialDrawer = null,
   viewportWidth = DEFAULT_VIEWPORT_WIDTH,
   onSelectTarget,
+  onTaskTransition,
   onSettingsChange,
   saveFailed = false,
   onLiveEvent,
@@ -169,6 +180,14 @@ export function WorkspaceShell({
   let drawerBody: ReactNode = null;
   if (drawer === 'navigation') {
     drawerBody = navigation;
+  } else if (drawer === 'task-board') {
+    drawerBody = createElement(TaskBoard, {
+      tasks: workspace.tasks,
+      channels: workspace.channels,
+      locale,
+      onSelectTarget: selectTarget,
+      onTransition: onTaskTransition,
+    });
   } else if (drawer === 'context') {
     drawerBody = createElement(ContextPanel, {
       workspace,
