@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { ChannelView, TaskStatus, TaskView, WorkspaceView } from '@allibot/shared';
+import {
+  t,
+  type ChannelView,
+  type TaskStatus,
+  type TaskView,
+  type WorkspaceView,
+} from '@allibot/shared';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
@@ -299,6 +305,7 @@ test('the pointer chip shows unread_count, hides a zero count, and enters the ta
     'the chip never points at the channel',
   );
   assert.ok(unreadCard.includes('data-chip-unread="1"'));
+  assert.ok(unreadCard.includes(t('zh-CN', 'taskBoard.chip.unread', { count: 1 })));
   assert.ok(unreadCard.includes('1 条未读'));
 
   const zeroCard = cardHtml(html, 'task-other');

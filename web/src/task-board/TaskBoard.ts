@@ -118,7 +118,7 @@ export function TaskBoard({
                 className: 'task-card__chip-unread',
                 'data-chip-unread': task.unread_count,
               },
-              t(locale, 'workspace.nav.unread', { count: task.unread_count }),
+              t(locale, 'taskBoard.chip.unread', { count: task.unread_count }),
             )
           : null,
       ),

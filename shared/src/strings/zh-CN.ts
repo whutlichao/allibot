@@ -258,5 +258,6 @@ export const ZH_CN = {
   'taskBoard.filter.label': { text: '频道筛选', params: [] },
   'taskBoard.filter.all': { text: '全部频道', params: [] },
   'taskBoard.transition.label': { text: '流转', params: [] },
-  'taskBoard.chip.thread': { text: '任务线程', params: [] },
+  'taskBoard.chip.thread': { text: '进入任务线程', params: [] },
+  'taskBoard.chip.unread': { text: '· {count} 条未读', params: ['count'] },
 } as const satisfies Record<string, CatalogEntry>;
