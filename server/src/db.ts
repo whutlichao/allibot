@@ -7,7 +7,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 export interface MigrationStep {
   readonly to: number;
@@ -560,6 +560,173 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
 
         DROP TABLE channel;
         ALTER TABLE channel_rebuild RENAME TO channel;
+      `);
+    },
+  },  {
+    // The team-run ticket (#38 / T14) lands the run records for the leader's
+    // team rounds. A run is one row per round; an assignment is one row per
+    // TeamAssign call (#39 fills those rows). Both are closed exactly once:
+    // the closed-immutability triggers make the database, not the code, the
+    // backstop for "状态从 running 收口一次" and for the frozen jump / start.
+    to: 15,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE team_run (
+          id TEXT PRIMARY KEY,
+          target_id TEXT NOT NULL REFERENCES target (id),
+          channel_id TEXT NOT NULL REFERENCES channel (id),
+          task_id TEXT REFERENCES task (id),
+          leader_member_id TEXT NOT NULL REFERENCES member (id),
+          status TEXT NOT NULL CHECK (
+            status IN ('running', 'completed', 'failed', 'invalid-leader')
+          ),
+          reason TEXT,
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          CHECK (
+            (status = 'running' AND finished_at IS NULL)
+            OR (status <> 'running' AND finished_at IS NOT NULL)
+          )
+        );
+
+        -- The snapshot read is per target in reverse time order.
+        CREATE INDEX team_run_target_started ON team_run (target_id, started_at);
+
+        -- A channel-type target has no task and is its own channel target; a
+        -- task-type target names the task it belongs to and that task's channel.
+        -- Column references cannot express the join, so the trigger is the
+        -- backstop for the target / task consistency rule.
+        CREATE TRIGGER team_run_target_consistency_insert
+        BEFORE INSERT ON team_run
+        FOR EACH ROW
+        WHEN NOT (
+          (
+            NEW.task_id IS NULL
+            AND NEW.target_id = NEW.channel_id
+            AND (SELECT kind FROM target WHERE id = NEW.target_id) = 'channel'
+          )
+          OR (
+            NEW.task_id IS NOT NULL
+            AND (SELECT kind FROM target WHERE id = NEW.target_id) = 'task'
+            AND EXISTS (
+              SELECT 1 FROM task
+               WHERE id = NEW.task_id
+                 AND target_id = NEW.target_id
+                 AND channel_id = NEW.channel_id
+            )
+          )
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'team_run target/task do not match');
+        END;
+
+        CREATE TRIGGER team_run_target_consistency_update
+        BEFORE UPDATE OF target_id, channel_id, task_id ON team_run
+        FOR EACH ROW
+        WHEN NOT (
+          (
+            NEW.task_id IS NULL
+            AND NEW.target_id = NEW.channel_id
+            AND (SELECT kind FROM target WHERE id = NEW.target_id) = 'channel'
+          )
+          OR (
+            NEW.task_id IS NOT NULL
+            AND (SELECT kind FROM target WHERE id = NEW.target_id) = 'task'
+            AND EXISTS (
+              SELECT 1 FROM task
+               WHERE id = NEW.task_id
+                 AND target_id = NEW.target_id
+                 AND channel_id = NEW.channel_id
+            )
+          )
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'team_run target/task do not match');
+        END;
+
+        -- A run closes exactly once. Its identity, target, task and start time
+        -- are frozen at insert; only the transition out of running is allowed.
+        CREATE TRIGGER team_run_closed_immutable
+        BEFORE UPDATE ON team_run
+        FOR EACH ROW
+        WHEN OLD.status <> 'running'
+          OR NEW.id <> OLD.id
+          OR NEW.target_id <> OLD.target_id
+          OR NEW.channel_id <> OLD.channel_id
+          OR NEW.task_id IS NOT OLD.task_id
+          OR NEW.leader_member_id <> OLD.leader_member_id
+          OR NEW.started_at <> OLD.started_at
+        BEGIN
+          SELECT RAISE(ABORT, 'team_run is already closed or changes an immutable field');
+        END;
+
+        CREATE TABLE team_assignment (
+          id TEXT PRIMARY KEY,
+          team_run_id TEXT NOT NULL REFERENCES team_run (id),
+          target_id TEXT NOT NULL REFERENCES target (id),
+          task_id TEXT REFERENCES task (id),
+          member_id TEXT NOT NULL REFERENCES member (id),
+          state TEXT NOT NULL CHECK (
+            state IN ('running', 'completed', 'failed', 'budget-exhausted')
+          ),
+          jump_consumed INTEGER NOT NULL CHECK (jump_consumed IN (0, 1)),
+          reply_excerpt TEXT,
+          reason TEXT,
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          CHECK (
+            (state = 'running' AND finished_at IS NULL)
+            OR (state <> 'running' AND finished_at IS NOT NULL)
+          ),
+          CHECK (state <> 'budget-exhausted' OR jump_consumed = 0)
+        );
+
+        -- The nested read loads the assignments of one run.
+        CREATE INDEX team_assignment_run_started ON team_assignment (team_run_id, started_at);
+
+        -- An assignment inherits its run's target / task: the two rows can never
+        -- name different scopes.
+        CREATE TRIGGER team_assignment_matches_run_insert
+        BEFORE INSERT ON team_assignment
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+          SELECT 1 FROM team_run r
+           WHERE r.id = NEW.team_run_id
+             AND r.target_id = NEW.target_id
+             AND r.task_id IS NEW.task_id
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'team_assignment target/task does not match its run');
+        END;
+
+        CREATE TRIGGER team_assignment_matches_run_update
+        BEFORE UPDATE OF team_run_id, target_id, task_id ON team_assignment
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+          SELECT 1 FROM team_run r
+           WHERE r.id = NEW.team_run_id
+             AND r.target_id = NEW.target_id
+             AND r.task_id IS NEW.task_id
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'team_assignment target/task does not match its run');
+        END;
+
+        -- An assignment closes exactly once. jump_consumed and started_at are
+        -- frozen at insert (a consumed jump is never refunded).
+        CREATE TRIGGER team_assignment_closed_immutable
+        BEFORE UPDATE ON team_assignment
+        FOR EACH ROW
+        WHEN OLD.state <> 'running'
+          OR NEW.team_run_id <> OLD.team_run_id
+          OR NEW.target_id <> OLD.target_id
+          OR NEW.task_id IS NOT OLD.task_id
+          OR NEW.member_id <> OLD.member_id
+          OR NEW.jump_consumed <> OLD.jump_consumed
+          OR NEW.started_at <> OLD.started_at
+        BEGIN
+          SELECT RAISE(ABORT, 'team_assignment is closed or changes an immutable field');
+        END;
       `);
     },
   },

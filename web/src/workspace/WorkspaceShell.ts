@@ -5,6 +5,7 @@ import {
   type TargetMemberView,
   type TaskStatus,
   type TaskView,
+  type TeamRunView,
   type WorkspaceSettingsView,
   type WorkspaceView,
 } from '@allibot/shared';
@@ -53,6 +54,8 @@ export interface WorkspaceShellProps {
    * membership.
    */
   channelMembers?: Record<string, readonly TargetMemberView[]>;
+  /** Team run snapshots, keyed by target id; the run panel reads them. */
+  teamRuns?: Record<string, readonly TeamRunView[]>;
   viewportWidth?: number;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
@@ -117,6 +120,7 @@ export function WorkspaceShell({
   onSaveAgent,
   onDeleteAgent,
   onChannelConfigChange,
+  teamRuns,
   saveFailed = false,
   onLiveEvent,
 }: WorkspaceShellProps) {
@@ -290,6 +294,7 @@ export function WorkspaceShell({
         selectedTargetId === null || onChannelConfigChange === undefined
           ? undefined
           : (patch: ChannelConfigPatch) => onChannelConfigChange(selectedTargetId, patch),
+      teamRuns: selectedTargetId === null ? undefined : teamRuns?.[selectedTargetId],
       onOpenPanel: openPanel,
     });
   } else if (drawer === 'members') {

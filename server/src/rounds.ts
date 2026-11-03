@@ -29,8 +29,15 @@ import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './mem
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
-import { readTeamWakeState } from './team.js';
+import { readTeamTargetState, readTeamWakeState } from './team.js';
+import {
+  closeTeamRun,
+  recordInvalidLeaderRun,
+  startTeamRun,
+  type StartedTeamRun,
+} from './team-runs.js';
 import { countUnread } from './unread.js';
+import { transferTaskAsMember } from './tasks.js';
 
 /**
  * 自动续跑 (Auto-continue) is bounded independently of the response budget:
@@ -59,6 +66,8 @@ function wakeText(db: Database.Database, reason: WakeReason): string {
       return tFromDb(db, 'wake.claim');
     case 'continue':
       return tFromDb(db, 'wake.continue');
+    case 'team-change':
+      return tFromDb(db, 'wake.teamChange');
   }
 }
 
@@ -99,6 +108,8 @@ function mandatoryText(
       return tFromDb(db, 'round.mandatory.humanMessage');
     case 'continue':
       return tFromDb(db, 'round.mandatory.continue');
+    case 'team-change':
+      return tFromDb(db, 'round.mandatory.teamChange');
   }
 }
 
@@ -192,6 +203,17 @@ export function collectWakes(
     }
   }
 
+  // team 任务线程收窄（D3.2 / D3.5）: a task target of a team channel wakes only
+  // the leader, and a task target has no penetration exception at all. The
+  // invalid-leader trigger is recorded by the message write path, not here: the
+  // wake surface stays a pure reading.
+  if (targetKind === 'task') {
+    const team = readTeamTargetState(db, message.targetId, env);
+    if (team !== null) {
+      return collectTeamTaskWakes(message, mentioned, team);
+    }
+  }
+
   const wakes: Wake[] = [];
   const woken = new Set<string>();
 
@@ -278,6 +300,32 @@ function collectTeamChannelWakes(
     delivered.add(member.id);
   }
   return wakes;
+}
+
+/**
+ * The team task target's wake set: the leader is the whole surface, a
+ * leader-authored message wakes nobody, and a mention of anyone else never
+ * penetrates (task targets have no penetration exception, D3.6).
+ */
+function collectTeamTaskWakes(
+  message: { targetId: string; authorMemberId: string; kind: string; seq: number },
+  mentioned: ReadonlySet<string>,
+  team: { leaderMemberId: string; available: boolean },
+): Wake[] {
+  if (team.leaderMemberId.length === 0 || team.leaderMemberId === message.authorMemberId) {
+    return [];
+  }
+  if (!team.available) {
+    return [];
+  }
+  return [
+    {
+      memberId: team.leaderMemberId,
+      targetId: message.targetId,
+      fromSeq: message.seq,
+      reason: mentioned.has(team.leaderMemberId) ? 'mention' : 'channel-message',
+    },
+  ];
 }
 
 /** Whether the member holds a target_member row on this target (any kind). */
@@ -572,6 +620,10 @@ export async function runRound(
   const turn: Turn = { targetId: wake.targetId, repeats: [], deferred: [] };
   inFlight.set(wake.memberId, turn);
   const startedAt = new Date().toISOString();
+  // 运行记录 (D3.3): a real leader round on a team target opens one run. The
+  // target state is the same reading the wake surface used, so the run names
+  // the same leader, channel and task the delivery did.
+  const teamRun = openTeamRunForWake(db, wake, startedAt);
   // The status point's `working` state is process state; the frame announces
   // the transition now, and the reading that carries reasons stays the
   // workspace snapshot.
@@ -601,6 +653,9 @@ export async function runRound(
       jump,
       interrupted,
     });
+    if (teamRun !== null) {
+      closeRoundTeamRun(db, teamRun, committed);
+    }
   } finally {
     inFlight.delete(wake.memberId);
   }
@@ -672,6 +727,48 @@ export async function runRound(
 }
 
 /**
+ * Whether this wake is the leader's own team round. The leader is the only
+ * ordinary wake target of a team channel / task target (D3.2), so a delivered
+ * wake from one of those surfaces is exactly the round the run records. A
+ * claim / continue wake never exists in a team target; guarding on the reason
+ * keeps a hypothetical one from opening a record.
+ */
+function openTeamRunForWake(
+  db: Database.Database,
+  wake: Wake,
+  startedAt: string,
+): StartedTeamRun | null {
+  if (
+    wake.reason !== 'channel-message' &&
+    wake.reason !== 'mention' &&
+    wake.reason !== 'team-change'
+  ) {
+    return null;
+  }
+  const state = readTeamTargetState(db, wake.targetId, process.env);
+  if (state === null || !state.available || state.leaderMemberId !== wake.memberId) {
+    return null;
+  }
+  return startTeamRun(db, state, startedAt);
+}
+
+/** Close the leader round's run with the round conclusion (D3.3). */
+function closeRoundTeamRun(
+  db: Database.Database,
+  run: StartedTeamRun,
+  committed: CommittedRound,
+): void {
+  const failed = committed.outcome.status === 'failed';
+  closeTeamRun(
+    db,
+    run.id,
+    failed ? 'failed' : 'completed',
+    failed ? committed.outcome.reason : null,
+    committed.outcome.finished_at,
+  );
+}
+
+/**
  * The commit of one round. The reply seq travels back with the outcome so the
  * caller can relay that message under the response budget; `null` means the
  * round landed no message (ignored, failed, or a reply with no committable
@@ -729,7 +826,14 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     messages,
     consumedSeq,
     memories,
-    systemPrompt: composeSystemPrompt(db, member, targetKind, triggeredByHuman, memories),
+    systemPrompt: composeSystemPrompt(
+      db,
+      member,
+      targetKind,
+      triggeredByHuman,
+      wake.reason,
+      memories,
+    ),
   };
 }
 
@@ -775,6 +879,10 @@ function readDiscipline(
       return triggeredByHuman
         ? { definite: true, signal: 'human-message' }
         : { definite: false, signal: null };
+    case 'team-change':
+      // 队长被任务变化唤醒（建任务 / owner 改派 / Agent 转派）: a definite
+      // signal with its own copy, never the claim / mention / human-message text.
+      return { definite: true, signal: 'team-change' };
   }
 }
 
@@ -816,6 +924,7 @@ function composeSystemPrompt(
   member: RoundMember,
   targetKind: RoundTargetKind,
   triggeredByHuman: boolean,
+  reason: WakeReason,
   memories: readonly RoundMemory[],
 ): string {
   const sections = [member.system_prompt.trim()];
@@ -830,6 +939,9 @@ function composeSystemPrompt(
     sections.push(tFromDb(db, 'prompt.channel.rubric'));
     if (triggeredByHuman) {
       sections.push(tFromDb(db, 'prompt.humanMessage.mandatory'));
+    }
+    if (reason === 'team-change') {
+      sections.push(tFromDb(db, 'prompt.teamChange.mandatory'));
     }
   }
   const memorySection = memoryPromptSection(db, memories);
@@ -977,11 +1089,23 @@ function commitTaskAction(
   result: RoundResult,
   written: WrittenMessage[],
 ): { clause: string; wake: Wake | null } | null {
+  if (result.taskAction === 'transfer_task') {
+    return commitTransferAction(db, wake, roundInput, result);
+  }
   if (result.taskAction !== 'continue_task' || roundInput === undefined) {
     return null;
   }
   if (roundInput.targetKind !== 'task') {
     return null;
+  }
+  // 自动续跑在 team 任务线程不提供（D3.5）: the leader-only wake rule is not
+  // reopened by a structured action, and the refusal is readable in the round
+  // reason. It starts no round, writes no continue record and charges no jump.
+  if (readTeamTargetState(db, wake.targetId, process.env) !== null) {
+    return {
+      clause: tFromDb(db, 'round.continue.teamDisabled'),
+      wake: null,
+    };
   }
   const task = db
     .prepare('SELECT title, assignee_member_id FROM task WHERE target_id = ?')
@@ -1029,6 +1153,71 @@ function commitTaskAction(
       fromSeq: record.seq,
       reason: 'continue',
     },
+  };
+}
+
+/**
+ * Handle one round's structured `transfer_task` action (转派, D3.5).
+ *
+ * Only the task's current assignee can transfer it, only to another live Agent
+ * member of the same channel. The assignee change and the system change record
+ * share the round's transaction; a refusal writes nothing and is readable in
+ * the round reason. 人类世代 does not open here, and no message body is
+ * written. On a team channel the change wakes the leader with `team-change`
+ * (from_seq = the system record) unless the leader is the actor; an autonomous
+ * channel adds no wake.
+ */
+function commitTransferAction(
+  db: Database.Database,
+  wake: Wake,
+  roundInput: RoundInput | undefined,
+  result: RoundResult,
+): { clause: string; wake: Wake | null } | null {
+  if (roundInput === undefined || roundInput.targetKind !== 'task') {
+    return null;
+  }
+  if (result.taskTransferMemberId === undefined || result.taskTransferMemberId.length === 0) {
+    return {
+      clause: tFromDb(db, 'round.transfer.rejected', {
+        reason: tFromDb(db, 'round.transfer.noTarget'),
+      }),
+      wake: null,
+    };
+  }
+  const task = db
+    .prepare('SELECT id FROM task WHERE target_id = ?')
+    .get(wake.targetId) as { id: string } | undefined;
+  if (task === undefined) {
+    return null;
+  }
+  // Imported lazily at module scope would be a cycle: tasks.ts already knows
+  // this write path, and this module only formats the outcome.
+  const transfer = transferTaskAsMember(db, task.id, wake.memberId, result.taskTransferMemberId);
+  if (!transfer.ok) {
+    return {
+      clause: tFromDb(db, 'round.transfer.rejected', { reason: transfer.reason }),
+      wake: null,
+    };
+  }
+  const team = readTeamTargetState(db, wake.targetId, process.env);
+  let nextWake: Wake | null = null;
+  if (team !== null && wake.memberId !== team.leaderMemberId) {
+    if (team.available) {
+      nextWake = {
+        memberId: team.leaderMemberId,
+        targetId: wake.targetId,
+        fromSeq: transfer.assigneeEventSeq,
+        reason: 'team-change',
+      };
+    } else {
+      // The transfer itself is a task change that should have reached the
+      // leader: an unusable leader leaves the invalid-leader run instead.
+      recordInvalidLeaderRun(db, team);
+    }
+  }
+  return {
+    clause: tFromDb(db, 'round.transfer.done', { assignee: transfer.assigneeName }),
+    wake: nextWake,
   };
 }
 

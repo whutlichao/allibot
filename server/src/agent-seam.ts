@@ -20,7 +20,13 @@
  * diagnostics only; it is never the discipline that decides whether the Agent
  * must answer.
  */
-export const WAKE_REASONS = ['channel-message', 'mention', 'claim', 'continue'] as const;
+export const WAKE_REASONS = [
+  'channel-message',
+  'mention',
+  'claim',
+  'continue',
+  'team-change',
+] as const;
 export type WakeReason = (typeof WAKE_REASONS)[number];
 
 /** The three target kinds; a DM round reads its own one-to-one prompt. */
@@ -72,7 +78,7 @@ export interface RoundMessage {
 export interface RoundDiscipline {
   definite: boolean;
   /** The definite signal that fired; `null` when `definite` is false. */
-  signal: 'mention' | 'claim' | 'human-message' | 'continue' | null;
+  signal: 'mention' | 'claim' | 'human-message' | 'continue' | 'team-change' | null;
 }
 
 /** The round's input: the member, the context it reads, and its discipline. */
@@ -154,7 +160,17 @@ export type RoundVerdict = 'replied' | 'ignored' | 'silent' | 'failed';
  * write path decides what to land (a continue record and one more wake) and
  * when the per-epoch round cap pauses it.
  */
-export type RoundTaskAction = 'continue_task';
+export type RoundTaskAction = 'continue_task' | 'transfer_task';
+
+/**
+ * The structured transfer target. A `transfer_task` action names the member the
+ * current assignee hands the task to; the write path validates that it is
+ * another live Agent member of the same channel. Like `continue_task`, it is
+ * part of the one round result, never a body sentence.
+ */
+export interface RoundTaskTransfer {
+  member_id: string;
+}
 
 /**
  * How a round ended, when the adapter knows it was not an ordinary completion.
@@ -189,11 +205,15 @@ export interface RoundResult {
   detail?: string;
   finishedReason?: RoundFinishReason;
   /**
-   * The structured task action this round requests, if any. Only
-   * `continue_task` exists in M1; a body that merely says "I will continue"
-   * never counts as one.
+   * The structured task action this round requests, if any. A body that merely
+   * says "I will continue" or "please take over" never counts as one.
    */
   taskAction?: RoundTaskAction;
+  /**
+   * The target of a `transfer_task` action. It is ignored for every other
+   * action; a missing / invalid id is a structured refusal, not a round failure.
+   */
+  taskTransferMemberId?: string;
 }
 
 export interface RoundProvider {

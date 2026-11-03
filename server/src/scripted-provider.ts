@@ -30,8 +30,11 @@ import type { RoundInput, RoundProvider, RoundResult } from './agent-seam.js';
  *
  * `continue-task` is the double's face for the structured `continue_task`
  * action (自动续跑): it answers normally and states the action, so "I will
- * continue" is executable rather than a sentence in the body. Like every other
- * behaviour it is an adapter choice, never a production branch.
+ * continue" is executable rather than a sentence in the body. `transfer-task`
+ * is the same face for `transfer_task` (转派): it names the injected target
+ * member and lands no body, because a transfer writes a system record, not a
+ * message. Like every other behaviour it is an adapter choice, never a
+ * production branch.
  */
 export type ScriptedBehavior =
   | 'reply'
@@ -41,7 +44,8 @@ export type ScriptedBehavior =
   | 'silent'
   | 'no-body'
   | 'iteration-limit'
-  | 'continue-task';
+  | 'continue-task'
+  | 'transfer-task';
 
 export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'reply',
@@ -52,6 +56,7 @@ export const SCRIPTED_BEHAVIORS: readonly ScriptedBehavior[] = [
   'no-body',
   'iteration-limit',
   'continue-task',
+  'transfer-task',
 ];
 
 export interface ScriptedProviderOptions {
@@ -80,6 +85,8 @@ export interface ScriptedProviderOptions {
    * context reports it is a capability of the double, not a production branch.
    */
   reportCalls?: boolean;
+  /** The member a `transfer-task` round hands the task to (test injection). */
+  transferMemberId?: string;
 }
 
 /** The default scripted reply: deterministic, readable and free of model calls. */
@@ -139,6 +146,15 @@ export function createScriptedProvider(options: ScriptedProviderOptions): RoundP
           // The structured action rides the same round result as the reply:
           // the output shape stays "zero or more replies plus one result".
           return { ...replyResult(input, options, callReport), taskAction: 'continue_task' };
+        case 'transfer-task':
+          // A transfer writes a system change record, never a message body, so
+          // the double answers with the action and no pending reply.
+          return {
+            verdict: 'replied',
+            replies: [],
+            taskAction: 'transfer_task',
+            taskTransferMemberId: options.transferMemberId,
+          };
         case 'reply':
           return replyResult(input, options, callReport);
       }

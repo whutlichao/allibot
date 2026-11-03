@@ -15,6 +15,7 @@ import { createModelProvider } from './model-provider.js';
 import { startReminderScheduler } from './reminders.js';
 import { createInFlightRounds } from './rounds.js';
 import { createScriptedProvider } from './scripted-provider.js';
+import { closeInterruptedTeamRuns } from './team-runs.js';
 
 const SHUTDOWN_GRACE_MS = 5_000;
 
@@ -88,6 +89,10 @@ async function run(argv: readonly string[]): Promise<number> {
 
   const lock = await acquireDataDirLock(resolution.dataDir);
   const db = openDatabase(resolution.dataDir);
+  // 运行记录 (#38 / D3.3): a residual `running` run belongs to a round the
+  // previous process never concluded. It closes as failed/interrupted before
+  // the server accepts work; nothing is replayed or refunded.
+  closeInterruptedTeamRuns(db);
   // 提醒到点 is a backend fact, not a request: the process ticks on its own.
   // The first pass runs now, so a restart catches up overdue reminders.
   const stopReminders = startReminderScheduler(db, options.reminderTickMs);
@@ -136,6 +141,7 @@ function createOrchestration(
           echoPrompt: options.scriptedEchoPrompt,
           reportContext: options.scriptedReportContext,
           reportCalls: options.scriptedReportCalls,
+          transferMemberId: options.scriptedTransferMemberId,
         });
   return { provider, inFlight: createInFlightRounds() };
 }

@@ -82,6 +82,7 @@ export const ZH_CN = {
   'wake.mention': { text: '本轮由个人提及唤醒', params: [] },
   'wake.claim': { text: '本轮由认领唤醒', params: [] },
   'wake.continue': { text: '本轮由自动续跑唤醒', params: [] },
+  'wake.teamChange': { text: '本轮由任务变化唤醒', params: [] },
   'round.replied': { text: '已回复', params: [] },
   'round.ignored': { text: '自判忽略：本轮没有需要回应的话', params: [] },
   'round.failed': { text: '处理失败，需要排查', params: [] },
@@ -93,6 +94,10 @@ export const ZH_CN = {
   'round.mandatory.claim': { text: '本轮由认领唤醒：这是确定信号，必须回应', params: [] },
   'round.mandatory.humanMessage': { text: '本轮由人类消息唤醒：这是确定信号，必须回应', params: [] },
   'round.mandatory.continue': { text: '本轮由自动续跑唤醒：这是确定信号，必须回应', params: [] },
+  'round.mandatory.teamChange': {
+    text: '本轮由任务变化唤醒：这是确定信号，必须回应',
+    params: [],
+  },
   'round.silent.allowed': {
     text: '本轮不是确定信号：结构化沉默是正常协议结果，不按失败收口',
     params: [],
@@ -131,9 +136,37 @@ export const ZH_CN = {
     text: '已按结构化动作 continue_task 申请续跑（本世代第 {round} 轮）',
     params: ['round'],
   },
+  'round.continue.teamDisabled': {
+    text: 'team 任务线程不提供自动续跑（结构化动作 continue_task 被拒绝），本轮不产生续跑轮次',
+    params: [],
+  },
   'round.continue.paused': {
     text: '结构化动作 continue_task 到达本世代上限（{rounds} 轮），不再续跑',
     params: ['rounds'],
+  },
+  // 转派（#38 / D3.5）：受派者的结构化动作。拒绝是结构化结果，不是轮次失败；
+  // 转派本身只追加 system 变更记录，不写消息正文、不开人类世代。
+  'round.transfer.done': {
+    text: '已按结构化动作 transfer_task 把任务转派给 {assignee}',
+    params: ['assignee'],
+  },
+  'round.transfer.rejected': {
+    text: '结构化动作 transfer_task 被拒绝：{reason}',
+    params: ['reason'],
+  },
+  'round.transfer.notAssignee': {
+    text: '只有当前受派者才能转派这张任务',
+    params: [],
+  },
+  'round.transfer.self': { text: '不能把任务转派给自己', params: [] },
+  'round.transfer.same': { text: '目标成员已经是当前受派者', params: [] },
+  'round.transfer.notMember': {
+    text: '目标必须是同一频道的另一个活 Agent 成员',
+    params: [],
+  },
+  'round.transfer.noTarget': {
+    text: '结构化动作没有给出目标成员',
+    params: [],
   },
   'system.member.piercedJoin': {
     text: '{name} 加入了频道：它被点名时并不在频道里，回复时顺带加入（成员变化只随真实回复发生）',
@@ -158,6 +191,12 @@ export const ZH_CN = {
     text: '这条消息来自人类（owner）：人类消息是确定信号，必须回应。',
     params: [],
   },
+  // 队长被任务变化唤醒的那一轮（#38 / D3.2）：任务变化是确定信号，与人类
+  // 消息、认领、提及的可读文案分开，不能写下没发生过的来源。
+  'prompt.teamChange.mandatory': {
+    text: '这次唤醒来自任务变化（建任务 / 改派 / 转派）：作为队长，你必须回应并推进这件事。',
+    params: [],
+  },
 
   // 示例文案：用来看消息密度在壳里的呈现。
   'message.sample.author': { text: '示例成员', params: [] },
@@ -175,6 +214,10 @@ export const ZH_CN = {
   },
   'task.event.assignee.assigned': { text: '任务已指派给 {assignee}。', params: ['assignee'] },
   'task.event.assignee.unassigned': { text: '任务已收回指派。', params: [] },
+  'task.event.assignee.transferred': {
+    text: '任务由 {previous} 转派给 {assignee}。',
+    params: ['previous', 'assignee'],
+  },
   'task.event.assignee.reassigned': {
     text: '任务由 {previous} 改派给 {assignee}。',
     params: ['previous', 'assignee'],
@@ -371,6 +414,18 @@ export const ZH_CN = {
   'channel.config.leader.saveFailed': { text: '保存失败，请重试。', params: [] },
   'channel.config.leader.loading': { text: '正在读取频道成员…', params: [] },
   'channel.config.invalid': { text: '配置无效', params: [] },
+  // 运行面板（#38）：run 是取证面，不是消息；状态、reason、归属与时间都来自
+  // `GET /api/targets/{id}/team-runs` 的同一份读数。
+  'workspace.teamRuns.title': { text: '运行记录', params: [] },
+  'workspace.teamRuns.empty': { text: '还没有 team 运行记录。', params: [] },
+  'workspace.teamRuns.status.running': { text: '运行中', params: [] },
+  'workspace.teamRuns.status.completed': { text: '已完成', params: [] },
+  'workspace.teamRuns.status.failed': { text: '失败', params: [] },
+  'workspace.teamRuns.status.invalidLeader': { text: '队长不可用', params: [] },
+  'workspace.teamRuns.attribution.task': { text: '任务', params: [] },
+  'workspace.teamRuns.attribution.channel': { text: '频道', params: [] },
+  'workspace.teamRuns.reason': { text: '原因', params: [] },
+  'workspace.teamRuns.time': { text: '时间', params: [] },
   // 队长不可用的可读原因（D3.8）：读模型与轮次共用同一段文案。
   'team.invalid.leaderMissing': { text: '队长成员不存在或已被移除。', params: [] },
   'team.invalid.leaderNotAgent': { text: '队长必须是 Agent 成员。', params: [] },
@@ -379,6 +434,12 @@ export const ZH_CN = {
   'team.invalid.leaderNotMember': { text: '队长已不是该频道的成员。', params: [] },
   'team.invalid.modelMissing': { text: '队长没有配置可用的模型。', params: [] },
   'team.invalid.consentMissing': { text: '队长所属模型 provider 尚未确认远端数据流告知。', params: [] },
+  // 运行记录（#38）：进程重启把残留 running 收口为 failed，reason 带 interrupted；
+  // 已计跳不退款，也不产生消息、assignment 或新轮次。
+  'team.run.interrupted': {
+    text: '进程重启：残留的 running 运行记录收口为 failed（interrupted），已计跳不退款',
+    params: [],
+  },
   'team.invalid.credentialMissing': {
     text: '队长所属模型 provider 缺少凭证（{credential_env}）。',
     params: ['credential_env'],
