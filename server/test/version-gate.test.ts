@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import { makeTempDir, removeTempDir, runCli } from './support.ts';
+import { SCHEMA_VERSION } from '../dist/db.js';
 
 const DB_FILENAME = 'allibot.db';
 
@@ -32,7 +33,7 @@ test('a database newer than the code is refused by serve and --migrate without t
   const dataDir = await makeTempDir('allibot-gate-newer-');
   try {
     migrateToBaseline(dataDir);
-    setSchemaVersion(dataDir, 8);
+    setSchemaVersion(dataDir, SCHEMA_VERSION + 1);
     const before = databaseSha256(dataDir);
 
     const migrate = runCli(['--migrate', '--data-dir', dataDir]);

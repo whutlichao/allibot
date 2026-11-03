@@ -63,7 +63,7 @@ test('migrating an empty data dir adds channel, target and target_member', async
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 7);
+    assert.equal(readSchemaVersion(dataDir), 8);
     const tables = tableNames(dataDir);
     for (const table of ['channel', 'target', 'target_member']) {
       assert.ok(tables.includes(table), `${table} table is missing; tables: ${tables.join(', ')}`);
@@ -138,7 +138,7 @@ test('a version 2 data directory upgrades through the chain with a backup that k
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 7);
+    assert.equal(readSchemaVersion(dataDir), 8);
     assert.ok(tableNames(dataDir).includes('channel'));
     assert.equal(
       countRows(dataDir, "member WHERE id = 'kept-agent'"),
@@ -171,7 +171,7 @@ test('a version 2 data directory upgrades through the chain with a backup that k
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 2);
-    assert.equal(last?.['to'], 7);
+    assert.equal(last?.['to'], 8);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);

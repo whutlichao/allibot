@@ -56,7 +56,7 @@ test('migrating an empty data dir adds attachment and reaches the current schema
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 7);
+    assert.equal(readSchemaVersion(dataDir), 8);
     assert.deepEqual(attachmentColumns(dataDir), [
       'id',
       'message_id',
@@ -81,7 +81,7 @@ test('migrating an empty data dir adds attachment and reaches the current schema
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 7);
+    assert.equal(entries[0]?.['to'], 8);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -132,7 +132,7 @@ test('a version 4 data dir upgrades through the chain with a backup that keeps m
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 7);
+    assert.equal(readSchemaVersion(dataDir), 8);
     assert.deepEqual(attachmentColumns(dataDir), [
       'id',
       'message_id',
@@ -169,7 +169,7 @@ test('a version 4 data dir upgrades through the chain with a backup that keeps m
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 4);
-    assert.equal(last?.['to'], 7);
+    assert.equal(last?.['to'], 8);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);

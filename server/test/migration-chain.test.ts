@@ -10,6 +10,7 @@ import {
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { SCHEMA_VERSION } from '../dist/db.js';
 import {
   MIGRATION_FIXTURE,
   makeTempDir,
@@ -48,14 +49,14 @@ test('a fixture migration appended to the chain tail backs up the whole data dir
     assert.equal(diff.status, 0, `backup must match the pre-migration data dir; diff: ${diff.stdout}`);
     assert.equal(diff.stdout, '');
 
-    assert.equal(readSchemaVersion(dataDir), 8);
+    assert.equal(readSchemaVersion(dataDir), SCHEMA_VERSION + 1);
 
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 2, 'the baseline line and the fixture line are both kept');
     const last = entries[1];
     assert.ok(last !== undefined);
-    assert.equal(last['from'], 7);
-    assert.equal(last['to'], 8);
+    assert.equal(last['from'], SCHEMA_VERSION);
+    assert.equal(last['to'], SCHEMA_VERSION + 1);
     assert.equal(last['result'], 'ok');
     assert.equal(last['backup_path'], backupPath);
     const startedAt = Date.parse(String(last['started_at']));
@@ -71,7 +72,7 @@ test('a fixture migration appended to the chain tail backs up the whole data dir
       const row = db.prepare('SELECT schema_version FROM schema_meta').get() as {
         schema_version: number;
       };
-      assert.equal(row.schema_version, 7);
+      assert.equal(row.schema_version, SCHEMA_VERSION, 'the backup keeps the pre-migration version');
     } finally {
       db.close();
     }
@@ -109,8 +110,8 @@ test('a failing migration step rolls the database back and records the failure',
     const last = entries[entries.length - 1];
     assert.ok(last !== undefined);
     assert.equal(last['result'], 'failed');
-    assert.equal(last['from'], 7);
-    assert.equal(last['to'], 8);
+    assert.equal(last['from'], SCHEMA_VERSION);
+    assert.equal(last['to'], SCHEMA_VERSION + 1);
     assert.match(String(last['reason']), /injected migration step failure/);
 
     const backups = readdirSync(parent).filter((name) => name.startsWith('data.backup-'));
@@ -156,8 +157,8 @@ test('backup failure aborts the migration before any schema step runs', async ()
     const last = entries[entries.length - 1];
     assert.ok(last !== undefined);
     assert.equal(last['result'], 'failed');
-    assert.equal(last['from'], 7);
-    assert.equal(last['to'], 8);
+    assert.equal(last['from'], SCHEMA_VERSION);
+    assert.equal(last['to'], SCHEMA_VERSION + 1);
     assert.equal(last['backup_path'], null);
     assert.ok(
       typeof last['reason'] === 'string' && last['reason'].length > 0,

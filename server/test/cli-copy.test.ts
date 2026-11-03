@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import { CLI_ENTRY, REPO_ROOT, makeTempDir, removeTempDir, runCli } from './support.ts';
+import { SCHEMA_VERSION } from '../dist/db.js';
 
 /**
  * 后端生成的自然语言按语言偏好渲染：语言偏好落库、后端是唯一正本。这几条
@@ -18,13 +19,13 @@ test('the migrate receipt renders from the zh-CN catalog', async () => {
     assert.equal(first.exitCode, 0, `migrate should exit 0; output: ${first.output}`);
     assert.match(
       first.stdout,
-      new RegExp(`已把数据目录 ${escapeRegExp(dataDir)} 迁移到 Schema 版本 7。`),
+      new RegExp(`已把数据目录 ${escapeRegExp(dataDir)} 迁移到 Schema 版本 ${SCHEMA_VERSION}。`),
     );
     assert.doesNotMatch(first.output, /migrated .* to schema version/);
 
     const second = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(second.exitCode, 0, `second migrate should exit 0; output: ${second.output}`);
-    assert.match(second.stdout, new RegExp(`数据目录 ${escapeRegExp(dataDir)} 已是 Schema 版本 7。`));
+    assert.match(second.stdout, new RegExp(`数据目录 ${escapeRegExp(dataDir)} 已是 Schema 版本 ${SCHEMA_VERSION}。`));
     assert.doesNotMatch(second.output, /already at schema version/);
   } finally {
     await removeTempDir(dataDir);
@@ -53,7 +54,7 @@ test('the legacy data dir warning renders from the zh-CN catalog', async () => {
       const row = db.prepare('SELECT schema_version FROM schema_meta').get() as {
         schema_version: number;
       };
-      assert.equal(row.schema_version, 7);
+      assert.equal(row.schema_version, 8);
     } finally {
       db.close();
     }

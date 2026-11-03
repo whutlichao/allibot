@@ -32,6 +32,13 @@ import { appendMessageAndDispatch, listMessages, parseMessageRequest, parsePageQ
 import type { InFlightRounds } from './rounds.js';
 import { getSettings, updateSettings } from './settings.js';
 import {
+  createTask,
+  getTask,
+  listTasks,
+  parseTaskQuery,
+  updateTask,
+} from './tasks.js';
+import {
   joinChannel,
   listChannelMembers,
   listTargetMembers,
@@ -118,6 +125,7 @@ export async function startHttpServer(
 const AGENT_ID = '([^/]+)';
 const CHANNEL_ID = '([^/]+)';
 const ATTACHMENT_ID = '([^/]+)';
+const TASK_ID = '([^/]+)';
 
 const ROUTES: readonly Route[] = [
   {
@@ -230,6 +238,39 @@ const ROUTES: readonly Route[] = [
         orchestration,
       );
       sendJson(response, 201, result);
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/tasks$/,
+    handle: async (request, response, { db }) => {
+      const query = parseTaskQuery(new URL(request.url ?? '/', `http://${HOST}`).searchParams);
+      sendJson(response, 200, { tasks: listTasks(db, query) });
+    },
+  },
+  {
+    method: 'POST',
+    pattern: /^\/api\/tasks$/,
+    handle: async (request, response, { db }) => {
+      sendJson(response, 201, createTask(db, await readJsonBody(request)));
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/tasks/${TASK_ID}$`),
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, getTask(db, decodeId(params[0])));
+    },
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/api/tasks/${TASK_ID}$`),
+    handle: async (request, response, { db }, ...params) => {
+      sendJson(
+        response,
+        200,
+        updateTask(db, decodeId(params[0]), await readJsonBody(request)),
+      );
     },
   },
   {
