@@ -71,7 +71,7 @@ test('migrating an empty data dir adds message and message_mention and reaches t
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 5);
+    assert.equal(readSchemaVersion(dataDir), 6);
     const tables = tableNames(dataDir);
     for (const table of ['message', 'message_mention']) {
       assert.ok(tables.includes(table), `${table} table is missing; tables: ${tables.join(', ')}`);
@@ -111,7 +111,7 @@ test('migrating an empty data dir adds message and message_mention and reaches t
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 5);
+    assert.equal(entries[0]?.['to'], 6);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -152,7 +152,7 @@ test('a version 3 data dir upgrades through the chain with a backup that keeps c
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 5);
+    assert.equal(readSchemaVersion(dataDir), 6);
     assert.ok(tableNames(dataDir).includes('message'));
     assert.equal(
       countRows(dataDir, "channel WHERE id = 'kept-channel'"),
@@ -186,7 +186,7 @@ test('a version 3 data dir upgrades through the chain with a backup that keeps c
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 3);
-    assert.equal(last?.['to'], 5);
+    assert.equal(last?.['to'], 6);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);

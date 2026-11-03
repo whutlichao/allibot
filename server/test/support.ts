@@ -28,7 +28,7 @@ process.once('exit', () => {
   rmSync(FALLBACK_HOME, { recursive: true, force: true });
 });
 
-const LISTENING_LINE = /allibot server listening on http:\/\/127\.0\.0\.1:(\d+)/;
+const LISTENING_LINE = /allibot 已监听 http:\/\/127\.0\.0\.1:(\d+)。/;
 
 export interface CliResult {
   exitCode: number | null;

@@ -125,3 +125,23 @@ export interface MessageView {
   mentions: MessageMentionView[];
   attachments: AttachmentView[];
 }
+
+export {
+  MESSAGE_DENSITIES,
+  SUPPORTED_LOCALES,
+  THEMES,
+  type Locale,
+  type MessageDensity,
+  type Theme,
+  type WorkspaceSettingsView,
+} from './settings.js';
+
+export {
+  RESERVED_LOCALES,
+  ZH_CN,
+  t,
+  type Catalog,
+  type CatalogEntry,
+  type MessageKey,
+  type MessageValues,
+} from './strings/index.js';

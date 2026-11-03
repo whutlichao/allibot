@@ -41,13 +41,6 @@ export function resolveDataDir(
   return { dataDir: defaultDir, origin: 'default' };
 }
 
-export function legacyDataDirWarning(dataDir: string): string {
-  return (
-    `warning: using legacy data directory ${dataDir} for compatibility reads; ` +
-    'existing data is not moved. Use --data-dir or allibot_DATA_DIR to choose another directory.'
-  );
-}
-
 export function databasePath(dataDir: string): string {
   return path.join(dataDir, DB_FILENAME);
 }

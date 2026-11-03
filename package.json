@@ -14,7 +14,8 @@
   "scripts": {
     "build": "npm run build --workspace shared && npm run build --workspace server && node scripts/write-root-cli.mjs && npm run build --workspace web",
     "typecheck": "npm run typecheck --workspace shared && npm run typecheck --workspace server && npm run typecheck --workspace web",
-    "test": "npm run build && npm run test --workspace server && npm run test:visual-contract",
+    "test": "npm run build && npm run test --workspace server && npm run test:strings && npm run test:visual-contract",
+    "test:strings": "npm run build --workspace shared && npm run test:strings --workspace shared && npm run test:strings --workspace web",
     "test:visual-contract": "npm run test:visual-contract --workspace web"
   }
 }

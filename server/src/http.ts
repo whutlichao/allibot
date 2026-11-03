@@ -28,6 +28,7 @@ import {
   updateAgent,
 } from './members.js';
 import { appendMessage, listMessages, parseMessageRequest, parsePageQuery } from './messages.js';
+import { getSettings, updateSettings } from './settings.js';
 import {
   joinChannel,
   listChannelMembers,
@@ -207,6 +208,20 @@ const ROUTES: readonly Route[] = [
       const targetId = decodeId(params[0]);
       const result = appendMessage(db, parseMessageRequest(targetId, await readJsonBody(request)));
       sendJson(response, 201, result);
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/settings$/,
+    handle: async (_request, response, { db }) => {
+      sendJson(response, 200, getSettings(db));
+    },
+  },
+  {
+    method: 'PATCH',
+    pattern: /^\/api\/settings$/,
+    handle: async (request, response, { db }) => {
+      sendJson(response, 200, updateSettings(db, await readJsonBody(request)));
     },
   },
   {
