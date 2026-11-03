@@ -379,6 +379,12 @@ export const ZH_CN = {
   'team.invalid.leaderNotMember': { text: '队长已不是该频道的成员。', params: [] },
   'team.invalid.modelMissing': { text: '队长没有配置可用的模型。', params: [] },
   'team.invalid.consentMissing': { text: '队长所属模型 provider 尚未确认远端数据流告知。', params: [] },
+  // 运行记录（#38）：进程重启把残留 running 收口为 failed，reason 带 interrupted；
+  // 已计跳不退款，也不产生消息、assignment 或新轮次。
+  'team.run.interrupted': {
+    text: '进程重启：残留的 running 运行记录收口为 failed（interrupted），已计跳不退款',
+    params: [],
+  },
   'team.invalid.credentialMissing': {
     text: '队长所属模型 provider 缺少凭证（{credential_env}）。',
     params: ['credential_env'],

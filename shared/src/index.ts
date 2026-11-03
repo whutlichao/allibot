@@ -295,6 +295,60 @@ export interface TaskView {
 }
 
 /**
+ * The four team_run statuses (D3.3): a leader round opens `running` and closes
+ * `completed` / `failed`; a trigger that would have delivered to an unusable
+ * leader lands `invalid-leader` with both timestamps written. These are field
+ * values, not a new status vocabulary for rounds.
+ */
+export const TEAM_RUN_STATUSES = ['running', 'completed', 'failed', 'invalid-leader'] as const;
+export type TeamRunStatus = (typeof TEAM_RUN_STATUSES)[number];
+
+/** The four team_assignment states; `budget-exhausted` consumes no jump. */
+export const TEAM_ASSIGNMENT_STATES = [
+  'running',
+  'completed',
+  'failed',
+  'budget-exhausted',
+] as const;
+export type TeamAssignmentState = (typeof TEAM_ASSIGNMENT_STATES)[number];
+
+/**
+ * One TeamAssign record (#39 writes these; #38 reads them as an empty nested
+ * list). It is a run record, never a message.
+ */
+export interface TeamAssignmentView {
+  id: string;
+  team_run_id: string;
+  target_id: string;
+  task_id: string | null;
+  member_id: string;
+  state: TeamAssignmentState;
+  jump_consumed: 0 | 1;
+  reply_excerpt: string | null;
+  reason: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/**
+ * One leader team round as `GET /api/targets/{id}/team-runs` returns it. A task
+ * target's run carries `task_id`; a channel target's run carries NULL. The
+ * nested assignments are the run's member work, never messages.
+ */
+export interface TeamRunView {
+  id: string;
+  target_id: string;
+  channel_id: string;
+  task_id: string | null;
+  leader_member_id: string;
+  status: TeamRunStatus;
+  reason: string | null;
+  started_at: string;
+  finished_at: string | null;
+  assignments: TeamAssignmentView[];
+}
+
+/**
  * One highlight range inside a hit's text. `start` / `end` are UTF-16
  * code-unit offsets and half-open `[start, end)`, the same convention the
  * mention ranges use: the backend decides every range, the frontend only wraps

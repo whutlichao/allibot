@@ -232,3 +232,101 @@ export function addLeaderToTaskTargets(
      SELECT t.target_id, ? FROM task t WHERE t.channel_id = ?`,
   ).run(leaderMemberId, channelId);
 }
+/**
+ * The target-context team reading (#38): a channel-type target or a task-type
+ * target whose owning channel is in team mode. `null` means the ordinary
+ * autonomous surface — there is no leader to deliver to and no team record to
+ * write. A task target resolves its mode through its channel (D3.1), so the
+ * task row never stores a second topology.
+ */
+export interface TeamTargetState {
+  targetId: string;
+  targetKind: 'channel' | 'task';
+  channelId: string;
+  /** The task id on a task target; null on a channel target. */
+  taskId: string | null;
+  /** The configured leader, or `''` when the row cannot carry one. */
+  leaderMemberId: string;
+  available: boolean;
+  /** The same readable reason the channel read model serves (D3.8). */
+  reason: string | null;
+}
+
+export function readTeamTargetState(
+  db: Database.Database,
+  targetId: string,
+  env: NodeJS.ProcessEnv,
+): TeamTargetState | null {
+  const target = db.prepare('SELECT kind FROM target WHERE id = ?').get(targetId) as
+    | { kind: string }
+    | undefined;
+  if (target === undefined) {
+    return null;
+  }
+  if (target.kind === 'channel') {
+    const row = readChannelTeamRow(db, targetId);
+    if (row === undefined || row.mode !== 'team') {
+      return null;
+    }
+    return buildTeamTargetState(db, targetId, 'channel', targetId, null, row.team_leader_member_id, env);
+  }
+  if (target.kind === 'task') {
+    const task = db
+      .prepare(
+        `SELECT t.id, t.channel_id, c.mode, c.team_leader_member_id
+           FROM task t
+           JOIN channel c ON c.id = t.channel_id
+          WHERE t.target_id = ?`,
+      )
+      .get(targetId) as
+      | { id: string; channel_id: string; mode: string; team_leader_member_id: string | null }
+      | undefined;
+    if (task === undefined || task.mode !== 'team') {
+      return null;
+    }
+    return buildTeamTargetState(
+      db,
+      targetId,
+      'task',
+      task.channel_id,
+      task.id,
+      task.team_leader_member_id,
+      env,
+    );
+  }
+  return null;
+}
+
+function buildTeamTargetState(
+  db: Database.Database,
+  targetId: string,
+  targetKind: 'channel' | 'task',
+  channelId: string,
+  taskId: string | null,
+  leaderId: string | null,
+  env: NodeJS.ProcessEnv,
+): TeamTargetState {
+  if (leaderId === null) {
+    // The channel CHECK forbids this; the defensive reading is still invalid
+    // rather than a fallback to autonomous.
+    return {
+      targetId,
+      targetKind,
+      channelId,
+      taskId,
+      leaderMemberId: '',
+      available: false,
+      reason: tFromDb(db, 'team.invalid.leaderMissing'),
+    };
+  }
+  const availability = readLeaderAvailability(db, channelId, leaderId, env);
+  return {
+    targetId,
+    targetKind,
+    channelId,
+    taskId,
+    leaderMemberId: leaderId,
+    available: availability.ok,
+    reason: availability.ok ? null : availability.reason,
+  };
+}

@@ -58,6 +58,7 @@ import {
   listChannelMembers,
   listTargetMembers,
 } from './target-members.js';
+import { listTeamRuns, parseTeamRunQuery } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
 import { readWorkspace } from './workspace.js';
 
@@ -312,6 +313,20 @@ const ROUTES: readonly Route[] = [
     handle: async (request, response, { db }) => {
       const created = createDm(db, await readJsonBody(request));
       sendJson(response, created.created ? 201 : 200, { id: created.id });
+    },
+  },
+  {
+    // The team run snapshot (D2.3): newest runs first, each with its nested
+    // assignments. A run is a forensic record, not a message; the route reads
+    // the same target id the message route does, but a non-team target is an
+    // empty list rather than an error.
+    method: 'GET',
+    pattern: new RegExp(`^/api/targets/${TARGET_ID}/team-runs$`),
+    handle: async (request, response, { db, env }, ...params) => {
+      const query = parseTeamRunQuery(new URL(request.url ?? '/', `http://${HOST}`).searchParams);
+      sendJson(response, 200, {
+        team_runs: listTeamRuns(db, decodeId(params[0]), query, env),
+      });
     },
   },
   {
