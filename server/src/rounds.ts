@@ -8,8 +8,8 @@ import type {
   RoundResult,
   WakeReason,
 } from './agent-seam.js';
+import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
-import { parseMentions, type MentionCandidate } from './mentions.js';
 
 /**
  * The readable zh-CN copy for round outcomes (轮次结果 reason) and the round
@@ -31,7 +31,7 @@ export const ROUND_TEXT = {
   'verdict.ignored': '自判忽略：本轮没有需要回应的话',
   'verdict.failed': '处理失败，需要排查',
   'penetration.suffix': '；本轮是被点名的穿透唤醒，回复时顺带加入频道，加入事件 seq={seq}',
-  'merged.reason': '已有一轮在进行中，窗口内的重复唤醒合并进那一轮，以最大 seq #{largest} 为准；不排队、不重放',
+  'merged.reason': '已有一轮在进行中（in-flight）：{count} 次重复唤醒合并进那一轮，以最大 seq #{largest} 为准；不排队、不重放',
   'round.no-body': '本轮没有产出可落库的正文',
   'join.event': '{name} 加入了频道：它被点名时并不在频道里，回复时顺带加入（成员变化只随真实回复发生）',
 } as const;
@@ -98,9 +98,9 @@ interface AgentMemberRow {
  * deleted channels never reach this point because their write path refuses the
  * message first, so they never produce a wake.
  *
- * The caller computes this inside the message write transaction, so the wake
- * signal and the mention snapshot that shaped it share one boundary; the
- * rounds themselves run after the message commits.
+ * The caller runs this after the message transaction commits, so a failed
+ * write wakes nobody; the mention rows it reads are the write-time snapshot,
+ * not a fresh parse of the body.
  */
 export function collectWakes(
   db: Database.Database,
@@ -187,8 +187,16 @@ function listMentionedAgents(
  */
 export interface Turn {
   targetId: string;
-  /** Seqs of the wakes that arrived while this round was running. */
+  /** Seqs of the same-target wakes that arrived while this round was running. */
   repeats: number[];
+  /**
+   * Wakes for another target that arrived while this round was running. They
+   * are not a repeated wake (a merge must not carry another scope's seq), so
+   * they wait for this round to close and then run as their own round. M1 only
+   * writes channel targets, so this is the cross-target guard rather than a
+   * shape anything exercises today.
+   */
+  deferred: Wake[];
 }
 
 export interface InFlightRounds {
@@ -225,16 +233,24 @@ export async function dispatchWakes(
   provider: RoundProvider,
   wakes: readonly Wake[],
   inFlight: InFlightRounds,
-  onDeferredError: (error: unknown) => void = (error) => {
-    console.error('allibot: deferred round failed:', error);
+  onError: (error: unknown, wake: Wake) => void = (error, wake) => {
+    // Failure isolation: one member's round must not fail the message write or
+    // another member's round. The message is already committed; an adapter
+    // failure is folded into a `failed` outcome by runRound, so what reaches
+    // here is a storage-level problem worth a log line and nothing more.
+    console.error(`allibot: round for member ${wake.memberId} failed:`, error);
   },
 ): Promise<void> {
   for (const wake of wakes) {
     if (provider.deferred) {
-      void runRound(db, provider, wake, inFlight).catch(onDeferredError);
+      void runRound(db, provider, wake, inFlight).catch((error: unknown) => onError(error, wake));
       continue;
     }
-    await runRound(db, provider, wake, inFlight);
+    try {
+      await runRound(db, provider, wake, inFlight);
+    } catch (error) {
+      onError(error, wake);
+    }
   }
 }
 
@@ -255,11 +271,15 @@ export async function runRound(
 ): Promise<RoundOutcomeRow | null> {
   const active = inFlight.get(wake.memberId);
   if (active !== undefined) {
-    active.repeats.push(wake.fromSeq);
+    if (active.targetId === wake.targetId) {
+      active.repeats.push(wake.fromSeq);
+    } else {
+      active.deferred.push(wake);
+    }
     return null;
   }
 
-  const turn: Turn = { targetId: wake.targetId, repeats: [] };
+  const turn: Turn = { targetId: wake.targetId, repeats: [], deferred: [] };
   inFlight.set(wake.memberId, turn);
   const startedAt = new Date().toISOString();
 
@@ -267,14 +287,24 @@ export async function runRound(
   try {
     result = await provider.runRound(readRoundInput(db, wake));
   } catch (error) {
+    // A wake that arrived after the adapter settled but before this round's
+    // transaction commits still folds into this round; a crash here must not
+    // leave the member marked in-flight forever (working is process state).
     result = { verdict: 'failed', replies: [], detail: errorMessage(error) };
   }
 
+  let committed: RoundOutcomeRow;
   try {
-    return commitRound(db, wake, turn, startedAt, result);
+    committed = commitRound(db, wake, turn, startedAt, result);
   } finally {
     inFlight.delete(wake.memberId);
   }
+  // The other-target wakes wait here rather than running in parallel: one
+  // member still has at most one round in flight.
+  for (const deferred of turn.deferred) {
+    await runRound(db, provider, deferred, inFlight);
+  }
+  return committed;
 }
 
 export interface RoundOutcomeRow {
@@ -328,7 +358,11 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
 
 /**
  * Everything a round writes shares one transaction: the optional join, the
- * reply, the folded `merged` rows and the round's own outcome.
+ * reply, the folded `merged` row and the round's own outcome.
+ *
+ * The wakes that arrived while this round was running are not queued and not
+ * replayed: they fold into exactly one `merged` row, whose base seq is the
+ * largest of them (以最大 seq 为准), written before the running round's row.
  */
 function commitRound(
   db: Database.Database,
@@ -342,12 +376,15 @@ function commitRound(
     const replySeq = commitReply(db, wake, result);
     const finishedAt = new Date().toISOString();
 
-    for (const repeatSeq of turn.repeats) {
+    if (turn.repeats.length > 0) {
       insertOutcome(db, {
         wake,
-        baseSeq: repeatSeq,
+        baseSeq: Math.max(...turn.repeats),
         status: 'merged',
-        reason: roundText('merged.reason', { largest: repeatSeq }),
+        reason: roundText('merged.reason', {
+          count: turn.repeats.length,
+          largest: Math.max(...turn.repeats),
+        }),
         merged: 1,
         startedAt,
         finishedAt,
@@ -421,11 +458,11 @@ function hasBody(result: RoundResult): boolean {
 }
 
 /**
- * The message write path this module uses for round output. It mirrors the
- * human write path's invariants (MAX(seq)+1 inside the transaction, the author
- * snapshot, mention ranges for non-system rows) and deliberately does not call
- * `appendMessage`: that path dispatches wakes, and a round reply's own wake
- * delivery is the relay ticket's (#16), where a jump is counted and bounded.
+ * Round output goes through the same row insert as every other message writer:
+ * one landing path for the author snapshot, `MAX(seq)+1`, mention ranges and
+ * attachments. It deliberately does not call `appendMessage`: that path
+ * dispatches wakes, and a round reply's own wake delivery is the relay
+ * ticket's (#16), where a jump is counted and bounded.
  */
 function insertMessage(
   db: Database.Database,
@@ -434,52 +471,7 @@ function insertMessage(
   authorMemberId: string,
   body: string,
 ): number {
-  const author = db
-    .prepare('SELECT id, display_name, avatar_slot FROM member WHERE id = ?')
-    .get(authorMemberId) as
-    | { id: string; display_name: string; avatar_slot: number }
-    | undefined;
-  if (author === undefined) {
-    throw new Error(`message author not found: ${authorMemberId}`);
-  }
-  const seq = (
-    db.prepare('SELECT coalesce(MAX(seq), 0) + 1 AS next FROM message WHERE target_id = ?').get(
-      targetId,
-    ) as { next: number }
-  ).next;
-  const id = randomUUID();
-  db.prepare(
-    `INSERT INTO message
-       (id, target_id, seq, kind, author_member_id, author_display_name,
-        author_avatar_slot, body, created_at, task_ref, task_pointer, client_message_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
-  ).run(
-    id,
-    targetId,
-    seq,
-    kind,
-    author.id,
-    author.display_name,
-    author.avatar_slot,
-    body,
-    new Date().toISOString(),
-  );
-  if (kind !== 'system') {
-    const insertMention = db.prepare(
-      `INSERT INTO message_mention (message_id, member_id, start, "end") VALUES (?, ?, ?, ?)`,
-    );
-    for (const mention of parseMentions(body, listMentionCandidates(db))) {
-      insertMention.run(id, mention.member_id, mention.start, mention.end);
-    }
-  }
-  return seq;
-}
-
-/** The same candidate set the human write path uses: every live member. */
-function listMentionCandidates(db: Database.Database): MentionCandidate[] {
-  return db
-    .prepare(`SELECT id, display_name FROM member WHERE ${liveMemberClause()} ORDER BY rowid`)
-    .all() as MentionCandidate[];
+  return insertMessageRow(db, { targetId, kind, authorMemberId, body }).seq;
 }
 
 function ownerId(db: Database.Database): string {

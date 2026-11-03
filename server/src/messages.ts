@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import {
   MESSAGE_KINDS,
   type MessageKind,
@@ -8,10 +7,10 @@ import {
 import type Database from 'better-sqlite3';
 import type { RoundProvider } from './agent-seam.js';
 import { ApiFailure } from './api-error.js';
-import { bindAttachments, listAttachmentsForMessages } from './attachments.js';
+import { listAttachmentsForMessages } from './attachments.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
+import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
-import { parseMentions, type MentionCandidate } from './mentions.js';
 import { collectWakes, dispatchWakes, type InFlightRounds } from './rounds.js';
 
 /** The human face may only write human messages. */
@@ -61,12 +60,6 @@ interface MentionRow {
   end: number;
 }
 
-interface AuthorRow {
-  id: string;
-  display_name: string;
-  avatar_slot: number;
-}
-
 const MESSAGE_SELECT = `
 SELECT id, target_id, seq, kind, author_member_id, author_display_name, author_avatar_slot,
        body, created_at, task_ref, task_pointer, client_message_id
@@ -113,43 +106,9 @@ export function appendMessage(
       }
     }
 
-    const author = readAuthor(db, input.authorMemberId ?? null);
-    const id = randomUUID();
-    const seq = nextSeq(db, input.targetId);
-    db.prepare(
-      `INSERT INTO message
-         (id, target_id, seq, kind, author_member_id, author_display_name,
-          author_avatar_slot, body, created_at, task_ref, task_pointer, client_message_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`,
-    ).run(
-      id,
-      input.targetId,
-      seq,
-      input.kind,
-      author.id,
-      author.display_name,
-      author.avatar_slot,
-      input.body,
-      new Date().toISOString(),
-      input.clientMessageId ?? null,
-    );
-
-    // A system event is a record, not a turn: it wakes nobody, so it carries no
-    // mention ranges even when its text happens to contain an @name.
-    if (input.kind !== 'system') {
-      const insertMention = db.prepare(
-        `INSERT INTO message_mention (message_id, member_id, start, "end") VALUES (?, ?, ?, ?)`,
-      );
-      for (const mention of parseMentions(input.body, listMentionCandidates(db))) {
-        insertMention.run(id, mention.member_id, mention.start, mention.end);
-      }
-    }
-
-    // Binding is part of the same transaction as the message row: an unknown or
-    // already-bound attachment aborts the whole write, so no message is left
-    // holding a partial attachment set.
-    bindAttachments(db, id, input.attachmentIds ?? []);
-    return { id, seq, created: true };
+    // One row insert for every message path: the author snapshot, MAX(seq)+1,
+    // the mention ranges and the attachment binding all live there.
+    return { ...insertMessageRow(db, input), created: true };
   });
   return write();
 }
@@ -183,61 +142,24 @@ export async function appendMessageAndDispatch(
 }
 
 /**
- * The mention candidate set: every live member, the owner included, in a
- * stable order so duplicate display names resolve reproducibly.
- */
-function listMentionCandidates(db: Database.Database): MentionCandidate[] {
-  return db
-    .prepare(
-      `SELECT id, display_name FROM member WHERE ${liveMemberClause()} ORDER BY rowid`,
-    )
-    .all() as MentionCandidate[];
-}
-
-/**
- * The author snapshot: display name and avatar slot are copied into the message
- * row, so renaming or soft-deleting the member later cannot rewrite history.
- * Human writes are always authored by the owner; a backend system event may
- * name the member it is about.
- */
-function readAuthor(db: Database.Database, memberId: string | null): AuthorRow {
-  const row =
-    memberId === null
-      ? (db
-          .prepare(
-            `SELECT id, display_name, avatar_slot FROM member
-              WHERE kind = 'owner' AND ${liveMemberClause()}`,
-          )
-          .get() as AuthorRow | undefined)
-      : (db
-          .prepare(
-            `SELECT id, display_name, avatar_slot FROM member
-              WHERE id = ? AND ${liveMemberClause()}`,
-          )
-          .get(memberId) as AuthorRow | undefined);
-  if (row === undefined) {
-    throw new Error(`message author not found: ${memberId ?? 'owner'}`);
-  }
-  return row;
-}
-
-/**
  * The author identity the wake surface excludes. It is read after the write so
  * it is the same row the message snapshot came from.
  */
 function readAuthorId(db: Database.Database, memberId: string | null): string {
-  return readAuthor(db, memberId).id;
-}
-
-/**
- * `MAX(seq) + 1` inside the write transaction. `UNIQUE(target_id, seq)` is the
- * backstop: a second writer would abort rather than reuse a number.
- */
-function nextSeq(db: Database.Database, targetId: string): number {
-  const row = db
-    .prepare('SELECT coalesce(MAX(seq), 0) AS last FROM message WHERE target_id = ?')
-    .get(targetId) as { last: number };
-  return row.last + 1;
+  const row =
+    memberId === null
+      ? (db
+          .prepare(
+            `SELECT id FROM member WHERE kind = 'owner' AND ${liveMemberClause()}`,
+          )
+          .get() as { id: string } | undefined)
+      : (db
+          .prepare(`SELECT id FROM member WHERE id = ? AND ${liveMemberClause()}`)
+          .get(memberId) as { id: string } | undefined);
+  if (row === undefined) {
+    throw new Error(`message author not found: ${memberId ?? 'owner'}`);
+  }
+  return row.id;
 }
 
 function hydrate(db: Database.Database, rows: readonly MessageRow[]): MessageView[] {

@@ -289,12 +289,18 @@ test('a repeated wake inside the delay window merges instead of starting a secon
       (rows) => rows.some((row) => row.status === 'replied'),
     );
     assert.deepEqual(
-      settled.map((row) => [row.status, row.base_seq]),
+      settled.map((row) => [row.status, row.base_seq, row.merged]),
       [
-        ['merged', 2],
-        ['replied', 1],
+        ['merged', 2, 1],
+        ['replied', 1, 0],
       ],
-      'the repeated wake folds into one merged row; the delayed round still closes once',
+      'the repeated wake folds into one merged row keyed by the largest seq; the delayed round still closes once',
+    );
+    const mergedRow = settled[0];
+    assert.equal(mergedRow?.finished_reason, null, 'a merged row has no round of its own to finish');
+    assert.ok(
+      (mergedRow?.reason ?? '').includes('#2'),
+      `the merged reason names the largest seq: ${mergedRow?.reason ?? ''}`,
     );
 
     const messages = await listMessages(fixture, channelId);
