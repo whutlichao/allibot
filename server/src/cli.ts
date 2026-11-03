@@ -75,7 +75,7 @@ async function run(argv: readonly string[]): Promise<number> {
   const lock = await acquireDataDirLock(resolution.dataDir);
   const db = openDatabase(resolution.dataDir);
   try {
-    const { server, port: boundPort } = await startHttpServer(port, db);
+    const { server, port: boundPort } = await startHttpServer(port, db, resolution.dataDir);
     console.log(
       tFromDb(db, 'cli.serve.listening', { url: `http://${HOST}:${boundPort}` }),
     );

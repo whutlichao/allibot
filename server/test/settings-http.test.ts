@@ -216,7 +216,12 @@ test('a settings write adds no message, no business row and no audit ledger line
       'a settings write is not conversation state: no message, budget or round row may change',
     );
     assert.equal(readLedgerText(fixture.dataDir), beforeLedger, 'no migration audit line is written');
-    assert.equal(queryAll<{ total: number }>(fixture.dataDir, 'SELECT count(*) AS total FROM setting')[0]?.total, 3);
+    assert.equal(
+      queryAll<{ total: number }>(fixture.dataDir, 'SELECT count(*) AS total FROM setting')[0]
+        ?.total,
+      3,
+      'a settings write updates rows in place; it never adds a fourth',
+    );
   } finally {
     await fixture.stop();
   }

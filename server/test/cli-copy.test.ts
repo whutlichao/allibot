@@ -18,13 +18,13 @@ test('the migrate receipt renders from the zh-CN catalog', async () => {
     assert.equal(first.exitCode, 0, `migrate should exit 0; output: ${first.output}`);
     assert.match(
       first.stdout,
-      new RegExp(`已把数据目录 ${escapeRegExp(dataDir)} 迁移到 Schema 版本 5。`),
+      new RegExp(`已把数据目录 ${escapeRegExp(dataDir)} 迁移到 Schema 版本 6。`),
     );
     assert.doesNotMatch(first.output, /migrated .* to schema version/);
 
     const second = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(second.exitCode, 0, `second migrate should exit 0; output: ${second.output}`);
-    assert.match(second.stdout, new RegExp(`数据目录 ${escapeRegExp(dataDir)} 已是 Schema 版本 5。`));
+    assert.match(second.stdout, new RegExp(`数据目录 ${escapeRegExp(dataDir)} 已是 Schema 版本 6。`));
     assert.doesNotMatch(second.output, /already at schema version/);
   } finally {
     await removeTempDir(dataDir);
@@ -53,7 +53,7 @@ test('the legacy data dir warning renders from the zh-CN catalog', async () => {
       const row = db.prepare('SELECT schema_version FROM schema_meta').get() as {
         schema_version: number;
       };
-      assert.equal(row.schema_version, 5);
+      assert.equal(row.schema_version, 6);
     } finally {
       db.close();
     }
