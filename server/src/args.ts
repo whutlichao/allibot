@@ -1,0 +1,243 @@
+import { parseArgs } from 'node:util';
+import { DEFAULT_SSE_LIFETIME_MS } from './events.js';
+import { DEFAULT_REMINDER_TICK_MS } from './reminders.js';
+import { SCRIPTED_BEHAVIORS, type ScriptedBehavior } from './scripted-provider.js';
+
+export type CliCommand = 'serve' | 'migrate';
+
+/**
+ * The member-face adapter the server runs. `model` is the production default:
+ * the real Anthropic / OpenAI adapter, which refuses a round with a readable
+ * reason when its credential or consent is missing. `scripted` is the test
+ * double (D4.3) and is selected only by an explicit startup argument
+ * (`--provider scripted` or a `--scripted-*` option), so no production path
+ * ever falls into a double.
+ */
+export type ProviderMode = 'scripted' | 'model';
+
+export interface CliOptions {
+  command: CliCommand;
+  dataDir: string | undefined;
+  port: number;
+  /**
+   * Which member-face adapter is live. The real model adapter is the default;
+   * a test opts into the scripted double with `--provider scripted` or any
+   * `--scripted-*` option.
+   */
+  providerMode: ProviderMode;
+  /**
+   * The scripted double's behaviour. It only matters when the scripted adapter
+   * is selected; the startup line always names the adapter that is actually
+   * live.
+   */
+  scriptedProvider: ScriptedBehavior;
+  /** How long the scripted `delay` behaviour holds one round. */
+  scriptedDelayMs: number;
+  /**
+   * The bodies a `reply` / `delay` round offers. The seam's output shape is
+   * "zero or more pending replies"; a round still lands at most one target
+   * message, which this option lets a test observe.
+   */
+  scriptedReplies: readonly string[];
+  /**
+   * Have the scripted reply carry the system prompt the round was handed. The
+   * double is where a test observes the prompt; it is an adapter capability,
+   * not a production branch.
+   */
+  scriptedEchoPrompt: boolean;
+  /**
+   * Have the scripted reply carry the context window it was handed (`ctx` /
+   * `reread`). Like the prompt echo, it is an adapter capability a test uses to
+   * observe the round's input, never a production branch.
+   */
+  scriptedReportContext: boolean;
+  /**
+   * Have the scripted reply carry the invocation ordinal (`calls:<n>`). It is
+   * how a test observes the provider's call count through the ordinary reply
+   * body — the same adapter capability pattern as the prompt / context reports,
+   * never a production branch.
+   */
+  scriptedReportCalls: boolean;
+  /**
+   * How long one `/api/events` connection lives before the server sends the
+   * rotate frame and closes it. Production keeps the 30-minute default; a test
+   * injects a short value instead of waiting.
+   */
+  sseLifetimeMs: number;
+  /**
+   * How often the process looks for due reminders. Production keeps the
+   * 30-second default; a test injects a short interval instead of waiting.
+   */
+  reminderTickMs: number;
+}
+
+const DEFAULT_PORT = 3000;
+/**
+ * The production default is the real model adapter. The scripted double is a
+ * test injection: `--provider scripted` (or any `--scripted-*` option, which
+ * only the double understands) selects it. The startup line names whichever
+ * adapter is live.
+ */
+const DEFAULT_PROVIDER_MODE: ProviderMode = 'model';
+const PROVIDER_MODES: readonly ProviderMode[] = ['scripted', 'model'];
+const DEFAULT_SCRIPTED_PROVIDER: ScriptedBehavior = 'ignore';
+const DEFAULT_SCRIPTED_DELAY_MS = 1500;
+const USAGE =
+  'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
+  '[--provider <scripted|model>] ' +
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task>] ' +
+  '[--scripted-delay-ms <ms>] ' +
+  '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
+  '[--scripted-report-calls] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
+
+export function parseCliArgs(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): CliOptions {
+  const { values, positionals } = parseArgs({
+    args: [...argv],
+    options: {
+      'data-dir': { type: 'string' },
+      port: { type: 'string' },
+      migrate: { type: 'boolean' },
+      provider: { type: 'string' },
+      'scripted-provider': { type: 'string' },
+      'scripted-delay-ms': { type: 'string' },
+      'scripted-reply': { type: 'string', multiple: true },
+      'scripted-echo-prompt': { type: 'boolean' },
+      'scripted-report-context': { type: 'boolean' },
+      'scripted-report-calls': { type: 'boolean' },
+      'sse-lifetime-ms': { type: 'string' },
+      'reminder-tick-ms': { type: 'string' },
+    },
+    strict: true,
+    allowPositionals: true,
+  });
+
+  if (positionals.length > 1) {
+    throw new Error(`unexpected arguments: ${positionals.slice(1).join(' ')}; ${USAGE}`);
+  }
+
+  return {
+    command: resolveCommand(values.migrate === true, positionals[0]),
+    dataDir: values['data-dir'] ?? env.allibot_DATA_DIR,
+    port: parsePort(values.port ?? String(DEFAULT_PORT)),
+    providerMode: parseProviderMode(
+      values.provider,
+      values['scripted-provider'] !== undefined ||
+        values['scripted-delay-ms'] !== undefined ||
+        values['scripted-reply'] !== undefined ||
+        values['scripted-echo-prompt'] === true ||
+        values['scripted-report-context'] === true ||
+        values['scripted-report-calls'] === true,
+    ),
+    scriptedProvider: parseScriptedProvider(values['scripted-provider']),
+    scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
+    scriptedReplies: parseScriptedReplies(values['scripted-reply']),
+    scriptedEchoPrompt: values['scripted-echo-prompt'] === true,
+    scriptedReportContext: values['scripted-report-context'] === true,
+    scriptedReportCalls: values['scripted-report-calls'] === true,
+    sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
+    reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),
+  };
+}
+
+function parseProviderMode(raw: string | undefined, scriptedOption: boolean): ProviderMode {
+  if (raw === undefined) {
+    // Any `--scripted-*` option is itself an explicit injection of the double;
+    // without one the production adapter is the default.
+    return scriptedOption ? 'scripted' : DEFAULT_PROVIDER_MODE;
+  }
+  const mode = PROVIDER_MODES.find((candidate) => candidate === raw);
+  if (mode === undefined) {
+    throw new Error(
+      `invalid --provider value: ${raw}; expected one of ${PROVIDER_MODES.join(', ')}`,
+    );
+  }
+  return mode;
+}
+
+function resolveCommand(migrate: boolean, positional: string | undefined): CliCommand {
+  if (migrate) {
+    if (positional !== undefined) {
+      throw new Error(`--migrate does not take a command; ${USAGE}`);
+    }
+    return 'migrate';
+  }
+  if (positional === 'serve') {
+    return 'serve';
+  }
+  if (positional === undefined) {
+    throw new Error(USAGE);
+  }
+  throw new Error(`unknown command: ${positional}; ${USAGE}`);
+}
+
+function parsePort(raw: string): number {
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`invalid --port value: ${raw}`);
+  }
+  const port = Number(raw);
+  if (port > 65_535) {
+    throw new Error(`--port must be between 0 and 65535, got ${raw}`);
+  }
+  return port;
+}
+
+function parseScriptedProvider(raw: string | undefined): ScriptedBehavior {
+  if (raw === undefined) {
+    return DEFAULT_SCRIPTED_PROVIDER;
+  }
+  const behavior = SCRIPTED_BEHAVIORS.find((candidate) => candidate === raw);
+  if (behavior === undefined) {
+    throw new Error(
+      `invalid --scripted-provider value: ${raw}; expected one of ${SCRIPTED_BEHAVIORS.join(', ')}`,
+    );
+  }
+  return behavior;
+}
+
+function parseScriptedReplies(raw: readonly string[] | undefined): readonly string[] {
+  if (raw === undefined) {
+    return [];
+  }
+  // A whitespace-only body is not empty: it is the double's way to state a
+  // reply the write path cannot land (the response-judgment test observes a
+  // body-less round). An actually empty argument stays a client error.
+  if (raw.some((body) => body.length === 0)) {
+    throw new Error('invalid --scripted-reply value: a reply body must not be empty');
+  }
+  return raw;
+}
+
+function parseDelayMs(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_SCRIPTED_DELAY_MS;
+  }
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`invalid --scripted-delay-ms value: ${raw}`);
+  }
+  return Number(raw);
+}
+
+/** A tick interval is a positive integer; 0 would spin the timer. */
+function parseReminderTickMs(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_REMINDER_TICK_MS;
+  }
+  if (!/^\d+$/.test(raw) || Number(raw) === 0) {
+    throw new Error(`invalid --reminder-tick-ms value: ${raw}`);
+  }
+  return Number(raw);
+}
+
+/** A connection lifetime is a positive integer; 0 would rotate every stream instantly. */
+function parseSseLifetimeMs(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_SSE_LIFETIME_MS;
+  }
+  if (!/^\d+$/.test(raw) || Number(raw) === 0) {
+    throw new Error(`invalid --sse-lifetime-ms value: ${raw}`);
+  }
+  return Number(raw);
+}

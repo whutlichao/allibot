@@ -1,0 +1,24 @@
+{
+  "name": "@allibot/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/cli.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "test": "node --test test/*.test.ts",
+    "start": "node dist/cli.js serve"
+  },
+  "dependencies": {
+    "@ag-ui/client": "1.0.2",
+    "@allibot/shared": "*",
+    "@copilotkit/runtime": "1.83.0",
+    "better-sqlite3": "13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "25.0.3",
+    "typescript": "5.9.3"
+  }
+}
