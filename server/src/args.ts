@@ -16,6 +16,12 @@ export interface CliOptions {
   scriptedProvider: ScriptedBehavior;
   /** How long the scripted `delay` behaviour holds one round. */
   scriptedDelayMs: number;
+  /**
+   * The bodies a `reply` / `delay` round offers. The seam's output shape is
+   * "zero or more pending replies"; a round still lands at most one target
+   * message, which this option lets a test observe.
+   */
+  scriptedReplies: readonly string[];
 }
 
 const DEFAULT_PORT = 3000;
@@ -29,7 +35,8 @@ const DEFAULT_SCRIPTED_PROVIDER: ScriptedBehavior = 'ignore';
 const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
   'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay>] [--scripted-delay-ms <ms>]';
+  '[--scripted-provider <reply|ignore|fail|delay>] [--scripted-delay-ms <ms>] ' +
+  '[--scripted-reply <body>]...';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -43,6 +50,7 @@ export function parseCliArgs(
       migrate: { type: 'boolean' },
       'scripted-provider': { type: 'string' },
       'scripted-delay-ms': { type: 'string' },
+      'scripted-reply': { type: 'string', multiple: true },
     },
     strict: true,
     allowPositionals: true,
@@ -58,6 +66,7 @@ export function parseCliArgs(
     port: parsePort(values.port ?? String(DEFAULT_PORT)),
     scriptedProvider: parseScriptedProvider(values['scripted-provider']),
     scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
+    scriptedReplies: parseScriptedReplies(values['scripted-reply']),
   };
 }
 
@@ -99,6 +108,16 @@ function parseScriptedProvider(raw: string | undefined): ScriptedBehavior {
     );
   }
   return behavior;
+}
+
+function parseScriptedReplies(raw: readonly string[] | undefined): readonly string[] {
+  if (raw === undefined) {
+    return [];
+  }
+  if (raw.some((body) => body.trim().length === 0)) {
+    throw new Error('invalid --scripted-reply value: a reply body must not be empty');
+  }
+  return raw;
 }
 
 function parseDelayMs(raw: string | undefined): number {

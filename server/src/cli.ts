@@ -89,6 +89,7 @@ function createOrchestration(options: CliOptions): OrchestrationRuntime {
     provider: createScriptedProvider({
       behavior: options.scriptedProvider,
       delayMs: options.scriptedDelayMs,
+      replies: options.scriptedReplies.length > 0 ? options.scriptedReplies : undefined,
     }),
     inFlight: createInFlightRounds(),
   };

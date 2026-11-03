@@ -67,18 +67,17 @@ export function finishedReasonText(reason: FinishedReason): string {
 }
 
 /**
- * One delivered wake. It carries identifiers only — `(member_id, target_id,
- * fromSeq, reason)` plus the penetration flag that decides whether a reply
- * joins the channel. It never carries a body: the round reads messages through
- * the ordinary read path.
+ * One delivered wake. The signal carries identifiers only — `(member_id,
+ * targetId, fromSeq, reason)` — and never a body: the round reads messages
+ * through the ordinary read path. Whether the member already belongs to the
+ * target is a membership fact read when the round closes, not a field of the
+ * wake signal.
  */
 export interface Wake {
   memberId: string;
   targetId: string;
   fromSeq: number;
   reason: WakeReason;
-  /** Woken although not a target member: a mentioned non-member. */
-  pierced: boolean;
 }
 
 interface AgentMemberRow {
@@ -127,7 +126,6 @@ export function collectWakes(
       // The reason is readable diagnostics only; a mention is the more
       // specific of the two, and the wake set is the same either way.
       reason: mentioned.has(member.id) ? 'mention' : 'channel-message',
-      pierced: false,
     });
     woken.add(member.id);
   }
@@ -141,7 +139,6 @@ export function collectWakes(
       targetId: message.targetId,
       fromSeq: message.seq,
       reason: 'mention',
-      pierced: true,
     });
     woken.add(member.id);
   }
@@ -407,19 +404,21 @@ function commitRound(
 }
 
 /**
- * The penetrated member joins only when it actually replies, and the join is
- * recorded before the reply: member change first, then speech. The join event
- * is a `system` message authored by the owner (the existing convention), so it
- * wakes nobody, consumes no budget and is never unread.
+ * A member woken by a mention without belonging to the target joins only when
+ * it actually replies (穿透). The join is recorded before the reply: member
+ * change first, then speech. The join event is a `system` message authored by
+ * the owner (the existing convention), so it wakes nobody, consumes no budget
+ * and is never unread.
+ *
+ * Only a channel-shaped target gains a member this way. A DM's membership is
+ * fixed to its two rows, so a pierced reply there is one-shot delivery with no
+ * membership change — that rule belongs to the DM ticket; this guard keeps
+ * this ticket from writing a DM membership it cannot own.
  */
 function commitJoin(db: Database.Database, wake: Wake, result: RoundResult): number | null {
-  if (!wake.pierced || result.verdict !== 'replied' || !hasBody(result)) {
+  if (result.verdict !== 'replied' || !hasBody(result)) {
     return null;
   }
-  // Only a channel-shaped target gains a member on a pierced reply. A DM's
-  // membership is fixed to its two rows, so a pierced reply there is one-shot
-  // delivery with no membership change — that rule belongs to the DM ticket;
-  // this guard keeps this ticket from writing a DM membership it cannot own.
   if (readTargetKind(db, wake.targetId) !== 'channel') {
     return null;
   }

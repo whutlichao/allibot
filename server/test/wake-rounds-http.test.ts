@@ -486,3 +486,32 @@ test('round replies and the join system event wake nobody in this ticket', async
     await fixture.stop();
   }
 });
+
+test('a round offering several pending replies still lands exactly one target message', async () => {
+  const fixture = await startWakeFixture('allibot-wake-one-message-', 'reply', [
+    '--scripted-reply',
+    '第一条待落库回复',
+    '--scripted-reply',
+    '第二条待落库回复',
+  ]);
+  try {
+    const agent = await createAgent(fixture, '甲');
+    const channelId = await createChannel(fixture);
+    await joinChannel(fixture, channelId, agent);
+
+    await postMessage(fixture, channelId, { body: '请回应' });
+
+    const messages = await listMessages(fixture, channelId);
+    assert.deepEqual(
+      messages.map((message) => [message['seq'], message['kind'], message['body']]),
+      [
+        [1, 'human', '请回应'],
+        [2, 'agent', '第一条待落库回复'],
+      ],
+      '一轮 ↔ 至多一条 target 消息: the first pending reply is the round\'s message',
+    );
+    assert.equal(roundOutcomes(fixture).length, 1, 'one round outcome for the one round');
+  } finally {
+    await fixture.stop();
+  }
+});
