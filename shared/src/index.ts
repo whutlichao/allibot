@@ -64,6 +64,17 @@ export interface ChannelView {
   updated_at: string;
 }
 
+/**
+ * The workspace settings as the human face returns them. All three are config
+ * values (never usage facts), and the backend database is the single source of
+ * truth: the frontend reads the same `locale` the backend renders with.
+ */
+export interface WorkspaceSettingsView {
+  locale: 'zh-CN';
+  density: 'comfortable' | 'compact';
+  theme: 'light' | 'dark' | 'system';
+}
+
 /** A member of a channel (or any target), as the completion and panel views read it. */
 export interface TargetMemberView {
   id: string;
