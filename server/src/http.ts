@@ -12,6 +12,7 @@ import {
   readAttachment,
   uploadAttachment,
 } from './attachments.js';
+import { createCopilotKitHandler, isCopilotKitPath } from './copilotkit.js';
 import {
   archiveChannel,
   createChannel,
@@ -70,7 +71,21 @@ export async function startHttpServer(
 ): Promise<StartedServer> {
   const context: HttpContext = { db, dataDir };
   const writeError = options.writeError ?? defaultWriteError;
+  // The CopilotKit multi-route handler owns everything under its base path;
+  // its routes are not part of the human-face REST table below.
+  const copilotKitHandler = createCopilotKitHandler(db);
   const server = createServer((request, response) => {
+    const pathname = new URL(request.url ?? '/', `http://${HOST}`).pathname;
+    if (isCopilotKitPath(pathname)) {
+      copilotKitHandler(request, response).catch((error: unknown) => {
+        writeError('unhandled CopilotKit request failure', error);
+        if (!response.headersSent) {
+          response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+        }
+        response.end();
+      });
+      return;
+    }
     handleRequest(request, response, context).catch((error: unknown) => {
       sendFailure(response, error, writeError);
     });
