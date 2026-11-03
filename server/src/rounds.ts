@@ -30,7 +30,7 @@ export const ROUND_TEXT = {
   'verdict.replied': '已回复',
   'verdict.ignored': '自判忽略：本轮没有需要回应的话',
   'verdict.failed': '处理失败，需要排查',
-  'penetration.suffix': '；本轮是被点名的穿透唤醒，回复时顺带加入频道，加入事件 seq={seq}',
+  'penetration.suffix': '本轮是被点名的穿透唤醒，回复时顺带加入频道，加入事件 seq={seq}',
   'merged.reason': '已有一轮在进行中（in-flight）：{count} 次重复唤醒合并进那一轮，以最大 seq #{largest} 为准；不排队、不重放',
   'round.no-body': '本轮没有产出可落库的正文',
   'join.event': '{name} 加入了频道：它被点名时并不在频道里，回复时顺带加入（成员变化只随真实回复发生）',
@@ -517,7 +517,7 @@ function roundReason(
   if (joinedSeq !== null) {
     parts.push(roundText('penetration.suffix', { seq: joinedSeq }));
   }
-  return parts.join('；').replace(/^；/, '');
+  return parts.join('；');
 }
 
 interface InsertOutcomeInput {

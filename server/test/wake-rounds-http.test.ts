@@ -357,6 +357,10 @@ test('a mentioned outsider replies through a system join message and becomes a m
     assert.equal(outsiderRow.status, 'replied');
     assert.ok(outsiderRow.reason.includes('穿透'), `the reason names the penetration: ${outsiderRow.reason}`);
     assert.ok(
+      !outsiderRow.reason.includes('；；'),
+      `the reason joins its clauses once: ${outsiderRow.reason}`,
+    );
+    assert.ok(
       outsiderRow.reason.includes(String(join?.['seq'])),
       'the reason points at the join event seq',
     );
