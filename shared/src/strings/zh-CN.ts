@@ -90,6 +90,8 @@ export const ZH_CN = {
   },
   'round.finished.completed': { text: '正常完成', params: [] },
   'round.finished.error': { text: '错误', params: [] },
+  'round.finished.iterationLimit': { text: '达到迭代上限', params: [] },
+  'round.finished.humanInterrupt': { text: '人类中断', params: [] },
   'system.member.piercedJoin': {
     text: '{name} 加入了频道：它被点名时并不在频道里，回复时顺带加入（成员变化只随真实回复发生）',
     params: ['name'],

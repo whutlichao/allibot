@@ -26,6 +26,13 @@ export type WakeReason = (typeof WAKE_REASONS)[number];
 /** The three target kinds; a DM round reads its own one-to-one prompt. */
 export type RoundTargetKind = 'channel' | 'dm' | 'task';
 
+/**
+ * 上下文窗口 (Context Window): a normal round reads the most recent 40 target
+ * messages. An auto-continue round reads the whole task thread it keeps working
+ * on instead, because that thread is the work item.
+ */
+export const ROUND_CONTEXT_WINDOW = 40;
+
 /** What the round is allowed to know about the member it runs for. */
 export interface RoundMember {
   id: string;
@@ -74,8 +81,26 @@ export interface RoundInput {
   baseSeq: number;
   reason: WakeReason;
   discipline: RoundDiscipline;
-  /** The target's messages from `baseSeq` on, oldest first, read at round start. */
+  /**
+   * The target's context window (上下文窗口) for this round, oldest first: the
+   * most recent messages — human, other members and this member's own history
+   * replies alike — plus the triggering message, which is always part of the
+   * window. An auto-continue round reads the whole thread it keeps working on
+   * instead of the recent window.
+   *
+   * History is for understanding only: the wake, the response discipline and
+   * the consumption cursor are computed from the new message, never from what
+   * the window happens to reach back to.
+   */
   messages: readonly RoundMessage[];
+  /**
+   * How far this member had consumed the target before this round: the
+   * consumption cursor's `last_read_seq` (0 when the member has never consumed
+   * anything there). A message newer than it and older than `baseSeq` is a
+   * message an earlier round read but did not consume, so this round reads it
+   * again — the round input states the cursor, the adapter only reads it.
+   */
+  consumedSeq: number;
   /**
    * The member's long-term memory cards recalled for this round (D5.2), best
    * match first. They are assembled into the prompt's memory section by the
@@ -112,6 +137,19 @@ export interface RoundMemory {
 export type RoundVerdict = 'replied' | 'ignored' | 'silent' | 'failed';
 
 /**
+ * How a round ended, when the adapter knows it was not an ordinary completion.
+ * The iteration cap (迭代上限) is an adapter-side fact: the adapter stopped
+ * because its iteration budget ran out, not because it had nothing more to say,
+ * so the partial conclusion it produced is still a conclusion. It is a field of
+ * the round result, not a second output: the seam still answers with zero or
+ * more pending replies plus one round result.
+ *
+ * The human interrupt (人类中断) is not stated here — it belongs to the run's
+ * cancellation, which is the orchestration's fact, not the adapter's.
+ */
+export type RoundFinishReason = 'iteration-limit';
+
+/**
  * The seam's output. `replies` holds zero or more bodies the adapter wants
  * persisted; the round's write path lands at most one target message per
  * round (一轮 ↔ 至多一条 target 消息), so only the first pending reply is
@@ -120,11 +158,16 @@ export type RoundVerdict = 'replied' | 'ignored' | 'silent' | 'failed';
  * `detail` is the adapter's readable diagnostic for the round (a failure
  * reason today); it is folded into the round outcome's readable `reason` and
  * never replaces the status.
+ *
+ * `finishedReason` states how the round ended when it was not a normal
+ * completion. Absent means the round ran to completion; a `failed` verdict
+ * without it closes as the error finished reason.
  */
 export interface RoundResult {
   verdict: RoundVerdict;
   replies: readonly string[];
   detail?: string;
+  finishedReason?: RoundFinishReason;
 }
 
 export interface RoundProvider {
