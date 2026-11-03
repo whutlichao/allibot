@@ -5,7 +5,7 @@ import {
   type McpServerEntry,
   type McpTransport,
 } from '@allibot/shared';
-import { createElement, useState, type ReactNode } from 'react';
+import { createElement, useEffect, useState, type ReactNode } from 'react';
 import {
   emptyMcpEntry,
   entriesSaveBody,
@@ -43,6 +43,17 @@ export function McpPanel({ locale, mcp, onSave }: McpPanelProps) {
   const [raw, setRaw] = useState<string>(() => initialMcpRaw(mcp));
   const [saving, setSaving] = useState<'entries' | 'raw' | null>(null);
   const [failed, setFailed] = useState<'entries' | 'raw' | null>(null);
+  // The host reads the file after the drawer opens, so the first render may be
+  // `null` (loading). Fill the drafts once that reading arrives; later renders
+  // keep the user's in-progress draft.
+  const [loaded, setLoaded] = useState(mcp !== null);
+  useEffect(() => {
+    if (!loaded && mcp !== null) {
+      setEntries(initialMcpEntries(mcp));
+      setRaw(initialMcpRaw(mcp));
+      setLoaded(true);
+    }
+  }, [loaded, mcp]);
 
   function applySaved(view: AgentMcpView | void): void {
     if (view !== undefined) {
