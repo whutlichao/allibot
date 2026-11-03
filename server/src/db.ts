@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export interface MigrationStep {
   readonly to: number;
@@ -210,6 +210,60 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
         BEFORE DELETE ON attachment
         BEGIN
           SELECT RAISE(ABORT, 'attachment is immutable: DELETE is not allowed');
+        END;
+      `);
+    },
+  },
+  {
+    to: 6,
+    apply(db) {
+      db.exec(`
+        -- A round outcome is the processing conclusion of one Agent round: it
+        -- is the forensic record of "why did it not speak", kept at the same
+        -- level as messages. It is append-only, like a message: there is no
+        -- code path that updates or deletes one, and the triggers below make
+        -- the database the backstop.
+        --
+        -- status is the six-word vocabulary of the glossary. This ticket
+        -- produces replied / ignored / failed / merged only; budget-exhausted
+        -- and silent belong to later tickets and are already in the CHECK so
+        -- the table shape never has to change for them.
+        --
+        -- budget_consumed is a row-level marker ("this round was delivered by
+        -- a counted agent-to-agent hop"), not a hop counter; the hop count's
+        -- single source of truth is target_budget.used. merged marks the one
+        -- row that folds a repeated wake into an in-flight round.
+        CREATE TABLE round_outcome (
+          id TEXT PRIMARY KEY,
+          member_id TEXT NOT NULL REFERENCES member (id),
+          target_id TEXT NOT NULL REFERENCES target (id),
+          base_seq INTEGER NOT NULL CHECK (base_seq > 0),
+          status TEXT NOT NULL CHECK (
+            status IN ('replied', 'ignored', 'failed', 'merged', 'budget-exhausted', 'silent')
+          ),
+          reason TEXT NOT NULL DEFAULT '',
+          finished_reason TEXT,
+          started_at TEXT NOT NULL,
+          finished_at TEXT NOT NULL,
+          budget_consumed INTEGER NOT NULL DEFAULT 0 CHECK (budget_consumed IN (0, 1)),
+          merged INTEGER NOT NULL DEFAULT 0 CHECK (merged IN (0, 1))
+        );
+
+        -- The read paths ask "the outcomes of this target" and "the latest
+        -- outcome of this member"; both get their own index.
+        CREATE INDEX round_outcome_target ON round_outcome (target_id, id);
+        CREATE INDEX round_outcome_member ON round_outcome (member_id, id);
+
+        CREATE TRIGGER round_outcome_append_only_update
+        BEFORE UPDATE ON round_outcome
+        BEGIN
+          SELECT RAISE(ABORT, 'round_outcome is append-only: UPDATE is not allowed');
+        END;
+
+        CREATE TRIGGER round_outcome_append_only_delete
+        BEFORE DELETE ON round_outcome
+        BEGIN
+          SELECT RAISE(ABORT, 'round_outcome is append-only: DELETE is not allowed');
         END;
       `);
     },
