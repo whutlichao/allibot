@@ -208,7 +208,7 @@ async function listTeamRuns(
 
 async function setupTeam(
   fixture: Fixture,
-): Promise<{ leader: string; member: string; channelId: string; taskId: string; taskTargetId: string }> {
+): Promise<{ leader: string; member: string; channelId: string; taskId: string; targetId: string }> {
   const leader = await createAgent(fixture, '队长');
   const member = await createAgent(fixture, '成员');
   const channelId = await createChannel(fixture);
