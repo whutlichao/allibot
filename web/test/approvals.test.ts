@@ -103,7 +103,7 @@ function members(): TargetMemberView[] {
       kind: 'owner',
       display_name: '我',
       avatar_slot: 0,
-      workspace_status: { backend: 'local', available: true, reason: null },
+      workspace_status: { backend: 'local', available: true, reason: null }, allow_local_shell: 0,
       permission_mode: 'ask-writes',
     },
     {
@@ -111,7 +111,7 @@ function members(): TargetMemberView[] {
       kind: 'agent',
       display_name: '审批成员',
       avatar_slot: 1,
-      workspace_status: { backend: 'local', available: true, reason: null },
+      workspace_status: { backend: 'local', available: true, reason: null }, allow_local_shell: 0,
       permission_mode: 'ask-writes',
     },
   ];

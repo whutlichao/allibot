@@ -91,6 +91,21 @@ export function backendChangePatch(
 }
 
 /**
+ * The explicit local-shell switch (#46 / D5.4). It is channel-only: there is no
+ * Agent override. A same-value toggle sends nothing (D2.4).
+ */
+export function localShellChangePatch(
+  channel: ChannelView,
+  enabled: boolean,
+): ChannelConfigPatch | null {
+  const next = enabled ? 1 : 0;
+  if (next === channel.workspace.allow_local_shell) {
+    return null;
+  }
+  return { allow_local_shell: next };
+}
+
+/**
  * The readable workspace status. The reason is a stable backend code; the copy
  * comes from the catalog, never from the frontend inventing a diagnosis.
  */
