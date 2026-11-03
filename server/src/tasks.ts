@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { TASK_STATUSES, type TaskStatus, type TaskView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
+import { openEpoch } from './budget.js';
 import { assertChannelReadable, assertChannelWritable } from './channels.js';
 import { tFromDb } from './copy.js';
 import { liveMemberClause } from './members.js';
@@ -303,26 +304,30 @@ function appendAssigneeEvent(
 
   const previousName =
     current.assignee_member_id === null ? null : displayName(db, current.assignee_member_id);
-  if (nextAssignee === null) {
-    appendMessage(db, {
-      targetId: current.target_id,
-      kind: 'system',
-      body: tFromDb(db, 'task.event.assignee.unassigned'),
-    });
-    return;
-  }
-  const nextName = displayName(db, nextAssignee);
-  appendMessage(db, {
-    targetId: current.target_id,
-    kind: 'system',
-    body:
-      previousName === null
-        ? tFromDb(db, 'task.event.assignee.assigned', { assignee: nextName })
-        : tFromDb(db, 'task.event.assignee.reassigned', {
-            previous: previousName,
-            assignee: nextName,
-          }),
-  });
+  const seq =
+    nextAssignee === null
+      ? appendMessage(db, {
+          targetId: current.target_id,
+          kind: 'system',
+          body: tFromDb(db, 'task.event.assignee.unassigned'),
+        }).seq
+      : appendMessage(db, {
+          targetId: current.target_id,
+          kind: 'system',
+          body:
+            previousName === null
+              ? tFromDb(db, 'task.event.assignee.assigned', { assignee: displayName(db, nextAssignee) })
+              : tFromDb(db, 'task.event.assignee.reassigned', {
+                  previous: previousName,
+                  assignee: displayName(db, nextAssignee),
+                }),
+        }).seq;
+
+  // The owner changing a task's assignee is one of the three human-epoch
+  // openers (D1.13): the system message the change lands is the opener, and its
+  // seq is the epoch identity. Unassigning is the same human act and lands the
+  // same kind of record, so it opens an epoch the same way.
+  openEpoch(db, current.target_id, seq);
 }
 
 function addAssigneeToThread(

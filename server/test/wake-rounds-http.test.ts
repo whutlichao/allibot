@@ -190,9 +190,12 @@ test('one owner message wakes both Agent members and each lands exactly one repl
     const human = await postMessage(fixture, channelId, { body: '大家好' });
     assert.equal(human['seq'], 1);
 
+    // The human message wakes both members; each lands exactly one reply. The
+    // relayed Agent-to-Agent chain that follows is the response-budget ticket's
+    // (#16) and is observed in budget-http.test.ts, not here.
     const messages = await listMessages(fixture, channelId);
     assert.deepEqual(
-      messages.map((message) => [message['seq'], message['kind'], message['author_member_id']]),
+      messages.slice(0, 3).map((message) => [message['seq'], message['kind'], message['author_member_id']]),
       [
         [1, 'human', ownerId(fixture)],
         [2, 'agent', first],
@@ -206,20 +209,19 @@ test('one owner message wakes both Agent members and each lands exactly one repl
       'no message is written twice',
     );
 
-    const outcomes = roundOutcomes(fixture);
+    const outcomes = roundOutcomes(fixture).filter((row) => row.base_seq === 1);
     assert.deepEqual(
       outcomes.map((row) => [row.member_id, row.status]),
       [
         [first, 'replied'],
         [second, 'replied'],
       ],
-      'one round outcome row per member',
+      'one round outcome row per member woken by the human message',
     );
     for (const row of outcomes) {
       assert.equal(row.target_id, channelId);
-      assert.equal(row.base_seq, 1, 'the wake signal carries the triggering seq');
       assert.equal(row.merged, 0);
-      assert.equal(row.budget_consumed, 0, 'budget accounting lands with its own ticket');
+      assert.equal(row.budget_consumed, 0, 'a human message opens an epoch; it is not a jump');
       assert.equal(row.finished_reason, '正常完成');
       assert.ok(row.reason.length > 0, 'the reason is readable');
       assert.ok(!row.reason.includes('大家好'), 'the wake signal carries no message body');
@@ -340,7 +342,7 @@ test('a mentioned outsider replies through a system join message and becomes a m
 
     const messages = await listMessages(fixture, channelId);
     assert.deepEqual(
-      messages.map((message) => [message['kind'], message['author_member_id']]),
+      messages.slice(0, 4).map((message) => [message['kind'], message['author_member_id']]),
       [
         ['human', ownerId(fixture)],
         ['agent', insider],
@@ -459,7 +461,7 @@ test('the round_outcome row reads back through the sqlite3 CLI with readable rea
   }
 });
 
-test('round replies and the join system event wake nobody in this ticket', async () => {
+test('round replies relay under the response budget: the join event itself wakes nobody', async () => {
   const fixture = await startWakeFixture('allibot-wake-no-chain-', 'reply');
   try {
     const insider = await createAgent(fixture, '甲');
@@ -469,22 +471,28 @@ test('round replies and the join system event wake nobody in this ticket', async
 
     await postMessage(fixture, channelId, { body: '@局外人 你来一句' });
 
-    // Two wakes came from the human message (insider + pierced outsider). The
-    // insider's reply and the join system event are both messages, and neither
-    // produces a wake here: relay delivery of Agent messages is the jump /
-    // budget ticket's (#16), where a hop is counted and bounded.
-    const outcomes = roundOutcomes(fixture);
+    // Two wakes came from the human message (insider + pierced outsider); the
+    // replies that follow relay to each other under the response budget (#16,
+    // observed in budget-http.test.ts), but the join system event is a record,
+    // not a turn: it wakes nobody and consumes no jump.
+    const outcomes = roundOutcomes(fixture).filter((row) => row.base_seq === 1);
     assert.deepEqual(
-      outcomes.map((row) => [row.member_id, row.status, row.base_seq]),
+      outcomes.map((row) => [row.member_id, row.status]),
       [
-        [insider, 'replied', 1],
-        [outsider, 'replied', 1],
+        [insider, 'replied'],
+        [outsider, 'replied'],
       ],
       'exactly one round outcome per wake of the one human message',
     );
-    const systemMessages = (await listMessages(fixture, channelId)).filter(
-      (message) => message['kind'] === 'system',
+    const messages = await listMessages(fixture, channelId);
+    const joinSeq = messages[2]?.['seq'];
+    assert.equal(messages[2]?.['kind'], 'system');
+    assert.equal(
+      roundOutcomes(fixture).filter((row) => row.base_seq === joinSeq).length,
+      0,
+      'the join system event produces no wake',
     );
+    const systemMessages = messages.filter((message) => message['kind'] === 'system');
     assert.equal(systemMessages.length, 1, 'the join event is the only system message');
     assert.equal(
       systemMessages[0]?.['author_member_id'],

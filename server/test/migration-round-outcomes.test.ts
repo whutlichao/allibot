@@ -70,7 +70,7 @@ test('migrating an empty data dir adds round_outcome at the current schema versi
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
     assert.deepEqual(columnNames(dataDir, 'round_outcome'), ROUND_OUTCOME_COLUMNS);
     assert.equal(countRows(dataDir, 'round_outcome'), 0, 'the migration seeds no round outcomes');
 
@@ -90,7 +90,7 @@ test('migrating an empty data dir adds round_outcome at the current schema versi
     const entries = readLedger(dataDir);
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.['from'], null);
-    assert.equal(entries[0]?.['to'], 9);
+    assert.equal(entries[0]?.['to'], 10);
     assert.equal(entries[0]?.['result'], 'ok');
   } finally {
     await removeTempDir(dataDir);
@@ -136,7 +136,7 @@ test('round_outcome refuses UPDATE and DELETE at the database level', async () =
   }
 });
 
-test('a version 6 data dir upgrades to version 7 with a backup that keeps channel and message rows', async () => {
+test('a version 6 data dir upgrades to the current version with a backup that keeps channel and message rows', async () => {
   const parent = await makeTempDir('allibot-round-outcomes-upgrade-');
   const dataDir = path.join(parent, 'data');
 
@@ -180,7 +180,7 @@ test('a version 6 data dir upgrades to version 7 with a backup that keeps channe
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
 
-    assert.equal(readSchemaVersion(dataDir), 9);
+    assert.equal(readSchemaVersion(dataDir), 10);
     assert.deepEqual(columnNames(dataDir, 'round_outcome'), ROUND_OUTCOME_COLUMNS);
     assert.equal(countRows(dataDir, "message WHERE id = 'kept-message'"), 1);
 
@@ -209,7 +209,7 @@ test('a version 6 data dir upgrades to version 7 with a backup that keeps channe
     const entries = readLedger(dataDir);
     const last = entries[entries.length - 1];
     assert.equal(last?.['from'], 6);
-    assert.equal(last?.['to'], 9);
+    assert.equal(last?.['to'], 10);
     assert.equal(last?.['result'], 'ok');
   } finally {
     await removeTempDir(parent);
