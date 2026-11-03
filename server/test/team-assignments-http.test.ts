@@ -454,3 +454,137 @@ test('two TeamAssign calls in one leader round each spend one jump', async (t) =
     'the member sub-rounds write no round_outcome',
   );
 });
+
+test('an unavailable member gets a failed assignment with no jump and no sub-round', async (t) => {
+  const fixture = await startTeamFixture('allibot-team-assign-unavailable-', {
+    behavior: 'team-assign',
+    assign: ['a'],
+    disable: ['a'],
+    extraArgs: ['--scripted-report-calls'],
+  });
+  t.after(async () => fixture.stop());
+
+  await postChannelMessage(fixture, '请分派给成员甲');
+
+  const assignment = assignmentRows(fixture)[0];
+  assert.ok(assignment !== undefined);
+  assert.equal(assignment.state, 'failed');
+  assert.equal(assignment.jump_consumed, 0, 'an unusable target spends no jump');
+  assert.equal(assignment.reply_excerpt, null);
+  assert.match(assignment.reason ?? '', /禁用/);
+
+  const channelBudget = budgetRows(fixture).find((row) => row.target_id === fixture.channelId);
+  assert.equal(channelBudget?.used, 0, 'the budget did not move');
+  assert.equal(channelMessages(fixture).length, 2, 'the member never ran and wrote no message');
+  assert.deepEqual(outcomeRows(fixture).map((row) => row.member_id), [fixture.leaderId]);
+
+  const leaderReply = channelMessages(fixture)[1]?.body ?? '';
+  assert.match(leaderReply, /calls:1/, 'no member provider call happened');
+  assert.match(leaderReply, /jump=0/);
+  assert.match(leaderReply, /error=target_unavailable/);
+});
+
+test('a missing provider credential is an unavailable member, not a spent jump', async (t) => {
+  const fixture = await startTeamFixture('allibot-team-assign-credential-', {
+    behavior: 'team-assign',
+    assign: ['a'],
+    agentModels: { a: 'anthropic:claude-sonnet-4' },
+    consentProviders: ['openai', 'anthropic'],
+    extraArgs: ['--scripted-report-calls'],
+  });
+  t.after(async () => fixture.stop());
+
+  await postChannelMessage(fixture, '请分派给成员甲');
+
+  const assignment = assignmentRows(fixture)[0];
+  assert.ok(assignment !== undefined);
+  assert.equal(assignment.state, 'failed');
+  assert.equal(assignment.jump_consumed, 0);
+  assert.match(assignment.reason ?? '', /ANTHROPIC_API_KEY/);
+  const channelBudget = budgetRows(fixture).find((row) => row.target_id === fixture.channelId);
+  assert.equal(channelBudget?.used, 0);
+  assert.match(channelMessages(fixture)[1]?.body ?? '', /error=target_unavailable/);
+});
+
+test('a member without remote-data-flow consent is unavailable', async (t) => {
+  const fixture = await startTeamFixture('allibot-team-assign-consent-', {
+    behavior: 'team-assign',
+    assign: ['a'],
+    agentModels: { leader: 'anthropic:claude-sonnet-4', a: 'openai:gpt-5' },
+    env: { ANTHROPIC_API_KEY: 'sk-team-assign-anthropic' },
+    consentProviders: ['anthropic'],
+    extraArgs: ['--scripted-report-calls'],
+  });
+  t.after(async () => fixture.stop());
+
+  await postChannelMessage(fixture, '请分派给成员甲');
+
+  const assignment = assignmentRows(fixture)[0];
+  assert.ok(assignment !== undefined);
+  assert.equal(assignment.state, 'failed');
+  assert.equal(assignment.jump_consumed, 0);
+  assert.match(assignment.reason ?? '', /告知/);
+  const channelBudget = budgetRows(fixture).find((row) => row.target_id === fixture.channelId);
+  assert.equal(channelBudget?.used, 0);
+});
+
+test('an exhausted budget writes budget-exhausted with zero jump and runs no member', async (t) => {
+  const fixture = await startTeamFixture('allibot-team-assign-budget-', {
+    behavior: 'team-budget',
+    assign: ['a'],
+    channelBudgetLimit: 3,
+    extraArgs: ['--scripted-report-calls'],
+  });
+  t.after(async () => fixture.stop());
+
+  await postChannelMessage(fixture, '请一直分派');
+
+  const assignments = assignmentRows(fixture);
+  assert.equal(assignments.length, 4, 'three completed calls reach the ceiling, the fourth is suppressed');
+  assert.deepEqual(
+    assignments.map((row) => row.state),
+    ['completed', 'completed', 'completed', 'budget-exhausted'],
+  );
+  assert.deepEqual(assignments.map((row) => row.jump_consumed), [1, 1, 1, 0]);
+  const exhausted = assignments[3];
+  assert.ok(exhausted !== undefined);
+  assert.equal(exhausted.reply_excerpt, null, 'the member never ran for the exhausted call');
+  assert.match(exhausted.reason ?? '', /预算耗尽/);
+  assert.match(exhausted.reason ?? '', /3\/3/);
+
+  const channelBudget = budgetRows(fixture).find((row) => row.target_id === fixture.channelId);
+  assert.equal(channelBudget?.used, 3, 'the exhausted call does not advance the used count');
+
+  assert.equal(channelMessages(fixture).length, 2, 'the leader still lands its final reply');
+  const leaderReply = channelMessages(fixture)[1]?.body ?? '';
+  assert.match(leaderReply, /error=budget_exhausted/);
+  assert.match(leaderReply, /jump=0/);
+  assert.match(leaderReply, /calls:1/);
+});
+
+test('a failed member sub-round closes the assignment failed without a refund', async (t) => {
+  const fixture = await startTeamFixture('allibot-team-assign-member-fail-', {
+    behavior: 'team-assign',
+    assign: ['a'],
+    extraArgs: ['--scripted-team-member-fail', '--scripted-report-calls'],
+  });
+  t.after(async () => fixture.stop());
+
+  await postChannelMessage(fixture, '请分派给成员甲');
+
+  const assignment = assignmentRows(fixture)[0];
+  assert.ok(assignment !== undefined);
+  assert.equal(assignment.state, 'failed');
+  assert.equal(assignment.jump_consumed, 1, 'the jump is not refunded');
+  assert.equal(assignment.reply_excerpt, null);
+  assert.match(assignment.reason ?? '', /成员子轮次失败/);
+
+  const channelBudget = budgetRows(fixture).find((row) => row.target_id === fixture.channelId);
+  assert.equal(channelBudget?.used, 1, 'a failed member keeps the consumed jump');
+
+  assert.equal(channelMessages(fixture).length, 2, 'the member failure lands no message');
+  assert.deepEqual(outcomeRows(fixture).map((row) => row.member_id), [fixture.leaderId]);
+  const leaderReply = channelMessages(fixture)[1]?.body ?? '';
+  assert.match(leaderReply, /error=member_failed/);
+  assert.match(leaderReply, /jump=1/);
+});
