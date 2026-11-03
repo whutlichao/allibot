@@ -1,11 +1,13 @@
 import {
   t,
+  type TargetMemberView,
   type TaskStatus,
   type TaskView,
   type WorkspaceSettingsView,
   type WorkspaceView,
 } from '@allibot/shared';
 import { createElement } from 'react';
+import type { AsyncAction1, AsyncAction2 } from './async-action.ts';
 import { Avatar } from './components/Avatar.ts';
 import { SettingsPanel } from './components/SettingsPanel.ts';
 import { WorkspaceShell } from './workspace/WorkspaceShell.ts';
@@ -19,9 +21,14 @@ export interface AppProps {
   workspace?: WorkspaceView;
   activeTargetId?: string | null;
   viewportWidth?: number;
+  /** Channel member tables the shell may render, keyed by channel id. */
+  channelMembers?: Record<string, readonly TargetMemberView[]>;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
   onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
+  onJoinMember?: AsyncAction2<string, string>;
+  onSaveAgent?: AsyncAction2<string, { system_prompt: string }>;
+  onDeleteAgent?: AsyncAction1<string>;
   onLiveEvent?: (event: LiveEvent) => void;
 }
 
@@ -40,8 +47,12 @@ export function App({
   workspace,
   activeTargetId,
   viewportWidth,
+  channelMembers,
   onSelectTarget,
   onTaskTransition,
+  onJoinMember,
+  onSaveAgent,
+  onDeleteAgent,
   onLiveEvent,
 }: AppProps) {
   if (workspace !== undefined) {
@@ -50,9 +61,13 @@ export function App({
       settings,
       activeTargetId,
       viewportWidth,
+      channelMembers,
       onSelectTarget,
       onTaskTransition,
       onSettingsChange,
+      onJoinMember,
+      onSaveAgent,
+      onDeleteAgent,
       saveFailed,
       onLiveEvent,
     });

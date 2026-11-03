@@ -536,7 +536,6 @@
   margin: 0 0 8px;
   font-size: 15px;
 }
-
 /*
  * 任务看板（Task Board）：按任务状态分列的呈现面。卡片状态色只消费既有
  * 角色族 / 状态点 token（由内联 var() 指定），这里不声明新的色值；列名是
@@ -711,4 +710,293 @@
 .task-card__transition:hover {
   background: var(--selected);
   border-color: var(--selected-fill);
+}
+
+/* 成员失败 / 未启用提示：消息流上方的可读入口，点击打开成员面板。 */
+.workspace-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--warn-fill);
+  color: var(--warn-deep);
+  border-block-end: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.workspace-notice__text {
+  flex: 1;
+}
+
+.workspace-notice__action {
+  font: inherit;
+  padding: 4px 8px;
+  color: var(--warn-deep);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+/* Agent 详情页签：同一详情面的三个分组。 */
+.agent-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-detail__tabs {
+  display: flex;
+  gap: 4px;
+  border-block-end: 1px solid var(--border);
+}
+
+.agent-detail__tab {
+  font: inherit;
+  padding: 6px 10px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-block-end: 2px solid transparent;
+  cursor: pointer;
+}
+
+.agent-detail__tab[aria-selected='true'] {
+  color: var(--fg);
+  border-block-end-color: var(--accent-fill);
+}
+
+.agent-detail__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-detail__panel[hidden] {
+  display: none;
+}
+
+.agent-detail__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-detail__section--danger {
+  padding: 10px;
+  background: var(--warn-fill);
+  border: 1px solid var(--warn-graphic);
+  border-radius: 7px;
+}
+
+.agent-detail__heading {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.agent-detail__facts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+
+.agent-detail__fact {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.agent-detail__term {
+  flex: none;
+  min-inline-size: 76px;
+  color: var(--muted);
+}
+
+.agent-detail__value {
+  margin: 0;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.agent-detail__reason {
+  margin: 0;
+  font-size: 13px;
+  color: var(--warn-deep);
+}
+
+.agent-detail__prompt {
+  inline-size: 100%;
+  min-block-size: 120px;
+  padding: 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  resize: vertical;
+}
+
+.agent-detail__save-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-detail__save,
+.agent-detail__danger-delete,
+.agent-detail__danger-confirm,
+.agent-detail__danger-cancel {
+  font: inherit;
+  padding: 6px 10px;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.agent-detail__save:disabled,
+.agent-detail__danger-delete:disabled,
+.agent-detail__danger-confirm:disabled {
+  cursor: default;
+  color: var(--faint);
+}
+
+.agent-detail__danger-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-detail__danger-confirm {
+  color: var(--on-accent);
+  background: var(--error);
+  border-color: var(--error);
+}
+
+.agent-detail__error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--warn-deep);
+}
+
+.agent-detail__warning {
+  margin: 0;
+  font-size: 13px;
+  color: var(--warn-deep);
+}
+
+.agent-detail__placeholder {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.agent-detail__placeholder-body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* 成员面板：按频道成员表分已加入 / 未加入两段。 */
+.member-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.member-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.member-panel__heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.member-panel__list,
+.member-roster__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.member-panel__row,
+.member-roster__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.member-panel__identity {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-inline-size: 0;
+}
+
+.member-panel__name,
+.member-roster__name {
+  font-size: 14px;
+  color: var(--fg);
+}
+
+.member-panel__model {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.member-panel__reason {
+  font-size: 12px;
+  color: var(--warn-deep);
+}
+
+.member-panel__join {
+  font: inherit;
+  padding: 4px 8px;
+  color: var(--fg);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.member-panel__join:disabled {
+  cursor: default;
+  color: var(--faint);
+}
+
+.member-panel__loading,
+.member-panel__empty,
+.member-roster__loading {
+  margin: 0;
+  font-size: 13px;
+  color: var(--faint);
+}
+
+.member-panel__error {
+  margin: 0;
+  font-size: 13px;
+  color: var(--warn-deep);
+}
+
+.member-roster__owner {
+  font-size: 12px;
+  color: var(--muted);
 }
