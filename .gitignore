@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vite/
+.DS_Store
+.scratch/
+*.log
+.env
+.env.*
