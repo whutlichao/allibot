@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type {
+  RoundDiscipline,
   RoundInput,
   RoundMember,
   RoundMessage,
   RoundProvider,
   RoundResult,
+  RoundTargetKind,
   WakeReason,
 } from './agent-seam.js';
 import { tFromDb } from './copy.js';
@@ -35,9 +37,9 @@ function wakeText(db: Database.Database, reason: WakeReason): string {
 }
 
 /**
- * The seam verdict's readable text. A `replied` verdict whose body cannot be
- * committed is stated as such, not judged: whether that is a failure under a
- * definite signal is the response-judgement ticket's rule.
+ * The seam verdict's readable text. Whether a silent / ignored / body-less
+ * verdict closes as a failure is the response judgement's rule (回应判断),
+ * which is applied on top of this text, never derived from it.
  */
 function verdictText(db: Database.Database, verdict: RoundResult['verdict']): string {
   switch (verdict) {
@@ -45,8 +47,32 @@ function verdictText(db: Database.Database, verdict: RoundResult['verdict']): st
       return tFromDb(db, 'round.replied');
     case 'ignored':
       return tFromDb(db, 'round.ignored');
+    case 'silent':
+      return tFromDb(db, 'round.silent');
     case 'failed':
       return tFromDb(db, 'round.failed');
+  }
+}
+
+/**
+ * The readable text of the definite signal that woke the round. Each signal
+ * picks its own key: a claim round never borrows the human-message copy, and a
+ * mention round never borrows the claim copy — that would state a fact that
+ * did not happen.
+ */
+function mandatoryText(
+  db: Database.Database,
+  signal: NonNullable<RoundDiscipline['signal']>,
+): string {
+  switch (signal) {
+    case 'mention':
+      return tFromDb(db, 'round.mandatory.mention');
+    case 'claim':
+      return tFromDb(db, 'round.mandatory.claim');
+    case 'human-message':
+      return tFromDb(db, 'round.mandatory.humanMessage');
+    case 'continue':
+      return tFromDb(db, 'round.mandatory.continue');
   }
 }
 
@@ -277,9 +303,14 @@ export async function runRound(
   inFlight.set(wake.memberId, turn);
   const startedAt = new Date().toISOString();
 
+  // The response discipline is computed once, from the data the wake points
+  // at. A read failure leaves it undefined, which judges as non-definite: an
+  // unreadable round has no definite signal to enforce.
+  let input: RoundInput | undefined;
   let result: RoundResult;
   try {
-    result = await provider.runRound(readRoundInput(db, wake));
+    input = readRoundInput(db, wake);
+    result = await provider.runRound(input);
   } catch (error) {
     // A wake that arrived after the adapter settled but before this round's
     // transaction commits still folds into this round; a crash here must not
@@ -289,7 +320,7 @@ export async function runRound(
 
   let committed: RoundOutcomeRow;
   try {
-    committed = commitRound(db, wake, turn, startedAt, result);
+    committed = commitRound(db, wake, turn, startedAt, result, input?.discipline);
   } finally {
     inFlight.delete(wake.memberId);
   }
@@ -306,7 +337,7 @@ export interface RoundOutcomeRow {
   member_id: string;
   target_id: string;
   base_seq: number;
-  status: string;
+  status: RoundOutcomeStatus;
   reason: string;
   finished_reason: string | null;
   started_at: string;
@@ -347,7 +378,119 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     body: row.body,
   }));
 
-  return { member, targetId: wake.targetId, baseSeq: wake.fromSeq, reason: wake.reason, messages };
+  const targetKind = readTargetKindOf(db, wake.targetId);
+  const triggeredByHuman = wokeByHuman(db, wake);
+  const discipline = readDiscipline(db, wake, triggeredByHuman);
+  return {
+    member,
+    targetId: wake.targetId,
+    targetKind,
+    baseSeq: wake.fromSeq,
+    reason: wake.reason,
+    discipline,
+    systemPrompt: composeSystemPrompt(db, member, targetKind, triggeredByHuman),
+    messages,
+  };
+}
+
+/**
+ * 回应判断 (Response Judgment) for one round. The signals are read from the
+ * data the wake points at, never from the wake reason's text: a merged wake
+ * keeps whichever reason arrived first, and the reason is diagnostics only.
+ *
+ * M1's four definite signals — a personal mention, a claim wake, a human
+ * message that woke the round, and an auto-continue wake — must be answered.
+ * `channel-message` is the ordinary wake and stays a self-judged round: a
+ * conversation between others, without a mention, is legitimately ignored.
+ * A mention overrides the human-message signal (both must answer; the mention
+ * is the more specific copy). The team leader's task-change signal is T10 and
+ * deliberately absent.
+ */
+function readDiscipline(
+  db: Database.Database,
+  wake: Wake,
+  triggeredByHuman: boolean,
+): RoundDiscipline {
+  switch (wake.reason) {
+    case 'claim':
+      return { definite: true, signal: 'claim' };
+    case 'continue':
+      return { definite: true, signal: 'continue' };
+    case 'mention':
+      return { definite: true, signal: 'mention' };
+    case 'channel-message':
+      if (mentionsMember(db, wake)) {
+        return { definite: true, signal: 'mention' };
+      }
+      return triggeredByHuman
+        ? { definite: true, signal: 'human-message' }
+        : { definite: false, signal: null };
+  }
+}
+
+/** The write-time mention snapshot of the triggering message names this member. */
+function mentionsMember(db: Database.Database, wake: Wake): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM message_mention mm
+         JOIN message msg ON msg.id = mm.message_id
+        WHERE msg.target_id = ? AND msg.seq = ? AND mm.member_id = ?`,
+    )
+    .get(wake.targetId, wake.fromSeq, wake.memberId);
+  return row !== undefined;
+}
+
+/** The message the wake points at is a human message (message.kind == human). */
+function wokeByHuman(db: Database.Database, wake: Wake): boolean {
+  const row = db
+    .prepare('SELECT kind FROM message WHERE target_id = ? AND seq = ?')
+    .get(wake.targetId, wake.fromSeq) as { kind: string } | undefined;
+  return row?.kind === 'human';
+}
+
+/**
+ * The system prompt a round is handed: the stored Agent prompt, the target's
+ * response discipline, and the mandatory-answer sentence.
+ *
+ * A DM is stated one-to-one with an explicit mandatory answer (the glossary's
+ * "一对一口径 + 显式必答句") instead of the channel rubric: a DM never claims
+ * to be a multi-member channel and has no "not mentioned therefore silent"
+ * case. A channel keeps the silence rubric verbatim; a human-message round
+ * appends the human-message mandatory sentence as its own paragraph, and no
+ * other channel round gets that copy.
+ */
+/**
+ * The system prompt a round is handed: the stored Agent prompt, the target's
+ * response discipline, and the mandatory-answer sentence.
+ *
+ * A DM is stated one-to-one with an explicit mandatory answer (the glossary's
+ * "一对一口径 + 显式必答句") instead of the channel rubric: a DM never claims
+ * to be a multi-member channel and has no "not mentioned therefore silent"
+ * case. A channel keeps the silence rubric verbatim; a human-message round
+ * appends the human-message mandatory sentence as its own paragraph, and no
+ * other channel round gets that copy.
+ */
+function composeSystemPrompt(
+  db: Database.Database,
+  member: RoundMember,
+  targetKind: RoundTargetKind,
+  triggeredByHuman: boolean,
+): string {
+  const sections = [member.system_prompt.trim()];
+  if (targetKind === 'dm') {
+    sections.push(tFromDb(db, 'prompt.dm.oneToOne'));
+    sections.push(
+      triggeredByHuman
+        ? tFromDb(db, 'prompt.humanMessage.mandatory')
+        : tFromDb(db, 'prompt.dm.mandatory'),
+    );
+  } else {
+    sections.push(tFromDb(db, 'prompt.channel.rubric'));
+    if (triggeredByHuman) {
+      sections.push(tFromDb(db, 'prompt.humanMessage.mandatory'));
+    }
+  }
+  return sections.filter((section) => section.length > 0).join('\n\n');
 }
 
 /**
@@ -364,7 +507,9 @@ function commitRound(
   turn: Turn,
   startedAt: string,
   result: RoundResult,
+  discipline: RoundDiscipline | undefined,
 ): RoundOutcomeRow {
+  const signal = discipline ?? { definite: false, signal: null };
   const write = db.transaction((): RoundOutcomeRow => {
     const joinedSeq = commitJoin(db, wake, result);
     const replySeq = commitReply(db, wake, result);
@@ -385,19 +530,66 @@ function commitRound(
       });
     }
 
-    const finishedReason: FinishedReason = result.verdict === 'failed' ? 'error' : 'completed';
+    const judged = judgeRound(signal, result, replySeq);
     return insertOutcome(db, {
       wake,
       baseSeq: wake.fromSeq,
-      status: result.verdict,
-      reason: roundReason(db, wake, result, joinedSeq, replySeq),
+      status: judged.status,
+      reason: roundReason(db, wake, signal, result, judged, joinedSeq, replySeq),
       merged: 0,
       startedAt,
       finishedAt,
-      finishedReason,
+      finishedReason: judged.finishedReason,
     });
   });
   return write();
+}
+
+/**
+ * The stored round-outcome status vocabulary (轮次结果). This ticket produces
+ * replied / ignored / failed / merged / silent; `budget-exhausted` arrives with
+ * the budget ticket.
+ */
+export type RoundOutcomeStatus =
+  | 'replied'
+  | 'ignored'
+  | 'failed'
+  | 'merged'
+  | 'budget-exhausted'
+  | 'silent';
+
+/**
+ * 回应判断 (Response Judgment) applied to one round's adapter verdict.
+ *
+ * Under a definite signal — a personal mention, a claim wake, a human message,
+ * an auto-continue wake — a round that stays silent (`ignored` or the
+ * structured `silent`) or that answers without a committable body closes as
+ * `failed`. That is the response discipline's rule; the adapter's own verdict
+ * is still stated in the readable reason, so the row shows both facts. Under
+ * no definite signal, `ignored` and `silent` stay what they are: normal
+ * protocol results, not failures — a body-less reply keeps the adapter's own
+ * `replied` verdict and only the reason says it landed nothing.
+ *
+ * The stored status is computed from the structured verdict, never from the
+ * reason text, so the text can gain clauses without changing what is recorded.
+ */
+function judgeRound(
+  discipline: RoundDiscipline,
+  result: RoundResult,
+  replySeq: number | null,
+): { status: RoundOutcomeStatus; finishedReason: FinishedReason } {
+  if (result.verdict === 'failed') {
+    return { status: 'failed', finishedReason: 'error' };
+  }
+  if (result.verdict === 'replied') {
+    return replySeq === null && discipline.definite
+      ? { status: 'failed', finishedReason: 'completed' }
+      : { status: 'replied', finishedReason: 'completed' };
+  }
+  if (discipline.definite) {
+    return { status: 'failed', finishedReason: 'completed' };
+  }
+  return { status: result.verdict, finishedReason: 'completed' };
 }
 
 /**
@@ -452,6 +644,12 @@ function readTargetKind(db: Database.Database, targetId: string): string {
   return row?.kind ?? '';
 }
 
+/** The same row, narrowed for the round input; a target row always exists here. */
+function readTargetKindOf(db: Database.Database, targetId: string): RoundTargetKind {
+  const kind = readTargetKind(db, targetId);
+  return kind === 'dm' || kind === 'task' ? kind : 'channel';
+}
+
 function commitReply(db: Database.Database, wake: Wake, result: RoundResult): number | null {
   if (result.verdict !== 'replied' || !hasBody(result)) {
     return null;
@@ -494,21 +692,41 @@ function ownerId(db: Database.Database): string {
   return row.id;
 }
 
+/**
+ * The readable round reason. The verdict clause states what the adapter
+ * concluded; the response-judgement clause states what the discipline made of
+ * it — each definite signal with its own key, and the "normal protocol
+ * result" wording only where nothing forced an answer. The text never decides
+ * the stored status (judgeRound does, from the structured verdict).
+ */
 function roundReason(
   db: Database.Database,
   wake: Wake,
+  discipline: RoundDiscipline,
   result: RoundResult,
+  judged: { status: RoundOutcomeStatus; finishedReason: FinishedReason },
   joinedSeq: number | null,
   replySeq: number | null,
 ): string {
   const parts: string[] = [wakeText(db, wake.reason)];
   if (result.verdict === 'replied' && replySeq === null) {
-    // A reply verdict with no committable body is still the adapter's own
-    // verdict; the response-judgement ticket decides whether that is a
-    // failure under a definite signal. Here it is only stated, not judged.
     parts.push(tFromDb(db, 'round.noBody'));
   } else {
     parts.push(verdictText(db, result.verdict));
+  }
+  if (discipline.definite && discipline.signal !== null) {
+    parts.push(mandatoryText(db, discipline.signal));
+  }
+  if (judged.status === 'failed' && result.verdict !== 'failed') {
+    // Only a definite signal is what turned this round into a failure; a
+    // body-less reply is failed on its own and must not claim otherwise.
+    if (discipline.definite) {
+      parts.push(tFromDb(db, 'round.mandatory.closed'));
+    }
+  } else if (judged.status === 'silent') {
+    parts.push(tFromDb(db, 'round.silent.allowed'));
+  } else if (judged.status === 'ignored' && result.verdict === 'ignored') {
+    parts.push(tFromDb(db, 'round.ignored.allowed'));
   }
   if (result.detail !== undefined && result.detail.length > 0) {
     parts.push(result.detail);
@@ -522,7 +740,7 @@ function roundReason(
 interface InsertOutcomeInput {
   wake: Wake;
   baseSeq: number;
-  status: string;
+  status: RoundOutcomeStatus;
   reason: string;
   merged: number;
   startedAt: string;
