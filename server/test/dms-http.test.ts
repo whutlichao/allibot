@@ -28,11 +28,14 @@ interface DmFixture {
 async function startDmFixture(
   prefix: string,
   provider: 'reply' | 'ignore' = 'ignore',
+  extraArgs: readonly string[] = [],
 ): Promise<DmFixture> {
   const dataDir = await makeTempDir(prefix);
   const migration = runCli(['--migrate', '--data-dir', dataDir]);
   assert.equal(migration.exitCode, 0, `migrate should exit 0; output: ${migration.output}`);
-  const running = await startServer(dataDir, { args: ['--scripted-provider', provider] });
+  const running = await startServer(dataDir, {
+    args: ['--scripted-provider', provider, ...extraArgs],
+  });
   return {
     dataDir,
     running,
@@ -624,21 +627,10 @@ test('a pierced third Agent’s reply in a DM wakes nobody, so no agent-to-agent
   // Every scripted reply names the DM peer, so the pierced third Agent's reply
   // would reach the peer under an ordinary member surface. A DM reply delivers
   // no wake at all, so the peer answers only the owner's message.
-  const dataDir = await makeTempDir('allibot-dm-pierced-reply-');
-  const migration = runCli(['--migrate', '--data-dir', dataDir]);
-  assert.equal(migration.exitCode, 0, `migrate should exit 0; output: ${migration.output}`);
-  const running = await startServer(dataDir, {
-    args: ['--scripted-provider', 'reply', '--scripted-reply', '@私信对象 我看到这条私信了'],
-  });
-  const fixture: DmFixture = {
-    dataDir,
-    running,
-    base: `http://127.0.0.1:${running.port}`,
-    stop: async () => {
-      await running.stop();
-      await removeTempDir(dataDir);
-    },
-  };
+  const fixture = await startDmFixture('allibot-dm-pierced-reply-', 'reply', [
+    '--scripted-reply',
+    '@私信对象 我看到这条私信了',
+  ]);
   try {
     const peer = await createAgent(fixture, '私信对象');
     const third = await createAgent(fixture, '三号');
