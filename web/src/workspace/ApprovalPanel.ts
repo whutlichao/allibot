@@ -181,6 +181,7 @@ function renderDetail(
           approvalBatchLabel(locale, index + 1),
         ),
         ...batch.tool_calls.map((call) => {
+          const isShell = call.tool_name === 'Bash';
           const decision = decisionForCall(approval, call.tool_call_id);
           const needsDecision = callNeedsDecision(approval, call.tool_call_id);
           return createElement(
@@ -197,11 +198,33 @@ function renderDetail(
               createElement('strong', null, call.tool_name),
               createElement('code', { className: 'approval-panel__pattern' }, call.pattern),
             ),
-            createElement(
-              'pre',
-              { className: 'approval-panel__args' },
-              JSON.stringify(call.arguments, null, 2),
-            ),
+            isShell
+              ? createElement(
+                  'div',
+                  { className: 'approval-panel__shell', 'data-approval-shell': 'true' },
+                  createElement(
+                    'span',
+                    { className: 'approval-panel__shell-label' },
+                    t(locale, 'workspace.approval.shell.command'),
+                  ),
+                  createElement(
+                    'code',
+                    { className: 'approval-panel__shell-command' },
+                    String(call.arguments['command'] ?? call.pattern),
+                  ),
+                  typeof call.arguments['cwd'] === 'string'
+                    ? createElement(
+                        'span',
+                        { className: 'approval-panel__shell-cwd' },
+                        `${t(locale, 'workspace.approval.shell.cwd')}：${call.arguments['cwd']}`,
+                      )
+                    : null,
+                )
+              : createElement(
+                  'pre',
+                  { className: 'approval-panel__args' },
+                  JSON.stringify(call.arguments, null, 2),
+                ),
             decision === null
               ? needsDecision
                 ? createElement(

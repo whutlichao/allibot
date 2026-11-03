@@ -14,7 +14,7 @@
   "scripts": {
     "build": "npm run build --workspace shared && npm run build --workspace server && node scripts/write-root-cli.mjs && npm run build --workspace web",
     "typecheck": "npm run typecheck --workspace shared && npm run typecheck --workspace server && npm run typecheck --workspace web",
-    "test": "npm run build && npm run test --workspace server && npm run test:strings && npm run test:visual-contract && npm run test:workspace-shell && npm run test:task-board && npm run test:agent-detail && npm run test:agent-rules && npm run test:team-config && npm run test:team-runs && npm run test:team-assignments && npm run test:plan-panel && npm run test:sop-definitions && npm run test:workspace-root && npm run test:approvals && npm run test:web-render",
+    "test": "npm run build && npm run test --workspace server && npm run test:strings && npm run test:visual-contract && npm run test:workspace-shell && npm run test:task-board && npm run test:agent-detail && npm run test:agent-rules && npm run test:team-config && npm run test:team-runs && npm run test:team-assignments && npm run test:plan-panel && npm run test:sop-definitions && npm run test:workspace-root && npm run test:approvals && npm run test:local-shell && npm run test:web-render",
     "test:strings": "npm run build --workspace shared && npm run test:strings --workspace shared && npm run test:strings --workspace web",
     "test:visual-contract": "npm run test:visual-contract --workspace web",
     "test:web-render": "npm run build --workspace shared && npm run test:web-render --workspace web",
@@ -30,6 +30,7 @@
     "test:plan-panel": "npm run build --workspace shared && npm run test:plan-panel --workspace web",
     "test:sop-definitions": "npm run build --workspace shared && npm run test:sop-definitions --workspace web",
     "test:workspace-root": "npm run build --workspace shared && npm run test:workspace-root --workspace web",
-    "test:approvals": "npm run build --workspace shared && npm run test:approvals --workspace web"
+    "test:approvals": "npm run build --workspace shared && npm run test:approvals --workspace web",
+    "test:local-shell": "npm run build && node --test server/test/local-shell-http.test.ts && npm run test:local-shell --workspace web"
   }
 }

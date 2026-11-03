@@ -218,6 +218,7 @@ const OWNER: TargetMemberView = {
   display_name: 'Owner',
   avatar_slot: 1,
   workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
+  allow_local_shell: 0,
   permission_mode: 'ask-writes',
 };
 
@@ -227,6 +228,7 @@ const ALICE: TargetMemberView = {
   display_name: 'Alice',
   avatar_slot: 0,
   workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
+  allow_local_shell: 0,
   permission_mode: 'ask-writes',
 };
 
@@ -236,6 +238,7 @@ const BOB: TargetMemberView = {
   display_name: 'Bob',
   avatar_slot: 2,
   workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
+  allow_local_shell: 0,
   permission_mode: 'ask-writes',
 };
 
@@ -245,6 +248,7 @@ const CAROL: TargetMemberView = {
   display_name: 'Carol',
   avatar_slot: 3,
   workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
+  allow_local_shell: 0,
   permission_mode: 'ask-writes',
 };
 
@@ -403,6 +407,7 @@ const WORKSPACE_OWNER: TargetMemberView = {
   display_name: 'Owner',
   avatar_slot: 1,
   workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
+  allow_local_shell: 0,
   permission_mode: 'ask-writes',
 };
 
