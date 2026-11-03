@@ -42,10 +42,11 @@ import {
   parseProviderParam,
   remoteDataFlowView,
 } from './providers.js';
-import type { InFlightRounds } from './rounds.js';
+import { dispatchWakes, type InFlightRounds } from './rounds.js';
 import { parseSearchQuery, searchWorkspace } from './search.js';
 import { getSettings, updateSettings } from './settings.js';
 import {
+  claimTask,
   createTask,
   getTask,
   listTasks,
@@ -330,10 +331,20 @@ const ROUTES: readonly Route[] = [
     },
   },
   {
+    // Creating a task is the claim trigger: the row and its pointer commit
+    // first, then the orchestrator decides whether an available Agent picks it
+    // up. The claim facts are one transaction of their own; its wake is
+    // delivered after that commit through the same entry point every other
+    // wake uses, so there is no second orchestration path.
     method: 'POST',
     pattern: /^\/api\/tasks$/,
-    handle: async (request, response, { db }) => {
-      sendJson(response, 201, createTask(db, await readJsonBody(request)));
+    handle: async (request, response, { db, orchestration, env }) => {
+      const task = createTask(db, await readJsonBody(request));
+      const claim = claimTask(db, task.id, env);
+      if (claim !== null) {
+        await dispatchWakes(db, orchestration.provider, [claim.wake], orchestration.inFlight);
+      }
+      sendJson(response, 201, getTask(db, task.id));
     },
   },
   {

@@ -92,6 +92,15 @@ export const ZH_CN = {
   'round.finished.error': { text: '错误', params: [] },
   'round.finished.iterationLimit': { text: '达到迭代上限', params: [] },
   'round.finished.humanInterrupt': { text: '人类中断', params: [] },
+  // 自动续跑的两条轮次说明：授予一次续跑，或到达每世代四轮的上限后暂停。
+  'round.continue.granted': {
+    text: '已按结构化动作 continue_task 申请续跑（本世代第 {round} 轮）',
+    params: ['round'],
+  },
+  'round.continue.paused': {
+    text: '结构化动作 continue_task 到达本世代上限（{rounds} 轮），不再续跑',
+    params: ['rounds'],
+  },
   'system.member.piercedJoin': {
     text: '{name} 加入了频道：它被点名时并不在频道里，回复时顺带加入（成员变化只随真实回复发生）',
     params: ['name'],
@@ -135,6 +144,25 @@ export const ZH_CN = {
   'task.event.assignee.reassigned': {
     text: '任务由 {previous} 改派给 {assignee}。',
     params: ['previous', 'assignee'],
+  },
+  // 认领 (Claim) 的两条系统记录与自动续跑 (Auto-continue) 的两条记录：认领是
+  // 一次开工动作，所以「已认领」之后紧跟一条「认领后自动开工」；续跑记录落一条，
+  // 到每世代四轮上限时改落暂停记录。作者恒为 owner（既有口径，不表示人推的）。
+  'task.event.claimed': {
+    text: '任务「{title}」已由 {assignee} 认领。',
+    params: ['title', 'assignee'],
+  },
+  'task.event.claim.started': {
+    text: '认领后自动开工：{assignee} 开始处理「{title}」。',
+    params: ['assignee', 'title'],
+  },
+  'task.event.continue': {
+    text: '自动续跑：{assignee} 申请继续处理「{title}」。',
+    params: ['assignee', 'title'],
+  },
+  'task.event.continue.paused': {
+    text: '自动续跑达到本世代上限（{rounds} 轮）：{assignee} 不再续跑「{title}」。',
+    params: ['rounds', 'assignee', 'title'],
   },
 
   // 频道里的指针消息正文：它是 system，不计未读、不唤醒。
