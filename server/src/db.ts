@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export interface MigrationStep {
   readonly to: number;
@@ -374,6 +374,34 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
         BEGIN
           SELECT RAISE(ABORT, 'task_pointer must be a system message on the channel that owns the task');
         END;
+      `);
+    },
+  },
+  {
+    // The human-epoch and response-budget ticket lands after the task step as
+    // the next strict +1 of the chain.
+    to: 9,
+    apply(db) {
+      db.exec(`
+        -- The budget ledger (预算表) is the canonical jump count: one row per
+        -- target, so a target that burns its budget never locks another one.
+        -- epoch_seq is the human epoch (the seq of the message that opened it;
+        -- 0 while no epoch has opened yet) and used counts the agent-to-agent
+        -- jumps delivered inside that epoch.
+        --
+        -- limit_value snapshots the ceiling that was in force when the epoch
+        -- opened, so a channel upper-bound change only takes effect at the next
+        -- human epoch. The human face has no write path to this table (ADR
+        -- 0004); used only moves from the backend's epoch reset and jump
+        -- delivery, and the row CHECK keeps a jump from ever overshooting its
+        -- epoch's ceiling.
+        CREATE TABLE target_budget (
+          target_id TEXT PRIMARY KEY REFERENCES target (id),
+          epoch_seq INTEGER NOT NULL CHECK (epoch_seq >= 0),
+          used INTEGER NOT NULL CHECK (used >= 0),
+          limit_value INTEGER NOT NULL CHECK (limit_value IN (3, 5, 10)),
+          CHECK (used <= limit_value)
+        );
       `);
     },
   },
