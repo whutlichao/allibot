@@ -114,6 +114,7 @@ test('migrating an empty data dir creates member and agent_config with exactly o
         'compression_threshold',
         'max_iterations',
         'auto_claim',
+        'workspace_backend',
       ],
     );
 

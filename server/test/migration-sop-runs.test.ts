@@ -4,6 +4,7 @@ import { cpSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { SCHEMA_VERSION } from '../dist/db.js';
 import {
   MIGRATION_FIXTURE,
   makeTempDir,
@@ -187,7 +188,7 @@ test('a v16 data directory migrates to v17 with a whole-directory backup and one
 
     const migrated = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(migrated.exitCode, 0, `migrate should exit 0; output: ${migrated.output}`);
-    assert.equal(readSchemaVersion(dataDir), 17, 'the strict +1 step lands at version 17');
+    assert.equal(readSchemaVersion(dataDir), SCHEMA_VERSION, 'the chain lands at the current version');
 
     const backups = readdirSync(parent).filter((name) => name.startsWith('data.backup-'));
     assert.equal(
@@ -204,7 +205,7 @@ test('a v16 data directory migrates to v17 with a whole-directory backup and one
     const last = ledger[ledger.length - 1];
     assert.ok(last !== undefined, 'the audit ledger has a record for the migration');
     assert.equal(last['from'], 16);
-    assert.equal(last['to'], 17);
+    assert.equal(last['to'], SCHEMA_VERSION);
     assert.equal(last['result'], 'ok');
     assert.equal(last['backup_path'], backupPath);
     assert.ok(Number.isFinite(Date.parse(String(last['started_at']))));

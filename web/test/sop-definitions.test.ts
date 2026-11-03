@@ -43,9 +43,9 @@ const DEFINITION_ID = 'sop-def-1';
 const RUN_ID = 'sop-run-1';
 
 const MEMBERS: readonly TargetMemberView[] = [
-  { id: OWNER_ID, kind: 'owner', display_name: '我', avatar_slot: 0 },
-  { id: AGENT_A, kind: 'agent', display_name: '执行者甲', avatar_slot: 1 },
-  { id: AGENT_B, kind: 'agent', display_name: '校验者乙', avatar_slot: 2 },
+  { id: OWNER_ID, kind: 'owner', display_name: '我', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
+  { id: AGENT_A, kind: 'agent', display_name: '执行者甲', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
+  { id: AGENT_B, kind: 'agent', display_name: '校验者乙', avatar_slot: 2, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' } },
 ];
 
 function channel(overrides: Partial<ChannelView> = {}): ChannelView {
@@ -55,6 +55,7 @@ function channel(overrides: Partial<ChannelView> = {}): ChannelView {
     description: '',
     mode: 'autonomous',
     team: { leader_member_id: null, status: 'valid', reason: null },
+    workspace: { root: null, backend: 'local', allow_local_shell: 0 },
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,
@@ -83,6 +84,7 @@ function agent(id: string, displayName: string): AgentView {
     compression_threshold: 0.8,
     max_iterations: 8,
     auto_claim: 0,
+    workspace_backend: null,
   };
 }
 

@@ -217,6 +217,7 @@ const OWNER: TargetMemberView = {
   kind: 'owner',
   display_name: 'Owner',
   avatar_slot: 1,
+  workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
 };
 
 const ALICE: TargetMemberView = {
@@ -224,6 +225,7 @@ const ALICE: TargetMemberView = {
   kind: 'agent',
   display_name: 'Alice',
   avatar_slot: 0,
+  workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
 };
 
 const BOB: TargetMemberView = {
@@ -231,6 +233,7 @@ const BOB: TargetMemberView = {
   kind: 'agent',
   display_name: 'Bob',
   avatar_slot: 2,
+  workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
 };
 
 const CAROL: TargetMemberView = {
@@ -238,6 +241,7 @@ const CAROL: TargetMemberView = {
   kind: 'agent',
   display_name: 'Carol',
   avatar_slot: 3,
+  workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
 };
 
 function ids(members: readonly TargetMemberView[]): string[] {
@@ -394,6 +398,7 @@ const WORKSPACE_OWNER: TargetMemberView = {
   kind: 'owner',
   display_name: 'Owner',
   avatar_slot: 1,
+  workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
 };
 
 function chatView(overrides: Partial<MessageView> = {}): MessageView {

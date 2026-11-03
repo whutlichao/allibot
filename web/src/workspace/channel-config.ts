@@ -1,8 +1,12 @@
-import type {
-  ChannelConfigPatch,
-  ChannelMode,
-  ChannelView,
-  TargetMemberView,
+import {
+  t,
+  type ChannelConfigPatch,
+  type ChannelMode,
+  type ChannelView,
+  type Locale,
+  type TargetMemberView,
+  type WorkspaceBackend,
+  type WorkspaceStatusView,
 } from '@allibot/shared';
 
 /**
@@ -56,4 +60,50 @@ export function leaderChangePatch(
     return null;
   }
   return { team_leader_member_id: leaderMemberId };
+}
+
+/**
+ * The project-root write (#42 / D5.1). The input is the owner's raw text; an
+ * empty value is the explicit null that clears the root. A same-value replay
+ * returns null so the host sends nothing (D2.4).
+ */
+export function rootChangePatch(
+  channel: ChannelView,
+  root: string,
+): ChannelConfigPatch | null {
+  const trimmed = root.trim();
+  const next = trimmed.length === 0 ? null : trimmed;
+  if (next === channel.workspace.root) {
+    return null;
+  }
+  return { workspace_root: next };
+}
+
+/** The workspace-backend write; a same-value choice sends nothing. */
+export function backendChangePatch(
+  channel: ChannelView,
+  backend: WorkspaceBackend,
+): ChannelConfigPatch | null {
+  if (backend === channel.workspace.backend) {
+    return null;
+  }
+  return { workspace_backend: backend };
+}
+
+/**
+ * The readable workspace status. The reason is a stable backend code; the copy
+ * comes from the catalog, never from the frontend inventing a diagnosis.
+ */
+export function workspaceStatusCopy(locale: Locale, status: WorkspaceStatusView): string {
+  if (status.available) {
+    return t(locale, 'workspace.status.available');
+  }
+  switch (status.reason) {
+    case 'workspace-root-missing':
+      return t(locale, 'workspace.status.reason.workspaceRootMissing');
+    case 'docker-unavailable':
+      return t(locale, 'workspace.status.reason.dockerUnavailable');
+    default:
+      return t(locale, 'workspace.status.reason.workspaceRootMissing');
+  }
 }

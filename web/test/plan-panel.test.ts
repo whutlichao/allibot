@@ -80,6 +80,7 @@ function channel(overrides: Partial<ChannelView> & Pick<ChannelView, 'id' | 'nam
     description: '',
     mode: 'autonomous',
     team: { leader_member_id: null, status: 'valid', reason: null },
+    workspace: { root: null, backend: 'local', allow_local_shell: 0 },
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,
@@ -126,6 +127,7 @@ function agent(): AgentView {
     compression_threshold: 0.8,
     max_iterations: 8,
     auto_claim: 0,
+    workspace_backend: null,
   };
 }
 

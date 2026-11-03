@@ -1,19 +1,31 @@
 import {
   CHANNEL_MODES,
+  WORKSPACE_BACKENDS,
   t,
   type ChannelConfigPatch,
   type ChannelMode,
   type ChannelView,
   type Locale,
   type TargetMemberView,
+  type WorkspaceBackend,
+  type WorkspaceStatusView,
 } from '@allibot/shared';
-import { createElement, useState, type ReactNode } from 'react';
-import { leaderCandidates, leaderChangePatch, modeChangePatch } from './channel-config.ts';
+import { createElement, useEffect, useState, type ReactNode } from 'react';
+import {
+  backendChangePatch,
+  leaderCandidates,
+  leaderChangePatch,
+  modeChangePatch,
+  rootChangePatch,
+  workspaceStatusCopy,
+} from './channel-config.ts';
 
 export interface ChannelConfigPanelProps {
   channel: ChannelView;
   /** The channel's member table; undefined means it has not been read yet. */
   members: readonly TargetMemberView[] | undefined;
+  /** The selected target's workspace availability; undefined while loading. */
+  workspaceStatus?: WorkspaceStatusView;
   locale: Locale;
   /**
    * The host's team-config write. It sends one PATCH to the channel URL for
@@ -49,13 +61,21 @@ function selectedValue(event: { target: { value: string } }): string {
 export function ChannelConfigPanel({
   channel,
   members,
+  workspaceStatus,
   locale,
   onTeamConfigChange,
 }: ChannelConfigPanelProps) {
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  const [rootDraft, setRootDraft] = useState(channel.workspace.root ?? '');
   const candidates = leaderCandidates(members);
   const team = channel.team;
+
+  // The backend reading is the source of truth: after a save the host re-reads
+  // the workspace and the draft follows the stored canonical root.
+  useEffect(() => {
+    setRootDraft(channel.workspace.root ?? '');
+  }, [channel.id, channel.workspace.root]);
 
   function submit(patch: ChannelConfigPatch | null): void {
     if (patch === null || onTeamConfigChange === undefined || saving) {
@@ -136,6 +156,107 @@ export function ChannelConfigPanel({
         )
       : null;
 
+  const rootPatch = rootChangePatch(channel, rootDraft);
+  const workspaceControls = createElement(
+    'div',
+    { className: 'channel-config__workspace', 'data-workspace-config': '' },
+    createElement(
+      'div',
+      { className: 'channel-config__field' },
+      createElement(
+        'label',
+        { className: 'channel-config__label', htmlFor: 'channel-config-workspace-root' },
+        t(locale, 'channel.config.workspace.root.label'),
+      ),
+      createElement(
+        'div',
+        { className: 'channel-config__workspace-row' },
+        createElement('input', {
+          id: 'channel-config-workspace-root',
+          className: 'channel-config__input',
+          type: 'text',
+          value: rootDraft,
+          placeholder: t(locale, 'channel.config.workspace.root.placeholder'),
+          disabled: saving,
+          'data-action': 'workspace-root',
+          onChange: (event: { target: { value: string } }) => setRootDraft(event.target.value),
+        }),
+        createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'channel-config__button',
+            'data-action': 'workspace-root-save',
+            disabled: saving || rootPatch === null,
+            onClick: () => submit(rootPatch),
+          },
+          t(locale, 'channel.config.workspace.root.save'),
+        ),
+      ),
+    ),
+    createElement(
+      'div',
+      { className: 'channel-config__field' },
+      createElement(
+        'label',
+        { className: 'channel-config__label', htmlFor: 'channel-config-workspace-backend' },
+        t(locale, 'channel.config.workspace.backend.label'),
+      ),
+      createElement(
+        'select',
+        {
+          id: 'channel-config-workspace-backend',
+          className: 'channel-config__select',
+          'data-action': 'workspace-backend',
+          'data-workspace-backend': channel.workspace.backend,
+          value: channel.workspace.backend,
+          disabled: saving,
+          onChange: (event: { target: { value: string } }) =>
+            submit(
+              backendChangePatch(channel, event.target.value as WorkspaceBackend),
+            ),
+        },
+        ...WORKSPACE_BACKENDS.map((backend) =>
+          createElement(
+            'option',
+            { key: backend, value: backend },
+            backend === 'local'
+              ? t(locale, 'channel.config.workspace.backend.local')
+              : t(locale, 'channel.config.workspace.backend.docker'),
+          ),
+        ),
+      ),
+    ),
+    workspaceStatus === undefined
+      ? createElement(
+          'p',
+          {
+            className: 'channel-config__hint',
+            'data-workspace-status': 'loading',
+          },
+          t(locale, 'workspace.status.loading'),
+        )
+      : createElement(
+          'p',
+          {
+            className: 'channel-config__workspace-status',
+            'data-workspace-status': workspaceStatus.available ? 'available' : 'unavailable',
+            'data-workspace-reason': workspaceStatus.reason ?? '',
+            role: 'status',
+          },
+          createElement(
+            'strong',
+            { className: 'channel-config__label' },
+            t(locale, 'channel.config.workspace.status.label'),
+          ),
+          createElement(
+            'span',
+            null,
+            workspaceStatusCopy(locale, workspaceStatus),
+          ),
+        ),
+  );
+
   const invalid =
     channel.mode === 'team' && team.status === 'invalid'
       ? createElement(
@@ -194,6 +315,7 @@ export function ChannelConfigPanel({
       ),
     ),
     leaderControl,
+    workspaceControls,
     members === undefined
       ? createElement(
           'p',

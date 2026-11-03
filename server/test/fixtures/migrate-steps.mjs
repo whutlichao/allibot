@@ -24,11 +24,12 @@ const BASELINE_MODES = new Set([
   'v14',
   'v15',
   'v16',
+  'v17',
 ]);
 
 if ((mode !== 'ok' && mode !== 'fail' && !BASELINE_MODES.has(mode ?? '')) || dataDir === undefined) {
   console.error(
-    'usage: migrate-steps.mjs <ok|fail|v2|v3|v4|v5|v6|v7|v8|v9|v10|v11|v12|v13> <data-dir>',
+    'usage: migrate-steps.mjs <ok|fail|v2|v3|v4|v5|v6|v7|v8|v9|v10|v11|v12|v13|v14|v15|v16|v17> <data-dir>',
   );
   process.exit(2);
 }

@@ -155,6 +155,13 @@ export function applyJoinResult(
         kind: 'agent',
         display_name: agent.display_name,
         avatar_slot: agent.avatar_slot,
+        // Workspace availability is a target fact; reuse the table's reading
+        // rather than inventing one for the newly joined row.
+        workspace_status: members[0]?.workspace_status ?? {
+          backend: 'local',
+          available: false,
+          reason: 'workspace-root-missing',
+        },
       },
     ],
     joined,
