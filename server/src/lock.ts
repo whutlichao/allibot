@@ -2,7 +2,7 @@ import { mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const LOCK_FILENAME = '.allibot.lock';
+export const LOCK_FILENAME = '.allibot.lock';
 const ACQUIRE_ATTEMPTS = 50;
 const RETRY_DELAY_MS = 10;
 const INCOMPLETE_LOCK_GRACE_MS = 5_000;

@@ -7,6 +7,13 @@ import { fileURLToPath } from 'node:url';
 
 export const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 export const CLI_ENTRY = path.join(REPO_ROOT, 'dist', 'cli.js');
+export const MIGRATION_FIXTURE = path.join(
+  REPO_ROOT,
+  'server',
+  'test',
+  'fixtures',
+  'migrate-steps.mjs',
+);
 
 const STARTUP_TIMEOUT_MS = 10_000;
 const EXIT_TIMEOUT_MS = 10_000;
@@ -56,7 +63,15 @@ export function runCli(
   args: readonly string[],
   options: RunCliOptions = {},
 ): CliResult {
-  const result = spawnSync(process.execPath, [CLI_ENTRY, ...args], {
+  return runNodeScript(CLI_ENTRY, args, options);
+}
+
+export function runNodeScript(
+  script: string,
+  args: readonly string[],
+  options: RunCliOptions = {},
+): CliResult {
+  const result = spawnSync(process.execPath, [script, ...args], {
     cwd: options.cwd ?? REPO_ROOT,
     env: buildEnv(options.env),
     encoding: 'utf8',
