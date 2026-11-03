@@ -4,6 +4,7 @@ import type {
   RoundDiscipline,
   RoundInput,
   RoundMember,
+  RoundMemory,
   RoundMessage,
   RoundProvider,
   RoundResult,
@@ -11,6 +12,7 @@ import type {
   WakeReason,
 } from './agent-seam.js';
 import { tFromDb } from './copy.js';
+import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause } from './members.js';
 
@@ -320,7 +322,7 @@ export async function runRound(
 
   let committed: RoundOutcomeRow;
   try {
-    committed = commitRound(db, wake, turn, startedAt, result, input?.discipline);
+    committed = commitRound(db, wake, turn, startedAt, result, input);
   } finally {
     inFlight.delete(wake.memberId);
   }
@@ -381,6 +383,10 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
   const targetKind = readTargetKindOf(db, wake.targetId);
   const triggeredByHuman = wokeByHuman(db, wake);
   const discipline = readDiscipline(db, wake, triggeredByHuman);
+  // Recall happens before the round runs and only informs its understanding
+  // (D5.2): it reads this round's input and never writes, wakes or spends
+  // budget.
+  const memories = recallForRound(db, member.id, wake.targetId, messages);
   return {
     member,
     targetId: wake.targetId,
@@ -388,8 +394,9 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     baseSeq: wake.fromSeq,
     reason: wake.reason,
     discipline,
-    systemPrompt: composeSystemPrompt(db, member, targetKind, triggeredByHuman),
     messages,
+    memories,
+    systemPrompt: composeSystemPrompt(db, member, targetKind, triggeredByHuman, memories),
   };
 }
 
@@ -450,31 +457,23 @@ function wokeByHuman(db: Database.Database, wake: Wake): boolean {
 
 /**
  * The system prompt a round is handed: the stored Agent prompt, the target's
- * response discipline, and the mandatory-answer sentence.
+ * response discipline, the mandatory-answer sentence, and the memory section
+ * when this round recalled cards.
  *
  * A DM is stated one-to-one with an explicit mandatory answer (the glossary's
  * "一对一口径 + 显式必答句") instead of the channel rubric: a DM never claims
  * to be a multi-member channel and has no "not mentioned therefore silent"
  * case. A channel keeps the silence rubric verbatim; a human-message round
  * appends the human-message mandatory sentence as its own paragraph, and no
- * other channel round gets that copy.
- */
-/**
- * The system prompt a round is handed: the stored Agent prompt, the target's
- * response discipline, and the mandatory-answer sentence.
- *
- * A DM is stated one-to-one with an explicit mandatory answer (the glossary's
- * "一对一口径 + 显式必答句") instead of the channel rubric: a DM never claims
- * to be a multi-member channel and has no "not mentioned therefore silent"
- * case. A channel keeps the silence rubric verbatim; a human-message round
- * appends the human-message mandatory sentence as its own paragraph, and no
- * other channel round gets that copy.
+ * other channel round gets that copy. The memory section is appended only — it
+ * never replaces the stored prompt (D5.2).
  */
 function composeSystemPrompt(
   db: Database.Database,
   member: RoundMember,
   targetKind: RoundTargetKind,
   triggeredByHuman: boolean,
+  memories: readonly RoundMemory[],
 ): string {
   const sections = [member.system_prompt.trim()];
   if (targetKind === 'dm') {
@@ -490,12 +489,17 @@ function composeSystemPrompt(
       sections.push(tFromDb(db, 'prompt.humanMessage.mandatory'));
     }
   }
+  const memorySection = memoryPromptSection(db, memories);
+  if (memorySection !== null) {
+    sections.push(memorySection);
+  }
   return sections.filter((section) => section.length > 0).join('\n\n');
 }
 
 /**
  * Everything a round writes shares one transaction: the optional join, the
- * reply, the folded `merged` row and the round's own outcome.
+ * reply, the folded `merged` row, the round's own outcome and the one memory
+ * card the round closes with.
  *
  * The wakes that arrived while this round was running are not queued and not
  * replayed: they fold into exactly one `merged` row, whose base seq is the
@@ -507,13 +511,27 @@ function commitRound(
   turn: Turn,
   startedAt: string,
   result: RoundResult,
-  discipline: RoundDiscipline | undefined,
+  roundInput: RoundInput | undefined,
 ): RoundOutcomeRow {
-  const signal = discipline ?? { definite: false, signal: null };
+  const signal = roundInput?.discipline ?? { definite: false, signal: null };
   const write = db.transaction((): RoundOutcomeRow => {
     const joinedSeq = commitJoin(db, wake, result);
-    const replySeq = commitReply(db, wake, result);
+    const reply = commitReply(db, wake, result);
     const finishedAt = new Date().toISOString();
+
+    // Long-term memory is written back deterministically at round close
+    // (D5.1): the trigger excerpt plus this member's reply excerpt, or the
+    // "no reply" wording for an ignored / failed round. It never calls a model
+    // and has no switch; a round whose input could not even be read writes no
+    // card, because nothing was understood.
+    if (roundInput !== undefined) {
+      writeRoundMemoryCard(db, {
+        memberId: wake.memberId,
+        targetId: wake.targetId,
+        triggerBody: triggerBody(roundInput),
+        reply,
+      });
+    }
 
     if (turn.repeats.length > 0) {
       insertOutcome(db, {
@@ -530,12 +548,12 @@ function commitRound(
       });
     }
 
-    const judged = judgeRound(signal, result, replySeq);
+    const judged = judgeRound(signal, result, reply?.seq ?? null);
     return insertOutcome(db, {
       wake,
       baseSeq: wake.fromSeq,
       status: judged.status,
-      reason: roundReason(db, wake, signal, result, judged, joinedSeq, replySeq),
+      reason: roundReason(db, wake, signal, result, judged, joinedSeq, reply?.seq ?? null),
       merged: 0,
       startedAt,
       finishedAt,
@@ -634,7 +652,7 @@ function commitJoin(db: Database.Database, wake: Wake, result: RoundResult): num
     'system',
     ownerId(db),
     tFromDb(db, 'system.member.piercedJoin', { name: member.display_name }),
-  );
+  ).seq;
 }
 
 function readTargetKind(db: Database.Database, targetId: string): string {
@@ -650,19 +668,35 @@ function readTargetKindOf(db: Database.Database, targetId: string): RoundTargetK
   return kind === 'dm' || kind === 'task' ? kind : 'channel';
 }
 
-function commitReply(db: Database.Database, wake: Wake, result: RoundResult): number | null {
+function commitReply(
+  db: Database.Database,
+  wake: Wake,
+  result: RoundResult,
+): { id: string; seq: number; body: string } | null {
   if (result.verdict !== 'replied' || !hasBody(result)) {
     return null;
   }
   // 一轮 ↔ 至多一条 target 消息: the seam may hand over several pending
   // replies, and this write path lands the first one. Streaming the rest is
   // the AG-UI ticket's shape, not a second message per round here.
-  return insertMessage(db, wake.targetId, 'agent', wake.memberId, result.replies[0]!.trim());
+  const body = result.replies[0]!.trim();
+  return { ...insertMessage(db, wake.targetId, 'agent', wake.memberId, body), body };
 }
 
 function hasBody(result: RoundResult): boolean {
   const body = result.replies[0];
   return result.verdict === 'replied' && body !== undefined && body.trim().length > 0;
+}
+
+/**
+ * The body the round was woken by: the message at the wake's `baseSeq`. A round
+ * whose first read message already moved past it (a pierced wake is the only
+ * shape today) falls back to the oldest message it did read, so the card always
+ * carries a trigger excerpt.
+ */
+function triggerBody(input: RoundInput): string {
+  const exact = input.messages.find((message) => message.seq === input.baseSeq);
+  return exact?.body ?? input.messages[0]?.body ?? '';
 }
 
 /**
@@ -678,8 +712,8 @@ function insertMessage(
   kind: 'agent' | 'system',
   authorMemberId: string,
   body: string,
-): number {
-  return insertMessageRow(db, { targetId, kind, authorMemberId, body }).seq;
+): { id: string; seq: number } {
+  return insertMessageRow(db, { targetId, kind, authorMemberId, body });
 }
 
 function ownerId(db: Database.Database): string {

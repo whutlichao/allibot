@@ -46,7 +46,24 @@ export interface ScriptedProviderOptions {
 
 /** The default scripted reply: deterministic, readable and free of model calls. */
 export function defaultScriptedReply(input: RoundInput): string {
-  return `收到 #${input.baseSeq}（${input.member.display_name}）`;
+  return `收到 #${input.baseSeq}（${input.member.display_name}）${memoryReport(input)}`;
+}
+
+/**
+ * The double's report of what the round actually recalled. It is the test
+ * double's own observation face (D4.3): the count is the number of cards the
+ * seam assembled into the system prompt's memory section, and each
+ * `mem:<keyword>` line names a card whose keywords this round's input matched.
+ * It stays inside this file — production code never parses a reply body.
+ */
+function memoryReport(input: RoundInput): string {
+  const markers = [
+    ...new Set(input.memories.flatMap((memory) => memory.matched_keywords)),
+  ].map((keyword) => `mem:${keyword}`);
+  const injected = input.memories.filter((memory) =>
+    input.systemPrompt.includes(memory.content),
+  ).length;
+  return ['', `memcount:${injected}`, ...markers].join('\n');
 }
 
 export function createScriptedProvider(options: ScriptedProviderOptions): RoundProvider {

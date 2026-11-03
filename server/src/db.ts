@@ -6,7 +6,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export interface MigrationStep {
   readonly to: number;
@@ -374,6 +374,44 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
         BEGIN
           SELECT RAISE(ABORT, 'task_pointer must be a system message on the channel that owns the task');
         END;
+      `);
+    },
+  },
+  {
+    // Long-term memory lands here as the next strict +1 of the chain (its
+    // ticket's plan said v9; the tasks ticket merged as v8 ahead of it).
+    to: 9,
+    apply(db) {
+      db.exec(`
+        -- Long-term memory is a member-level collection of memory cards
+        -- (ADR 0005): one logical set per member, not split by target, project
+        -- or session, so cross-target recall is a construction fact. A card is
+        -- a deterministic digest of one round — the triggering message excerpt,
+        -- this member's reply excerpt and the task context when there is one —
+        -- so its content and keywords are written by the orchestrator, never by
+        -- a model.
+        --
+        -- Unlike a message, a card may be revised: memory is not a second copy
+        -- of the append-only message log. source_message_id names the reply
+        -- message the card was distilled from; an ignored or failed round has
+        -- no reply, so that column is nullable while the target is not.
+        --
+        -- keywords holds the deterministic tokenizer's extraction as a JSON
+        -- array of strings. It is TEXT because retrieval is keyword matching
+        -- (no embedding, no vector column, no second index).
+        CREATE TABLE agent_memory (
+          id TEXT PRIMARY KEY,
+          member_id TEXT NOT NULL REFERENCES member (id),
+          content TEXT NOT NULL CHECK (length(content) > 0),
+          keywords TEXT NOT NULL CHECK (length(keywords) > 0),
+          source_target_id TEXT NOT NULL REFERENCES target (id),
+          source_message_id TEXT REFERENCES message (id),
+          created_at TEXT NOT NULL
+        );
+
+        -- Recall reads one member's cards, freshest first, with no target or
+        -- project filter: the member-level lookup is the only read shape.
+        CREATE INDEX agent_memory_member ON agent_memory (member_id, created_at);
       `);
     },
   },

@@ -139,4 +139,21 @@ export const ZH_CN = {
   'task.status.inReview': { text: '待审', params: [] },
   'task.status.done': { text: '完成', params: [] },
   'task.status.closed': { text: '已关闭', params: [] },
+
+  // 长期记忆（Long-term Memory）的两面文案：轮次收尾写回的确定性卡片，以及
+  // 回复前注入 system prompt 的记忆段。两者都由后端生成，经 tFromDb 渲染。
+  'memory.card.replied': {
+    text: '触发消息摘录：{trigger}；本成员回复摘录：{reply}',
+    params: ['trigger', 'reply'],
+  },
+  'memory.card.noReply': {
+    text: '触发消息摘录：{trigger}；本成员没有回复（回复摘录为空）',
+    params: ['trigger'],
+  },
+  'memory.card.taskContext': { text: '任务上下文：{context}', params: ['context'] },
+  'memory.prompt.header': {
+    text: '长期记忆：以下是按关键词召回的相关记忆卡片（共 {count} 条）。',
+    params: ['count'],
+  },
+  'memory.prompt.card': { text: '- {content}', params: ['content'] },
 } as const satisfies Record<string, CatalogEntry>;
