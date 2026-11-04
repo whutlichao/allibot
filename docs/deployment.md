@@ -74,19 +74,94 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
   不可用：成员读数给出 `workspace_status` 原因，队长按 D3.8 记 `invalid-leader`，轮次零工具
   调用并失败，绝不回落到 local shell 或 local 文件工具。
 
-## 真实模型 provider 的已知限制（M2 A1）
+## 真实模型 provider 的工具循环：已进循环 / 仍属脚本化专用（M2 A1）
 
-M2 的真实模型 adapter 仍是单轮文本补全：`server/src/model-provider.ts` 只发送一次
-system + user 的 chat completion，不传 tool definitions，也不解析 `tool_use` / `tool_calls`。
-因此：
+真实模型 adapter 不再是单轮文本补全：`server/src/model-provider.ts` 在一次 `runRound` 内跑
+**轮内工具循环**（round-level tool loop）。一次往返 = 模型请求一批工具 → 本轮执行这一批 →
+结果回灌 → 再问模型，直到模型不再请求工具。接缝形状不变：`deferred` 仍为 `false`，一轮仍
+至多落一条 target 消息，工具调用之间的旁白不落库，只有最后一段文本是本轮回复。
 
-- `TeamAssign` / `transfer_task`、Plan 的四个工具、SOP verifier 的结构化 `sopVerdict`、以及
-  需要审批的工具调用，目前只有脚本化 provider（`--scripted-provider`）能驱动。
-- 接入真实模型并不等于 team / Plan / SOP / 工具审批可用；本版本不能这样宣传。
-- M2 的验收 seam 是后端 HTTP 面 + 脚本化 provider；真实模型工具循环由 follow-up
-  GitHub #51 承接，不在本版本内。
+### 已进循环的工具与条件
 
-这是部署时必须向使用者说明的限制，不是配置开关。
+- `Read` / `Glob` / `Grep`：需要项目根（`RoundInput.workspace` 非空）。可读根只有项目根与
+  成员只读 `skills/` 第二根；越根、不存在、不可读都是回灌给模型的工具结果，不结束轮次。
+- `TaskList` / `TaskGet`：需要 Plan face（`RoundInput.plan` 非空），只读本轮 Plan run；
+  `TaskGet` 查不到 id 是 `not-found` 工具结果。
+- 两家 provider（`anthropic` 与 `openai:<模型>`）行为一致：工具定义与工具结果各按自己的
+  wire shape 序列化（`tools[].input_schema` + `tool_use` / `tools[].function.parameters` +
+  `tool_calls`），循环、上限与收口完全一致。
+- 没有工具面（DM、无项目根、无 Plan face）时，请求里根本不带 `tools`，行为与原来的单次
+  补全相同。
+
+### 仍属脚本化专用的工具
+
+以下工具名在轮次可用集里，但本批没有给模型提供规格，因此真实模型调不到，只有脚本化
+provider（`--scripted-provider`）能驱动：
+
+- 写类与执行类：`Write` / `Edit` / `Bash` / MCP 工具 `mcp:<server>/<tool>`。
+- 编排类：`TeamAssign` / `transfer_task` / Plan 的写工具 `TaskCreate` / `TaskUpdate`。
+- `SopVerdict` 的结构化判定通道：通道已定（一个专用 `internal` 类工具映射到既有
+  `sopVerdict`），本批未实现；`RoundResult.taskAction` 用的同一条通道同理。
+
+接入真实模型不等于 team 分派、Plan 写、SOP 判定或写类 / 执行类工具可用；本版本不能这样
+宣传。
+
+### 上限语义
+
+`agent_config.max_iterations`（默认 10，人类面可编辑）是**轮内模型↔工具往返批次**的上限，
+不是轮次计数：一次往返就是一批工具（一批里可以有多个调用，全部执行），`= 1` 只跑一批。
+只有真正执行的一批才花预算；模型请求下一批而预算已尽时，那一批**不执行**。
+
+- 撞上限：轮次 `replied`，把停下时那一轮 assistant 文本作为部分结论落成消息（它请求的那批
+  工具调用已无预算执行），`finished_reason` 读「达到迭代上限」，触发消息照常消费（游标
+  推进，下次唤醒不重读）。**这不是错误状态。**
+- 撞上限且没有任何产出文本：按既有 empty completion 规则收口 `failed`，`finished_reason`
+  读「错误」，不伪造一条空消息。
+
+### 回灌限流
+
+- 单条工具结果超过 20000 字时，只截断**模型读到的那一份**，并在截断处写明「已截断：已给
+  N 字，共 M 字；其余内容未回灌」；工具自身的结果不受影响。
+- `Grep` 命中数封顶 200、Docker 侧扫描文件数封顶 2000 会如实说明原因（「还有更多匹配未
+  列出」/「还有文件未扫描」）。封顶是事实而不是计数启发式：恰好 200 条完整命中不会被说成
+  封顶。
+- 命中行正文在工具侧已按 300 字截断（带省略号），回灌层不再叠加。
+
+### 失败分层
+
+- **工具面失败**（越根、不存在、不可读、参数形状不合、未知工具、审批拒绝）是回灌给模型的
+  工具结果，带稳定错误码（`outside-root` / `not-found` / `invalid-arguments` /
+  `unknown-tool` / `denied`），轮次继续，由模型自己改道。
+- **provider 链路失败**（HTTP 非 2xx、响应不可解析、单次调用 60 秒超时）收口 `failed`，
+  reason 走「模型调用失败：{message}」，错误体里的密钥已掩码。
+- 缺 consent、缺凭证、未配置模型仍是**零远端调用** + `failed`，reason 点名 provider /
+  环境变量 / 没有可解析的 `provider:model`。
+
+### 审批语义（工具闸门不变）
+
+- 需要审批的调用在循环内**阻塞等待**人类决定：批准即继续执行，拒绝作为 `DENIED` 工具结果
+  回灌，模型继续循环——拒绝是结果，不是轮次失败。
+- 等满 600 秒批次超时后抛 `ApprovalTimeoutError`：它**不回灌**，本轮直接收口 `failed`，
+  reason 读「审批等待超时（600 秒），本轮以失败收口。」；否则一个没人看的轮次会一直续跑到
+  上限。
+- 只读工具在默认路径上不触达审批（`read` 类落到 `mode-allow`），但一条
+  `permission_rule(Read, …, ask)` 会让它们触达：此时同样阻塞等待、超时同样收口 `failed`。
+- 本批没有「一轮内审批批次数」上限，所以一条 `ask` 规则可以让一个只读轮次占满一个 600 秒
+  批次。这是接受的风险，不是遗漏。
+
+### 仍不提供的能力
+
+- AG-UI 不发工具调用事件（没有 `TOOL_CALL_*`），前端看不到轮内工具进度。
+- 工具调用不入库：没有审计面，也没有新表 / 新列，`SCHEMA_VERSION` 仍为 21，本批无迁移步骤。
+- 无 deferred / 异步收口：一轮在同一个 HTTP 请求内跑完，默认最坏情况是 10 批工具执行、11 次
+  模型调用 × 单次 60 秒超时，需要审批时再叠加 600 秒批次等待。
+- 无 token 级流式：文本仍一次性返回，AG-UI 的 `TEXT_MESSAGE_CONTENT` 语义不变。
+- 无每 Agent 工具白名单：模型可见工具仍只由轮次可用集（项目根 / Plan face）决定，
+  `permission_rule` 只判定调用是否放行，不是可见性过滤器；也没有新的配置面。
+- 无本机 provider 通道：仍只有 `anthropic` 与 `openai` 两条线（M1 D1.10 的延后项不随本批
+  引入）。
+
+这是部署时必须向使用者说明的边界，不是配置开关。
 
 ## 备份边界
 

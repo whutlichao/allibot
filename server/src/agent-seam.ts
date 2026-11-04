@@ -86,6 +86,18 @@ export interface RoundGrepMatch {
 export type RoundFileScope = 'project' | 'skills';
 
 /**
+ * Why a `Grep` result stopped at a cap instead of at the end of its input (D6).
+ * The value names the reason, not a boolean: the two reasons tell the model
+ * different things.
+ *
+ * - `matches`: the hit-count cap cut the list — there are more matches this
+ *   result does not show.
+ * - `files`: the scanned-file cap (the Docker workspace) cut the walk — there
+ *   are files this result did not scan.
+ */
+export type RoundFileCapReason = 'matches' | 'files';
+
+/**
  * The member-face file-tool result. A failure is a tool error (`ok:false` with
  * a stable code and readable message), never an approval and never a rule
  * bypass candidate: root escapes are hard errors (D5.1).
@@ -99,6 +111,13 @@ export interface RoundFileToolResult {
   content?: string;
   paths?: string[];
   matches?: RoundGrepMatch[];
+  /**
+   * Present only when a cap cut this `Grep` result; absent means the hit list
+   * is the whole answer. It is never derived from `matches.length`, because a
+   * result that holds exactly the cap's worth of hits is indistinguishable
+   * from a capped one by count alone.
+   */
+  capped?: RoundFileCapReason;
   replacements?: number;
   bytes?: number;
 }
@@ -515,6 +534,13 @@ export interface RoundInput {
    * assignee. Plan tools arrive with #40.
    */
   tools: readonly string[];
+  /**
+   * 迭代上限 (Iteration Cap): the cap on model ↔ tool round trips inside this
+   * one round, read from `agent_config.max_iterations` (default 10). It bounds
+   * the round's loop, not the number of rounds — the generation and
+   * `target_budget` already bound those.
+   */
+  maxIterations: number;
   /** The team reading of this round; null on an autonomous / DM round. */
   team: RoundTeamContext | null;
   /**

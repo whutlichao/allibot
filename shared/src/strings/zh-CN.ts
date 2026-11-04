@@ -1071,4 +1071,18 @@ export const ZH_CN = {
   },
   'plan.error.limit': { text: 'limit 必须是 1 到 50 之间的整数', params: [] },
   'plan.error.targetNotFound': { text: 'target 不存在：{target_id}', params: ['target_id'] },
+
+  // 工具结果回灌：截断与 Grep 封顶事实（#62 / D6）。只答复模型看到的那一份。
+  'tool.result.truncated': {
+    text: '（结果已截断：已给 {given} 字，共 {total} 字；其余内容未回灌）',
+    params: ['given', 'total'],
+  },
+  'tool.grep.capped.matches': {
+    text: '（命中数已封顶：只列出前 {limit} 条匹配，还有更多匹配未列出）',
+    params: ['limit'],
+  },
+  'tool.grep.capped.files': {
+    text: '（扫描文件数已封顶：只扫描了前 {limit} 个文件，还有文件未扫描）',
+    params: ['limit'],
+  },
 } as const satisfies Record<string, CatalogEntry>;
