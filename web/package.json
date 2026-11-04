@@ -28,7 +28,8 @@
     "test:local-shell": "node --import ./test/support/register-css.mjs --test test/local-shell.test.ts",
     "test:mcp-tab": "node --import ./test/support/register-css.mjs --test test/mcp-tab.test.ts",
     "test:agent-skills": "node --import ./test/support/register-css.mjs --test test/agent-skills.test.ts",
-    "test:workspace-backend": "node --import ./test/support/register-css.mjs --test test/workspace-backend.test.ts"
+    "test:workspace-backend": "node --import ./test/support/register-css.mjs --test test/workspace-backend.test.ts",
+    "test:m2-e2e": "node --import ./test/support/register-css.mjs --test test/m2-e2e-contract.test.ts"
   },
   "dependencies": {
     "@allibot/shared": "*",
