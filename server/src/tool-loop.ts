@@ -1,5 +1,12 @@
 import type { RoundInput } from './agent-seam.js';
-import { checkToolArguments, capToolResultContent, roundToolFaces, roundToolSpecs } from './tool-specs.js';
+import {
+  capToolResultContent,
+  checkToolArguments,
+  roundToolContext,
+  type RoundToolSpec,
+  type ToolAnswer,
+  type ToolCopy,
+} from './tool-specs.js';
 
 /**
  * 轮内工具循环 (round-level tool loop, D1 / D7): inside one
@@ -40,16 +47,16 @@ export type AssistantTurn =
   | { kind: 'text'; text: string }
   | { kind: 'calls'; calls: readonly ToolCall[]; text: string };
 
-/** One tool call's answer, in the provider's own result shape's terms. */
-export interface ToolCallResult {
+/**
+ * One tool call's answer as the conversation appends it back: the tool's own
+ * answer (`ToolAnswer`, no call identity) under the provider's call id, so that
+ * `appendToolResults` can answer each call of the batch in order. Unlike
+ * `ToolLoopOutcome` — the round's one conclusion — this is one call's result.
+ */
+export type ToolCallResult = ToolAnswer & {
   /** The provider's call id this result answers. */
   id: string;
-  ok: boolean;
-  /** The stable tool error code; present exactly on a failed call. */
-  error?: string;
-  /** The text the model receives. */
-  content: string;
-}
+};
 
 /**
  * The provider-shaped half of the loop. The adapter owns the conversation it
@@ -68,7 +75,10 @@ export interface ToolConversation {
 /** Run one tool call against the round's faces. Never throws for a tool failure. */
 export type ToolExecutor = (call: ToolCall) => Promise<ToolCallResult>;
 
-/** What the loop concluded: the round's one candidate reply. */
+/**
+ * What the loop concluded — the round's one candidate reply. It is not a tool
+ * result: `ToolCallResult` answers one call of a batch, this answers the round.
+ */
 export interface ToolLoopOutcome {
   /**
    * The final turn's text; empty when the model stopped without saying anything.
@@ -84,14 +94,20 @@ export interface ToolLoopOutcome {
   exhausted: boolean;
 }
 /**
- * The round's tool executor: the batch's tool specs the round actually offers,
- * the faces they run against, and the argument shape check in front of them. A
- * call for a tool this round does not offer, or with arguments the tool's shape
- * refuses, never reaches the face.
+ * The round's tool executor: the round's offered tool specs, the context they
+ * run against and the argument shape check in front of them. The specs are
+ * passed in rather than computed here, so one round calculates its tool set
+ * once and both the conversation and the executor see the same list.
+ *
+ * A call for a tool this round does not offer, or with arguments the tool's
+ * shape refuses, never reaches the face.
  */
-export function createRoundToolExecutor(input: RoundInput): ToolExecutor {
-  const specs = roundToolSpecs(input);
-  const faces = roundToolFaces(input);
+export function createRoundToolExecutor(
+  input: RoundInput,
+  specs: readonly RoundToolSpec[],
+  copy: ToolCopy,
+): ToolExecutor {
+  const context = roundToolContext(input, copy);
   return async (call) => {
     const spec = specs.find((candidate) => candidate.name === call.name);
     if (spec === undefined) {
@@ -102,19 +118,13 @@ export function createRoundToolExecutor(input: RoundInput): ToolExecutor {
     if (!checked.ok) {
       return failure(call, 'invalid-arguments', checked.message);
     }
-    const outcome = await spec.execute(checked.values, faces);
-    if (outcome === null) {
-      // Offered but faceless: `available` already rules it out, and a stable
-      // result is still better than an exception the round would die of.
-      return failure(call, 'unknown-tool', `this round has no face for the tool: ${call.name}`);
-    }
+    const answer = await spec.execute(checked.values, context);
     return {
       id: call.id,
-      ok: outcome.ok,
-      error: outcome.error,
+      ok: answer.ok,
       // Only the copy the model reads is capped (D6); the tool's own result is
       // untouched, and a capped result still carries its state and request.
-      content: capToolResultContent(outcome.content),
+      content: capToolResultContent(answer.content, copy),
     };
   };
 }
@@ -163,7 +173,6 @@ function failure(call: ToolCall, code: string, message: string): ToolCallResult 
   return {
     id: call.id,
     ok: false,
-    error: code,
     content: `[${call.name}] error: ${code}\nmessage: ${message}`,
   };
 }

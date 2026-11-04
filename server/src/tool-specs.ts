@@ -1,5 +1,4 @@
-import { t } from '@allibot/shared';
-import type { PlanTaskView } from '@allibot/shared';
+import type { MessageKey, MessageValues, PlanTaskView } from '@allibot/shared';
 import type {
   GlobFileRequest,
   GrepFileRequest,
@@ -9,7 +8,15 @@ import type {
   RoundPlanFace,
 } from './agent-seam.js';
 import { MAX_GREP_FILES } from './docker-files.js';
+import { classifyToolName } from './permissions.js';
 import { MAX_GREP_MATCHES } from './workspace-files.js';
+
+/**
+ * The backend's one natural-language renderer, injected by the caller that
+ * holds the database: every word a tool result adds renders through `tFromDb`,
+ * so the language preference is still read in exactly one place.
+ */
+export type ToolCopy = (key: MessageKey, values?: MessageValues) => string;
 
 /**
  * The re-feed cap (D6): the most characters one tool result may feed back to
@@ -23,12 +30,12 @@ export const MAX_TOOL_RESULT_CHARS = 20000;
  * scale that is missing: the model must see that what it read is not all of it.
  * A result already within the cap is returned untouched.
  */
-export function capToolResultContent(content: string): string {
+export function capToolResultContent(content: string, copy: ToolCopy): string {
   if (content.length <= MAX_TOOL_RESULT_CHARS) {
     return content;
   }
   const kept = content.slice(0, MAX_TOOL_RESULT_CHARS);
-  return `${kept}\n${t('zh-CN', 'tool.result.truncated', {
+  return `${kept}\n${copy('tool.result.truncated', {
     given: kept.length,
     total: content.length,
   })}`;
@@ -42,11 +49,11 @@ export function capToolResultContent(content: string): string {
  * A tool name is the product's name, not a provider's: `Read` is the same word
  * as `permission_rule.tool_name`, the approval payload and the file tool the
  * round's own face exposes, and `TaskList` is the same word as the Plan face's
- * method. The offered set is the round's availability calculation
- * (`RoundInput.tools`) intersected with this batch's tools, so a round that has
- * no file face is offered no file tool and a round with no Plan face is offered
- * no Plan tool — those names are absent from the provider request, not refused
- * at call time.
+ * method. The offered set is this batch's scope — the `read` class plus the
+ * read-only `internal` tools — intersected with the round's availability
+ * calculation (`RoundInput.tools`), so a round that has no file face is offered
+ * no file tool and a round with no Plan face is offered no Plan tool — those
+ * names are absent from the provider request, not refused at call time.
  *
  * This is the first batch (#59): the read-only tools `Read` / `Glob` / `Grep`
  * over the round's file face and `TaskList` / `TaskGet` over its Plan face. The
@@ -62,24 +69,29 @@ export interface ToolArgument {
 }
 
 /**
- * The round faces a tool executes against. A face the round does not carry is
- * `null`: a DM / rootless round has no file face, an autonomous channel's
- * ordinary round has no Plan face.
+ * The round faces a tool executes against — guaranteed present. A spec whose
+ * `available` held has the face it needs, so the accessors answer with it and
+ * state a missing one as the registry bug it would be: no spec and no loop
+ * branch has to handle "offered but faceless".
+ *
+ * `copy` is the backend's one natural-language renderer, injected rather than
+ * imported so this module never reads the language preference itself.
  */
-export interface RoundToolFaces {
-  files: RoundFileTools | null;
-  plan: RoundPlanFace | null;
+export interface RoundToolContext {
+  files(): RoundFileTools;
+  plan(): RoundPlanFace;
+  copy: ToolCopy;
 }
 
 /**
- * One tool call's outcome, already shaped into the text the model receives:
- * a structured summary plus the body a read actually needs, never a JSON dump.
- * A failure keeps its stable code (`outside-root`, `not-found`, `denied`, …) so
- * the model can tell "the path left the root" from "the file is missing".
+ * One tool call's answer, already shaped into the text the model receives: a
+ * structured summary plus the body a read actually needs, never a JSON dump.
+ * A failure states its stable code (`outside-root`, `not-found`, `denied`, …)
+ * on its content's first line — the model is the one reader of that code, so
+ * the answer carries no second, structured copy of it.
  */
-export interface ToolCallOutcome {
+export interface ToolAnswer {
   ok: boolean;
-  error?: string;
   content: string;
 }
 
@@ -95,14 +107,13 @@ export interface RoundToolSpec {
    */
   available(input: RoundInput): boolean;
   /**
-   * Run one call whose arguments the shape check accepted. `null` means the
-   * round carries no face behind this tool; `available` already rules that out,
-   * and the executor still answers it with a stable `unknown-tool` result.
+   * Run one call whose arguments the shape check accepted. This spec's
+   * `available` already held for this round, so the context carries the face.
    */
   execute(
     input: Readonly<Record<string, string>>,
-    faces: RoundToolFaces,
-  ): Promise<ToolCallOutcome | null>;
+    context: RoundToolContext,
+  ): Promise<ToolAnswer>;
 }
 
 const READ: RoundToolSpec = {
@@ -114,14 +125,10 @@ const READ: RoundToolSpec = {
     'unreadable file comes back as an error result; none of them ends the round.',
   arguments: [{ name: 'path', description: 'The file to read.', required: true }],
   available: (input) => input.workspace !== null,
-  async execute(input, faces) {
-    const files = faces.files;
-    if (files === null) {
-      return null;
-    }
+  async execute(input, context) {
     // The shape check proved the required argument present.
     const requested = input['path']!;
-    return shapeRead(requested, await files.Read({ path: requested }));
+    return shapeRead(requested, await context.files().Read({ path: requested }));
   },
 };
 
@@ -146,15 +153,11 @@ const GLOB: RoundToolSpec = {
     },
   ],
   available: (input) => input.workspace !== null,
-  async execute(input, faces) {
-    const files = faces.files;
-    if (files === null) {
-      return null;
-    }
+  async execute(input, context) {
     const pattern = input['pattern']!;
     const base = input['path'];
     const request: GlobFileRequest = { pattern, ...(base === undefined ? {} : { path: base }) };
-    return shapeGlob(request, await files.Glob(request));
+    return shapeGlob(request, await context.files().Glob(request));
   },
 };
 
@@ -180,15 +183,11 @@ const GREP: RoundToolSpec = {
     },
   ],
   available: (input) => input.workspace !== null,
-  async execute(input, faces) {
-    const files = faces.files;
-    if (files === null) {
-      return null;
-    }
+  async execute(input, context) {
     const pattern = input['pattern']!;
     const base = input['path'];
     const request: GrepFileRequest = { pattern, ...(base === undefined ? {} : { path: base }) };
-    return shapeGrep(request, await files.Grep(request));
+    return shapeGrep(request, await context.files().Grep(request), context.copy);
   },
 };
 
@@ -200,9 +199,8 @@ const TASK_LIST: RoundToolSpec = {
     'run only; it creates and changes nothing.',
   arguments: [],
   available: (input) => input.plan !== null,
-  async execute(_input, faces) {
-    const plan = faces.plan;
-    return plan === null ? null : shapeTaskList(plan.TaskList());
+  async execute(_input, context) {
+    return shapeTaskList(context.plan().TaskList());
   },
 };
 
@@ -214,13 +212,9 @@ const TASK_GET: RoundToolSpec = {
     'the round.',
   arguments: [{ name: 'id', description: 'The Plan item id.', required: true }],
   available: (input) => input.plan !== null,
-  async execute(input, faces) {
-    const plan = faces.plan;
-    if (plan === null) {
-      return null;
-    }
+  async execute(input, context) {
     const requested = input['id']!;
-    return shapeTaskGet(requested, plan.TaskGet({ id: requested }));
+    return shapeTaskGet(requested, context.plan().TaskGet({ id: requested }));
   },
 };
 
@@ -228,22 +222,64 @@ const TASK_GET: RoundToolSpec = {
 const BATCH_TOOLS: readonly RoundToolSpec[] = [READ, GLOB, GREP, TASK_LIST, TASK_GET];
 
 /**
- * The tool specs this round's model may call: the batch's tools in the round's
- * own availability order. An empty list is a round with no tool face at all —
- * a DM or a rootless autonomous round — and its provider request carries no
- * tool definitions.
+ * The `internal` tools this batch offers although their class is not `read`:
+ * the two Plan tools that only read the current run.
  */
-export function roundToolSpecs(input: RoundInput): RoundToolSpec[] {
-  return BATCH_TOOLS.filter((spec) => input.tools.includes(spec.name) && spec.available(input));
+const READ_ONLY_INTERNAL_TOOLS: readonly string[] = ['TaskList', 'TaskGet'];
+
+/**
+ * Whether a tool belongs to this batch's scope by its own class (D2): the `read`
+ * class, plus the read-only internal tools, read off the product's one
+ * classification (`classifyToolName`). This is a scope filter, not a permission
+ * decision: it decides what the round's request offers, and the tool gate still
+ * decides every call that reaches a face.
+ */
+function inBatchScope(name: string): boolean {
+  const reading = classifyToolName(name);
+  if (reading === null) {
+    return false;
+  }
+  return (
+    reading.tool_class === 'read' ||
+    (reading.tool_class === 'internal' && READ_ONLY_INTERNAL_TOOLS.includes(reading.tool_name))
+  );
 }
 
 /**
- * The round's tool faces. Each face is `null` when this round does not carry
- * it: the file face comes from the workspace, the Plan face from the round
- * input, and one may exist without the other.
+ * The tool specs this round's model may call: this batch's registry, filtered to
+ * the names the round's own availability calculation offers (`RoundInput.tools`)
+ * and to the batch's classes, in the registry's order. An empty list is a round
+ * with no tool face at all — a DM or a rootless autonomous round — and its
+ * provider request carries no tool definitions.
  */
-export function roundToolFaces(input: RoundInput): RoundToolFaces {
-  return { files: input.workspace?.files ?? null, plan: input.plan };
+export function roundToolSpecs(input: RoundInput): RoundToolSpec[] {
+  return BATCH_TOOLS.filter(
+    (spec) => input.tools.includes(spec.name) && inBatchScope(spec.name) && spec.available(input),
+  );
+}
+
+/**
+ * The round's tool context. Each accessor reads the face the round input
+ * carries; a spec reaches one only after its own `available` held, so a missing
+ * face here is a registry bug rather than a round state.
+ */
+export function roundToolContext(input: RoundInput, copy: ToolCopy): RoundToolContext {
+  return {
+    files(): RoundFileTools {
+      const files = input.workspace?.files;
+      if (files === undefined) {
+        throw new Error('tool face missing: this round has no project file face');
+      }
+      return files;
+    },
+    plan(): RoundPlanFace {
+      if (input.plan === null) {
+        throw new Error('tool face missing: this round has no Plan face');
+      }
+      return input.plan;
+    },
+    copy,
+  };
 }
 
 /**
@@ -306,7 +342,7 @@ export function checkToolArguments(spec: RoundToolSpec, input: unknown): ToolArg
  * catch-all code, so a failed result that somehow carries none still reports a
  * code the model can act on.
  */
-function statusLine(name: string, result: { ok: boolean; error?: string }): string {
+function statusLine(name: string, result: RoundFileToolResult): string {
   return result.ok ? `[${name}] ok` : `[${name}] error: ${result.error ?? 'io-error'}`;
 }
 
@@ -315,16 +351,16 @@ function shapeFileFailure(
   name: string,
   request: readonly string[],
   result: RoundFileToolResult,
-): ToolCallOutcome {
+): ToolAnswer {
   const lines = [statusLine(name, result), ...request];
   if (result.message !== undefined) {
     lines.push(`message: ${result.message}`);
   }
-  return { ok: false, error: result.error ?? 'io-error', content: lines.join('\n') };
+  return { ok: false, content: lines.join('\n') };
 }
 
 /** One `Read` result as the model reads it: summary first, body after it. */
-function shapeRead(requested: string, result: RoundFileToolResult): ToolCallOutcome {
+function shapeRead(requested: string, result: RoundFileToolResult): ToolAnswer {
   if (!result.ok) {
     return shapeFileFailure('Read', [`path: ${requested}`], result);
   }
@@ -340,7 +376,7 @@ function shapeRead(requested: string, result: RoundFileToolResult): ToolCallOutc
 }
 
 /** One `Glob` result: the request, then one path per line. */
-function shapeGlob(requested: GlobFileRequest, result: RoundFileToolResult): ToolCallOutcome {
+function shapeGlob(requested: GlobFileRequest, result: RoundFileToolResult): ToolAnswer {
   const request = [
     `pattern: ${requested.pattern}`,
     ...(requested.path === undefined ? [] : [`base: ${requested.path}`]),
@@ -359,7 +395,11 @@ function shapeGlob(requested: GlobFileRequest, result: RoundFileToolResult): Too
 }
 
 /** One `Grep` result: the request, then one `path:line: text` line per hit. */
-function shapeGrep(requested: GrepFileRequest, result: RoundFileToolResult): ToolCallOutcome {
+function shapeGrep(
+  requested: GrepFileRequest,
+  result: RoundFileToolResult,
+  copy: ToolCopy,
+): ToolAnswer {
   const request = [
     `pattern: ${requested.pattern}`,
     ...(requested.path === undefined ? [] : [`base: ${requested.path}`]),
@@ -374,9 +414,9 @@ function shapeGrep(requested: GrepFileRequest, result: RoundFileToolResult): Too
   const matches = result.matches ?? [];
   lines.push(`matches: ${matches.length}`);
   if (result.capped === 'matches') {
-    lines.push(t('zh-CN', 'tool.grep.capped.matches', { limit: MAX_GREP_MATCHES }));
+    lines.push(copy('tool.grep.capped.matches', { limit: MAX_GREP_MATCHES }));
   } else if (result.capped === 'files') {
-    lines.push(t('zh-CN', 'tool.grep.capped.files', { limit: MAX_GREP_FILES }));
+    lines.push(copy('tool.grep.capped.files', { limit: MAX_GREP_FILES }));
   }
   lines.push(
     ...(matches.length === 0
@@ -387,7 +427,7 @@ function shapeGrep(requested: GrepFileRequest, result: RoundFileToolResult): Too
 }
 
 /** One `TaskList` result: the run's size, then one `- [status] title (id)` per item. */
-function shapeTaskList(tasks: readonly PlanTaskView[]): ToolCallOutcome {
+function shapeTaskList(tasks: readonly PlanTaskView[]): ToolAnswer {
   const lines = ['[TaskList] ok', `tasks: ${tasks.length}`];
   if (tasks.length === 0) {
     lines.push("(this run's plan has no items)");
@@ -398,11 +438,10 @@ function shapeTaskList(tasks: readonly PlanTaskView[]): ToolCallOutcome {
 }
 
 /** One `TaskGet` result: the item's fields, or the stable `not-found` code. */
-function shapeTaskGet(requested: string, task: PlanTaskView | null): ToolCallOutcome {
+function shapeTaskGet(requested: string, task: PlanTaskView | null): ToolAnswer {
   if (task === null) {
     return {
       ok: false,
-      error: 'not-found',
       content: [
         '[TaskGet] error: not-found',
         `id: ${requested}`,

@@ -1,5 +1,5 @@
-import { maskSecret } from './providers.js';
 import type { AssistantTurn, ToolCall, ToolCallResult, ToolConversation } from './tool-loop.js';
+import { isRecord, postJson } from './tool-conversation-http.js';
 import { toolInputSchema, type RoundToolSpec } from './tool-specs.js';
 
 /**
@@ -14,7 +14,8 @@ import { toolInputSchema, type RoundToolSpec } from './tool-specs.js';
  * at all, which is exactly the single completion it always was.
  *
  * The credential travels only in the request header; a provider error body is
- * masked before it becomes a readable reason.
+ * masked before it becomes a readable reason. Both belong to `postJson`, shared
+ * with the OpenAI line, so the timeout and the masking cannot drift apart.
  */
 
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -48,51 +49,29 @@ export function createAnthropicConversation(
 
   return {
     async send(timeoutMs: number): Promise<AssistantTurn> {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const response = await options.fetch(`${options.baseUrl}/v1/messages`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': options.credential,
-            'anthropic-version': ANTHROPIC_VERSION,
-          },
-          body: JSON.stringify({
-            model: options.model,
-            max_tokens: MAX_TOKENS,
-            system: options.system,
-            messages,
-            ...(options.tools.length === 0
-              ? {}
-              : { tools: options.tools.map(toolDefinition) }),
-          }),
-          signal: controller.signal,
-        }).catch((error: unknown) => {
-          // The single call's own timeout is a provider-chain failure (D9):
-          // name it, so the round reason says "timed out" rather than the
-          // platform's bare abort wording.
-          if (controller.signal.aborted) {
-            throw new Error(`anthropic request timed out after ${timeoutMs}ms`);
-          }
-          throw error;
-        });
-        if (!response.ok) {
-          // Mask before truncating: a 500-character cut could otherwise leave an
-          // unmasked prefix of the credential in the reason.
-          const body = await response.text().catch(() => '');
-          const masked = maskSecret(body, options.credential);
-          throw new Error(
-            `anthropic responded ${response.status}${masked.length > 0 ? `: ${masked.slice(0, 500)}` : ''}`,
-          );
-        }
-        const payload: unknown = await response.json();
-        const turn = readTurn(payload);
-        assistantContent = turn.content;
-        return turn.turn;
-      } finally {
-        clearTimeout(timer);
-      }
+      const payload = await postJson({
+        fetch: options.fetch,
+        baseUrl: options.baseUrl,
+        path: '/v1/messages',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': options.credential,
+          'anthropic-version': ANTHROPIC_VERSION,
+        },
+        body: {
+          model: options.model,
+          max_tokens: MAX_TOKENS,
+          system: options.system,
+          messages,
+          ...(options.tools.length === 0 ? {} : { tools: options.tools.map(toolDefinition) }),
+        },
+        credential: options.credential,
+        timeoutMs,
+        provider: 'anthropic',
+      });
+      const turn = readTurn(payload);
+      assistantContent = turn.content;
+      return turn.turn;
     },
     appendToolResults(results: readonly ToolCallResult[]): void {
       messages.push({ role: 'assistant', content: assistantContent });
@@ -148,8 +127,4 @@ function readText(blocks: readonly Record<string, unknown>[]): string {
   return blocks
     .map((block) => (block['type'] === 'text' && typeof block['text'] === 'string' ? block['text'] : ''))
     .join('');
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
