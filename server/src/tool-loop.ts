@@ -94,8 +94,8 @@ export function createRoundToolExecutor(input: RoundInput): ToolExecutor {
   const faces = roundToolFaces(input);
   return async (call) => {
     const spec = specs.find((candidate) => candidate.name === call.name);
-    if (spec === undefined || faces === null) {
-      // A tool this round does not offer, or a tool with no face behind it.
+    if (spec === undefined) {
+      // A tool this round does not offer at all.
       return failure(call, 'unknown-tool', `this round does not offer the tool: ${call.name}`);
     }
     const checked = checkToolArguments(spec, call.input);
@@ -103,6 +103,11 @@ export function createRoundToolExecutor(input: RoundInput): ToolExecutor {
       return failure(call, 'invalid-arguments', checked.message);
     }
     const outcome = await spec.execute(checked.values, faces);
+    if (outcome === null) {
+      // Offered but faceless: `available` already rules it out, and a stable
+      // result is still better than an exception the round would die of.
+      return failure(call, 'unknown-tool', `this round has no face for the tool: ${call.name}`);
+    }
     return { id: call.id, ok: outcome.ok, error: outcome.error, content: outcome.content };
   };
 }
