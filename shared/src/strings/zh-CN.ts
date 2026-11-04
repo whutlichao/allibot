@@ -600,6 +600,24 @@ export const ZH_CN = {
     text: '队长所属模型 provider 缺少凭证（{credential_env}）。',
     params: ['credential_env'],
   },
+  // 目标上下文的工作区不可用也是队长无效事实（D3.8 / D5.7）：读模型、消息
+  // 触发与 team-change 触发共用这段文案，而不是让轮次失败后再说原因。
+  'team.invalid.workspaceRootMissing': {
+    text: '队长在目标上下文不可用：项目根不存在或不可读（workspace-root-missing）。',
+    params: [],
+  },
+  'team.invalid.dockerUnavailable': {
+    text: '队长在目标上下文不可用：Docker 后端不可用（docker-unavailable）。',
+    params: [],
+  },
+  'team.invalid.dockerImageMissing': {
+    text: '队长在目标上下文不可用：Docker 镜像不存在或无法拉取（docker-image-missing）。',
+    params: [],
+  },
+  'team.invalid.dockerConsentMissing': {
+    text: '队长在目标上下文不可用：镜像未确认远端数据流（docker-consent-missing）。',
+    params: [],
+  },
   // TeamAssign 目标成员的可用性（#39 / D3.4 第 1 步）：与队长的不可用原因
   // 分开措辞，因为被分派的是成员，不是队长。
   'team.member.missing': { text: '目标成员不存在或已被移除。', params: [] },
@@ -615,6 +633,22 @@ export const ZH_CN = {
   'team.member.credentialMissing': {
     text: '目标成员所属模型 provider 缺少凭证（{credential_env}）。',
     params: ['credential_env'],
+  },
+  'team.member.workspaceRootMissing': {
+    text: '目标成员在目标上下文不可用：项目根不存在或不可读（workspace-root-missing）。',
+    params: [],
+  },
+  'team.member.dockerUnavailable': {
+    text: '目标成员在目标上下文不可用：Docker 后端不可用（docker-unavailable）。',
+    params: [],
+  },
+  'team.member.dockerImageMissing': {
+    text: '目标成员在目标上下文不可用：Docker 镜像不存在或无法拉取（docker-image-missing）。',
+    params: [],
+  },
+  'team.member.dockerConsentMissing': {
+    text: '目标成员在目标上下文不可用：镜像未确认远端数据流（docker-consent-missing）。',
+    params: [],
   },
   // 分派的固定裁决顺序（D3.4）：先校验调用者与目标，再解析预算 target，
   // 再原子扣跳；失败落 failed / budget-exhausted，jump_consumed 定格。

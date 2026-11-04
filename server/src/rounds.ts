@@ -944,6 +944,7 @@ async function executeTeamAssignment(
     team.channelId,
     request.member_id,
     process.env,
+    team.targetId,
   );
   if (!availability.ok) {
     const assignment = insertFinalTeamAssignment(db, {

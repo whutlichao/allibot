@@ -1,9 +1,10 @@
-import type { ChannelTeamView } from '@allibot/shared';
+import type { ChannelTeamView, WorkspaceStatusReason } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { tFromDb } from './copy.js';
 import { liveMemberClause } from './members.js';
 import { checkProviderAvailability, PROVIDER_CREDENTIAL_ENV } from './providers.js';
+import { readRoundWorkspaceFailure } from './workspace-root.js';
 
 /**
  * Team 模式与队长 (#37 / D3.1 / D3.8): one place decides whether a team
@@ -12,10 +13,11 @@ import { checkProviderAvailability, PROVIDER_CREDENTIAL_ENV } from './providers.
  * starts nobody" cannot name different facts.
  *
  * Leader availability is exactly the D3.8 list: the member row exists, is a
- * live Agent, `enabled=1`, still a channel member, and its model provider is
- * ready (model, remote-data-flow consent, credential). Workspace-backend
- * availability joins this list with the workspace ticket (#41+); until the
- * columns exist there is no target-context backend fact to read.
+ * live Agent, `enabled=1`, still a channel member, its model provider is ready
+ * (model, remote-data-flow consent, credential), and the target context's
+ * workspace backend is usable. The last fact is read through the same
+ * target-context resolution a round uses, so a Docker-down / missing-root
+ * leader cannot read `valid` while the round would fail.
  *
  * The write path only rejects configuration defects (not a live Agent,
  * disabled, not a member); the "may recover later" availability facts are read
@@ -104,31 +106,35 @@ export function readTeamWakeState(
 
 /**
  * The leader availability facts, in the D3.8 order: identity, enabled switch,
- * membership, then the model provider. The reason is readable and is the same
- * text the read model carries.
+ * membership, model provider, then the target context's workspace. `targetId`
+ * is the channel target for a channel reading and the task target for a task
+ * reading; a task follows its channel's workspace binding (D5.7).
  */
 export function readLeaderAvailability(
   db: Database.Database,
   channelId: string,
   leaderId: string,
   env: NodeJS.ProcessEnv,
+  targetId: string = channelId,
 ): LeaderAvailability {
-  return leaderAvailability(db, readAvailabilityFact(db, channelId, leaderId, env));
+  return leaderAvailability(db, readAvailabilityFact(db, channelId, leaderId, env, targetId));
 }
 
 /**
  * The TeamAssign target's availability (D3.4 step 1): the target must be a live
- * Agent member of the channel / task channel, and its model provider must be
- * ready. It is the same D3.8 fact set as the leader check, with member-facing
- * copy so a failed assignment never says "the leader is disabled".
+ * Agent member of the channel / task channel, its model provider must be ready,
+ * and the target context's workspace must be usable. It is the same D3.8 fact
+ * set as the leader check, with member-facing copy so a failed assignment never
+ * says "the leader is disabled".
  */
 export function readTeamMemberAvailability(
   db: Database.Database,
   channelId: string,
   memberId: string,
   env: NodeJS.ProcessEnv,
+  targetId: string = channelId,
 ): LeaderAvailability {
-  return memberAvailability(db, readAvailabilityFact(db, channelId, memberId, env));
+  return memberAvailability(db, readAvailabilityFact(db, channelId, memberId, env, targetId));
 }
 
 type AvailabilityFact =
@@ -143,7 +149,8 @@ type AvailabilityFact =
         | 'model-missing'
         | 'consent-missing';
     }
-  | { kind: 'credential-missing'; credentialEnv: string };
+  | { kind: 'credential-missing'; credentialEnv: string }
+  | { kind: 'workspace-unavailable'; reason: WorkspaceStatusReason };
 
 /**
  * The shared D3.8 fact read. The leader and the TeamAssign target ask the same
@@ -156,6 +163,7 @@ function readAvailabilityFact(
   channelId: string,
   memberId: string,
   env: NodeJS.ProcessEnv,
+  targetId: string,
 ): AvailabilityFact {
   const member = db
     .prepare(
@@ -205,6 +213,14 @@ function readAvailabilityFact(
         };
     }
   }
+  // 目标上下文的工作区可用性 (D3.8 / D5.7): a configured local root that
+  // disappeared or any Docker unavailability is a leader-invalid fact, not a
+  // failed leader round. A rootless local target stays valid (the round simply
+  // has no file tools), which is exactly the round's own decision.
+  const workspace = readRoundWorkspaceFailure(db, memberId, targetId);
+  if (workspace !== null) {
+    return { kind: 'workspace-unavailable', reason: workspace.reason };
+  }
   return { kind: 'ok' };
 }
 
@@ -236,6 +252,17 @@ function leaderAvailability(
           credential_env: fact.credentialEnv,
         }),
       };
+    case 'workspace-unavailable':
+      switch (fact.reason) {
+        case 'workspace-root-missing':
+          return { ok: false, reason: tFromDb(db, 'team.invalid.workspaceRootMissing') };
+        case 'docker-unavailable':
+          return { ok: false, reason: tFromDb(db, 'team.invalid.dockerUnavailable') };
+        case 'docker-image-missing':
+          return { ok: false, reason: tFromDb(db, 'team.invalid.dockerImageMissing') };
+        case 'docker-consent-missing':
+          return { ok: false, reason: tFromDb(db, 'team.invalid.dockerConsentMissing') };
+      }
   }
 }
 
@@ -267,6 +294,17 @@ function memberAvailability(
           credential_env: fact.credentialEnv,
         }),
       };
+    case 'workspace-unavailable':
+      switch (fact.reason) {
+        case 'workspace-root-missing':
+          return { ok: false, reason: tFromDb(db, 'team.member.workspaceRootMissing') };
+        case 'docker-unavailable':
+          return { ok: false, reason: tFromDb(db, 'team.member.dockerUnavailable') };
+        case 'docker-image-missing':
+          return { ok: false, reason: tFromDb(db, 'team.member.dockerImageMissing') };
+        case 'docker-consent-missing':
+          return { ok: false, reason: tFromDb(db, 'team.member.dockerConsentMissing') };
+      }
   }
 }
 
@@ -423,7 +461,7 @@ function buildTeamTargetState(
       reason: tFromDb(db, 'team.invalid.leaderMissing'),
     };
   }
-  const availability = readLeaderAvailability(db, channelId, leaderId, env);
+  const availability = readLeaderAvailability(db, channelId, leaderId, env, targetId);
   return {
     targetId,
     targetKind,
