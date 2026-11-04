@@ -676,8 +676,17 @@ function failTimedOutBatch(db: Database.Database, replyId: string, batch: number
   }
 }
 
-/** Mask secret-shaped fields inside an MCP JSON subject before storing it. */
+/**
+ * Mask secret-shaped fields inside the stored subject before it reaches
+ * SQLite, the SSE frame or the human face:
+ * - an MCP subject is stable argument JSON, masked like the argument copy;
+ * - a Bash subject is a command string, where a token can appear mid-command
+ *   even though there is no field name to mask by (D5.6: no env values).
+ */
 function maskApprovalPattern(toolName: string, pattern: string): string {
+  if (toolName === 'Bash') {
+    return maskCommandPattern(pattern);
+  }
   if (!toolName.startsWith('mcp:')) {
     return pattern;
   }
@@ -686,6 +695,26 @@ function maskApprovalPattern(toolName: string, pattern: string): string {
   } catch {
     return '***';
   }
+}
+
+/**
+ * Mask token-shaped values inside a readable command without deleting the
+ * command itself: `Authorization:` values, bearer tokens, `sk-…` keys and
+ * secret-shaped `NAME=value` assignments. The surrounding words stay, so the
+ * owner can still recognise what will run.
+ */
+function maskCommandPattern(command: string): string {
+  return command
+    .replace(
+      /(\bAuthorization\s*:\s*)(?:"[^"]*"|'[^']*'|[^\s"']+(?:\s+[^\s"']+)?)/gi,
+      '$1***',
+    )
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 ***')
+    .replace(/\bsk-[A-Za-z0-9_-]{6,}/g, 'sk-***')
+    .replace(
+      /(\b[A-Za-z_][A-Za-z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[A-Za-z0-9_]*\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)/gi,
+      '$1***',
+    );
 }
 
 const SECRET_KEY_PATTERN =
@@ -710,7 +739,15 @@ function maskValue(value: unknown): unknown {
   if (typeof value === 'object' && value !== null) {
     const output: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-      output[key] = SECRET_KEY_PATTERN.test(key) ? '***' : maskValue(entry);
+      if (SECRET_KEY_PATTERN.test(key)) {
+        output[key] = '***';
+      } else if (key === 'command' && typeof entry === 'string') {
+        // The Bash summary's readable command is the same subject as `pattern`;
+        // mask token-shaped values in both copies so neither view leaks one.
+        output[key] = maskCommandPattern(entry);
+      } else {
+        output[key] = maskValue(entry);
+      }
     }
     return output;
   }
