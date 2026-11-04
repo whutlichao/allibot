@@ -101,6 +101,20 @@ export function providerBaseUrl(provider: AgentProvider, env: NodeJS.ProcessEnv)
   return base.replace(/\/+$/, '');
 }
 
+/**
+ * Mask a credential inside arbitrary text: only the head and tail survive, so
+ * a provider echoing the key back in an error cannot leak it into a round
+ * reason, an HTTP response or a log line.
+ */
+export function maskSecret(text: string, secret: string): string {
+  return secret.length === 0 ? text : text.split(secret).join(maskKey(secret));
+}
+
+/** The human-face form of a credential: a head, an ellipsis and a tail. */
+export function maskKey(secret: string): string {
+  return secret.length <= 8 ? '…' : `${secret.slice(0, 3)}…${secret.slice(-4)}`;
+}
+
 /** 按 provider 的确认行；返回时间戳，未确认返回 null。 */
 export function readProviderConsent(
   db: Database.Database,
