@@ -2,7 +2,6 @@ import path from 'node:path';
 import type {
   EditFileRequest,
   FilePreviewRequest,
-  FileToolErrorCode,
   GlobFileRequest,
   GrepFileRequest,
   ReadFileRequest,
@@ -20,7 +19,14 @@ import {
   containerToolEnvironment,
   type DockerContainerHandle,
 } from './docker-workspace.js';
-import { globMatcher, type RoundFileGate } from './workspace-files.js';
+import {
+  MAX_GREP_MATCHES,
+  MAX_READ_BYTES,
+  failure,
+  globMatcher,
+  hasParentSegment,
+  type RoundFileGate,
+} from './workspace-files.js';
 
 /**
  * 容器内文件 / shell 工具 (#49 / D5.3 / ADR-0006 decision 4).
@@ -46,8 +52,6 @@ import { globMatcher, type RoundFileGate } from './workspace-files.js';
 
 const PROJECT_ROOT = '/workspace';
 const SKILLS_ROOT = '/agent-home/skills';
-const MAX_READ_BYTES = 2 * 1024 * 1024;
-const MAX_GREP_MATCHES = 200;
 const MAX_GREP_FILES = 2000;
 
 interface ContainerRoot {
@@ -633,14 +637,6 @@ function isInsideHostRoot(candidate: string, root: string): boolean {
   const normal = path.resolve(candidate);
   const base = path.resolve(root);
   return normal === base || normal.startsWith(`${base}${path.sep}`);
-}
-
-function hasParentSegment(value: string): boolean {
-  return value.split(/[\\/]+/).some((segment) => segment === '..');
-}
-
-function failure(error: FileToolErrorCode, message: string): RoundFileToolResult {
-  return { ok: false, error, message };
 }
 
 function shellFailure(error: RoundShellResult['error'], message: string): RoundShellResult {

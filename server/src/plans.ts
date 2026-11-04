@@ -361,19 +361,19 @@ function prunePlanRuns(
   now: string,
 ): void {
   const cutoff = retentionCutoff(now);
-  const rows = db
-    .prepare(
-      `SELECT id, created_at FROM plan_run
-        WHERE target_id = ? AND member_id = ?
-        ORDER BY created_at DESC, rowid DESC`,
-    )
-    .all(targetId, memberId) as { id: string; created_at: string }[];
-  const doomed = rows
-    .filter((row, index) => index >= PLAN_RUN_RETENTION || row.created_at < cutoff)
-    .map((row) => row.id);
-  if (doomed.length === 0) {
-    return;
-  }
-  const placeholders = doomed.map(() => '?').join(', ');
-  db.prepare(`DELETE FROM plan_run WHERE id IN (${placeholders})`).run(...doomed);
+  db.prepare(
+    `DELETE FROM plan_run
+      WHERE target_id = ?
+        AND member_id = ?
+        AND (
+          created_at < ?
+          OR id NOT IN (
+            SELECT id FROM plan_run
+             WHERE target_id = ?
+               AND member_id = ?
+             ORDER BY created_at DESC, rowid DESC
+             LIMIT ?
+          )
+        )`,
+  ).run(targetId, memberId, cutoff, targetId, memberId, PLAN_RUN_RETENTION);
 }

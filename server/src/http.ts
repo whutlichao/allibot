@@ -712,10 +712,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}/mcp$`),
     handle: async (_request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      getAgentOr404(db, id, env, orchestration.inFlight);
       sendJson(response, 200, readAgentMcp(db, id, env));
     },
   },
@@ -724,10 +721,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}/mcp$`),
     handle: async (request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      getAgentOr404(db, id, env, orchestration.inFlight);
       sendJson(response, 200, replaceAgentMcp(db, id, await readJsonBody(request), env));
     },
   },
@@ -739,10 +733,7 @@ const ROUTES: readonly Route[] = [
       // The Agent must be a live Agent; the channel only supplies the project
       // context. No channel / no root simply means the project section is
       // absent — it is not an error (D2.3).
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      getAgentOr404(db, id, env, orchestration.inFlight);
       const rawChannelId = new URL(request.url ?? '/', `http://${HOST}`).searchParams.get(
         'channel_id',
       );
@@ -757,10 +748,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills$`),
     handle: async (_request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      const agent = getAgentOr404(db, id, env, orchestration.inFlight);
       sendJson(response, 200, {
         agent_id: id,
         home_path: agent.home_path,
@@ -775,10 +763,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills$`),
     handle: async (request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      getAgentOr404(db, id, env, orchestration.inFlight);
       const installed = installSkillFromRequest(db, id, await readJsonBody(request), env);
       sendJson(response, installed.created ? 201 : 200, installed);
     },
@@ -790,10 +775,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}/skill-candidates$`),
     handle: async (_request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      getAgentOr404(db, id, env, orchestration.inFlight);
       sendJson(response, 200, scanSkillCandidates(db, id, env));
     },
   },
@@ -804,10 +786,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/import-all$`),
     handle: async (_request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      getAgentOr404(db, id, env, orchestration.inFlight);
       sendJson(response, 200, importAllSkillCandidates(db, id, env));
     },
   },
@@ -818,10 +797,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/upload$`),
     handle: async (request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      getAgentOr404(db, id, env, orchestration.inFlight);
       const name = new URL(request.url ?? '/', `http://${HOST}`).searchParams.get('name');
       if (name === null || name.length === 0) {
         throw ApiFailure.validation('upload requires a name query parameter', { field: 'name' });
@@ -836,10 +812,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/${SKILL_NAME}$`),
     handle: async (_request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      getAgentOr404(db, id, env, orchestration.inFlight);
       const name = decodeId(params[1]).normalize('NFC');
       const reading = readSkillMarkdown(db, id, name, env);
       sendJson(response, 200, { agent_id: id, skill: reading.skill, markdown: reading.markdown });
@@ -850,10 +823,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/${SKILL_NAME}$`),
     handle: async (request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      getAgentOr404(db, id, env, orchestration.inFlight);
       const name = decodeId(params[1]).normalize('NFC');
       sendJson(response, 200, {
         skill: setSkillEnabled(db, id, name, await readJsonBody(request)),
@@ -867,10 +837,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/${SKILL_NAME}$`),
     handle: async (_request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      getAgentOr404(db, id, env, orchestration.inFlight);
       deleteSkill(db, id, decodeId(params[1]).normalize('NFC'), env);
       response.writeHead(204);
       response.end();
@@ -881,10 +848,7 @@ const ROUTES: readonly Route[] = [
     pattern: new RegExp(`^/api/agents/${AGENT_ID}$`),
     handle: async (_request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      const agent = getAgentOr404(db, id, env, orchestration.inFlight);
       sendJson(response, 200, agent);
     },
   },
@@ -1065,6 +1029,20 @@ function parseIncludeDeleted(searchParams: URLSearchParams): boolean {
  * Route captures are always present; the only real failure is a malformed
  * percent-encoding, which reads as "that id does not exist".
  */
+/** Resolve one Agent for a management route or throw the shared 404 envelope. */
+function getAgentOr404(
+  db: Database.Database,
+  id: string,
+  env: NodeJS.ProcessEnv,
+  inFlight: Parameters<typeof getAgent>[3],
+): NonNullable<ReturnType<typeof getAgent>> {
+  const agent = getAgent(db, id, env, inFlight);
+  if (agent === null) {
+    throw ApiFailure.notFound(`agent not found: ${id}`);
+  }
+  return agent;
+}
+
 function decodeId(raw: string | undefined): string {
   try {
     return decodeURIComponent(raw ?? '');

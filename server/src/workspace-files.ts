@@ -68,8 +68,8 @@ const PREVIEW_ACTIONS: Record<string, PathAction | undefined> = {
   Edit: 'edit',
 };
 
-const MAX_READ_BYTES = 2 * 1024 * 1024;
-const MAX_GREP_MATCHES = 200;
+export const MAX_READ_BYTES = 2 * 1024 * 1024;
+export const MAX_GREP_MATCHES = 200;
 
 /**
  * The one gate face the file tools ask before executing. The gate decides
@@ -419,11 +419,11 @@ export function createRoundFileTools(options: {
   return { Read, Glob, Grep, Write, Edit, Preview };
 }
 
-function failure(error: FileToolErrorCode, message: string): RoundFileToolResult {
+export function failure(error: FileToolErrorCode, message: string): RoundFileToolResult {
   return { ok: false, error, message };
 }
 
-function hasParentSegment(value: string): boolean {
+export function hasParentSegment(value: string): boolean {
   return value.split(/[\\/]+/).some((segment) => segment === '..');
 }
 
