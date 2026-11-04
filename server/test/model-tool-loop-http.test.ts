@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -274,7 +275,11 @@ interface Fixture {
   stop: () => Promise<void>;
 }
 
-async function startFixture(prefix: string, provider: ProviderRow): Promise<Fixture> {
+async function startFixture(
+  prefix: string,
+  provider: ProviderRow,
+  options: { args?: readonly string[]; env?: NodeJS.ProcessEnv } = {},
+): Promise<Fixture> {
   const tmp = mkdtempSync(path.join(tmpdir(), prefix));
   const dataDir = path.join(tmp, 'data');
   const home = path.join(tmp, 'home');
@@ -283,8 +288,8 @@ async function startFixture(prefix: string, provider: ProviderRow): Promise<Fixt
   assert.equal(migration.exitCode, 0, `migrate should exit 0; output: ${migration.output}`);
   const endpoint = await startRecordingEndpoint();
   const running = await startServer(dataDir, {
-    args: ['--provider', 'model'],
-    env: { HOME: home, ...provider.env(endpoint.baseUrl) },
+    args: ['--provider', 'model', ...(options.args ?? [])],
+    env: { HOME: home, ...provider.env(endpoint.baseUrl), ...options.env },
   });
   return {
     tmp,
@@ -448,6 +453,187 @@ function requestPayload(request: { body: string }): Record<string, unknown> {
   const payload: unknown = JSON.parse(request.body);
   assert.ok(typeof payload === 'object' && payload !== null, 'the request body is a JSON object');
   return payload as Record<string, unknown>;
+}
+
+/** The credential's body, so a leaked fragment is detectable, not only the whole key. */
+const PROVIDER_KEY_MIDDLE = '0123456789abcdefghij';
+
+/** Every surface a round touches must carry only a masked form of the credential. */
+function assertNoCredential(text: string, what: string): void {
+  assert.equal(text.includes(PROVIDER_KEY), false, `${what} must not carry the credential`);
+  assert.equal(
+    text.includes(PROVIDER_KEY_MIDDLE),
+    false,
+    `${what} must not carry the credential body — only a masked form may appear`,
+  );
+}
+
+interface PendingApproval {
+  reply_id: string;
+  tool_calls: { tool_call_id: string; tool_name: string }[];
+}
+
+async function waitFor<T>(
+  read: () => Promise<T>,
+  predicate: (value: T) => boolean,
+  label: string,
+  timeoutMs = 8_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  let last: T | undefined;
+  for (;;) {
+    last = await read();
+    if (predicate(last)) {
+      return last;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${label}; last: ${JSON.stringify(last)}`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+/** The approval batch the round is blocked on, read from the human face. */
+async function waitForPending(fixture: Fixture): Promise<PendingApproval> {
+  const rows = await waitFor(
+    async () => {
+      const response = await fetch(`${fixture.base}/api/approvals?status=pending`);
+      assert.equal(response.status, 200, await response.clone().text());
+      return (await readJson(response))['approvals'] as unknown as PendingApproval[];
+    },
+    (value) => value.length > 0,
+    'a pending approval',
+  );
+  return rows[0]!;
+}
+
+/** Put the plain read behind the gate: a `rule-ask` outranks the mode default (D10). */
+async function putReadAskRule(fixture: Fixture, channelId: string, pattern: string): Promise<void> {
+  const response = await fetch(`${fixture.base}/api/channels/${channelId}/permission-rules`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify([{ tool_name: 'Read', pattern, behavior: 'ask' }]),
+  });
+  assert.equal(response.status, 200, await response.clone().text());
+}
+
+interface SseFrame {
+  event: string;
+  raw: string;
+}
+
+interface SseStream {
+  waitFor(event: string, timeoutMs: number): Promise<SseFrame | null>;
+  /** Everything the stream sent, verbatim: what a leak would have to pass through. */
+  raw(): string;
+  close(): void;
+}
+
+async function connectEvents(base: string): Promise<SseStream> {
+  const controller = new AbortController();
+  const response = await fetch(`${base}/api/events`, {
+    headers: { accept: 'text/event-stream' },
+    signal: controller.signal,
+  });
+  assert.equal(response.status, 200);
+  const body = response.body;
+  assert.ok(body !== null);
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const frames: SseFrame[] = [];
+  const seen: string[] = [];
+  let buffer = '';
+  let closed = false;
+  const pump = (async (): Promise<void> => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        let boundary = buffer.indexOf('\n\n');
+        while (boundary !== -1) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          boundary = buffer.indexOf('\n\n');
+          seen.push(block);
+          const event = /^event:\s*(.+)$/m.exec(block)?.[1];
+          if (event !== undefined) {
+            frames.push({ event, raw: block });
+          }
+        }
+      }
+    } catch {
+      // The test closes the connection; that abort is not a failure.
+    } finally {
+      closed = true;
+    }
+  })();
+  return {
+    async waitFor(event, timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const index = frames.findIndex((candidate) => candidate.event === event);
+        if (index !== -1) {
+          return frames.splice(index, 1)[0] ?? null;
+        }
+        if (closed || Date.now() >= deadline) {
+          return null;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      }
+    },
+    raw: () => seen.join('\n\n'),
+    close() {
+      controller.abort();
+      void pump;
+    },
+  };
+}
+
+/**
+ * A local endpoint that accepts the request and never answers: the adapter's
+ * own single-call timeout is what has to close this round (D9).
+ */
+async function startHangingEndpoint(): Promise<{
+  baseUrl: string;
+  requests: () => number;
+  stop: () => Promise<void>;
+}> {
+  let received = 0;
+  const sockets = new Set<import('node:net').Socket>();
+  const server = createServer((request, response) => {
+    received += 1;
+    request.resume();
+    request.on('end', () => {
+      // Held open on purpose: the response headers never arrive.
+      void response;
+    });
+  });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  assert.ok(address !== null && typeof address !== 'string', 'the hanging endpoint binds a port');
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    requests: () => received,
+    stop: async () => {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
 }
 
 for (const provider of PROVIDER_ROWS) {
@@ -963,6 +1149,187 @@ for (const provider of PROVIDER_ROWS) {
         `the provider status is the readable reason: ${outcome.reason}`,
       );
       assert.equal(outcome.finished_reason, ZH_CN['round.finished.error'].text);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a denied approval comes back as a DENIED tool result and the round answers`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-denied-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      await putReadAskRule(fixture, round.channelId, 'notes.txt');
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-denied', name: 'Read', input: { path: 'notes.txt' } }]),
+        provider.text('读被拒绝了，我按已知信息回答'),
+      ]);
+
+      // The round blocks on the approval, so the POST settles only after the
+      // human decision; the wake itself is awaited at the end.
+      const sent = postJson(fixture, `/api/targets/${round.channelId}/messages`, {
+        body: '@读文件的成员 读一下 notes.txt',
+      });
+      const pending = await waitForPending(fixture);
+      assert.equal(pending.tool_calls[0]?.tool_name, 'Read', 'a plain read behind an ask rule waits');
+      const denied = await postJson(fixture, `/api/approvals/${pending.reply_id}`, {
+        tool_call_id: pending.tool_calls[0]!.tool_call_id,
+        confirmed: false,
+      });
+      assert.equal(denied.status, 200, await denied.clone().text());
+      const response = await sent;
+      assert.equal(response.status, 201, await response.clone().text());
+
+      assert.equal(
+        fixture.endpoint.requests.length,
+        2,
+        'the denial is fed back and the model gets another turn',
+      );
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.deepEqual(
+        results.map((result) => [result.id, result.isError]),
+        [['call-denied', true]],
+        'a denial is a tool error result, never a round failure',
+      );
+      assert.ok(
+        (results[0]?.content ?? '').includes('denied'),
+        `the stable code reaches the model: ${results[0]?.content ?? ''}`,
+      );
+      assert.equal(
+        (results[0]?.content ?? '').includes('NEEDLE-ONE'),
+        false,
+        'a denied read never carries the file body',
+      );
+      assert.deepEqual(
+        (await messages(fixture, round.channelId)).map((message) => [message['kind'], message['body']]),
+        [
+          ['human', '@读文件的成员 读一下 notes.txt'],
+          ['agent', '读被拒绝了，我按已知信息回答'],
+        ],
+        'the round still answers after a denial',
+      );
+      const outcome = roundOutcome(fixture);
+      assert.equal(outcome.status, 'replied');
+      assert.equal(outcome.finished_reason, ZH_CN['round.finished.completed'].text);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] an approval that times out fails the round and is never a tool result`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-approval-timeout-${provider.label}-`, provider, {
+      args: ['--approval-timeout-ms', '200'],
+    });
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      await putReadAskRule(fixture, round.channelId, 'notes.txt');
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-waits', name: 'Read', input: { path: 'notes.txt' } }]),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 读一下 notes.txt');
+
+      assert.equal(
+        fixture.endpoint.requests.length,
+        1,
+        'the timeout is never fed back, so no further turn is taken',
+      );
+      assert.deepEqual(
+        provider.toolResults(requestPayload(fixture.endpoint.requests[0]!)),
+        [],
+        'the first request carries no tool result at all',
+      );
+      assert.deepEqual(
+        (await messages(fixture, round.channelId)).map((message) => message['kind']),
+        ['human'],
+        'a timed-out approval writes no Agent message',
+      );
+      const outcome = roundOutcome(fixture);
+      assert.equal(outcome.status, 'failed');
+      assert.ok(
+        outcome.reason.includes('审批等待超时'),
+        `the existing approval-timeout copy is the reason: ${outcome.reason}`,
+      );
+      assert.equal(outcome.finished_reason, ZH_CN['round.finished.error'].text);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a provider call that never answers times out as a round failure`, async () => {
+    // The production single-call timeout is 60 s (D9); letting it fire for real
+    // is the only way to prove the boundary without faking the abort.
+    const hanging = await startHangingEndpoint();
+    const fixture = await startFixture(
+      `allibot-tool-loop-slow-provider-${provider.label}-`,
+      provider,
+      { env: provider.env(hanging.baseUrl) },
+    );
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      fixture.endpoint.respondWith(() => provider.text('never used'));
+      await sendMessage(fixture, round.channelId, '@读文件的成员 读一下 notes.txt');
+
+      assert.equal(hanging.requests(), 1, 'the round made exactly one call');
+      assert.deepEqual(
+        (await messages(fixture, round.channelId)).map((message) => message['kind']),
+        ['human'],
+        'a timed-out call writes no Agent message',
+      );
+      const outcome = roundOutcome(fixture);
+      assert.equal(outcome.status, 'failed');
+      assert.ok(
+        outcome.reason.includes('timed out'),
+        `the reason names the timeout: ${outcome.reason}`,
+      );
+      assert.ok(
+        outcome.reason.includes(`${provider.label} request timed out after 60000ms`),
+        `the reason names the provider line and the single-call budget: ${outcome.reason}`,
+      );
+      assert.equal(outcome.finished_reason, ZH_CN['round.finished.error'].text);
+    } finally {
+      await fixture.stop();
+      await hanging.stop();
+    }
+  });
+
+  test(`[${provider.label}] a second-round provider error echoing the credential lands only as a masked reason`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-mask-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      const events = await connectEvents(fixture.base);
+      let served = 0;
+      fixture.endpoint.respondWith(() => {
+        served += 1;
+        return served === 1
+          ? provider.toolCalls([{ id: 'call-1', name: 'Read', input: { path: 'notes.txt' } }])
+          : {
+              status: 500,
+              body: { error: { message: `Incorrect API key provided: ${PROVIDER_KEY}` } },
+            };
+      });
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 读一下 notes.txt');
+
+      assert.equal(fixture.endpoint.requests.length, 2, 'the failure happens inside the loop');
+      const frame = await events.waitFor('round.outcome', 3_000);
+      assert.ok(frame !== null, 'the failed round publishes its outcome');
+      assertNoCredential(events.raw(), 'the SSE stream');
+      assertNoCredential(
+        fixture.running.logs().stdout + fixture.running.logs().stderr,
+        'process output',
+      );
+      const outcome = roundOutcome(fixture);
+      assert.equal(outcome.status, 'failed');
+      assert.ok(
+        outcome.reason.includes('500'),
+        `the provider status is part of the readable reason: ${outcome.reason}`,
+      );
+      assert.ok(
+        outcome.reason.includes(PROVIDER_KEY.slice(-4)),
+        `only the masked tail survives: ${outcome.reason}`,
+      );
+      assertNoCredential(outcome.reason, 'the round reason');
+      events.close();
     } finally {
       await fixture.stop();
     }

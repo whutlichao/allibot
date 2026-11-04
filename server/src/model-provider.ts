@@ -9,6 +9,7 @@ import {
   providerBaseUrl,
   readCredential,
 } from './providers.js';
+import { ApprovalTimeoutError } from './tool-gate.js';
 import { createAnthropicConversation } from './tool-conversation-anthropic.js';
 import { createOpenAiConversation } from './tool-conversation-openai.js';
 import {
@@ -157,6 +158,12 @@ export function createModelProvider(
         }
         return { verdict: 'replied', replies: [outcome.text] };
       } catch (error) {
+        if (error instanceof ApprovalTimeoutError) {
+          // An approval wait that timed out came from the tool face but is the
+          // one case that closes the round failed (D10): the batch's own
+          // readable copy is the reason, not a model-call failure.
+          return { verdict: 'failed', replies: [], detail: error.readable };
+        }
         const message = error instanceof Error ? error.message : String(error);
         return {
           verdict: 'failed',
