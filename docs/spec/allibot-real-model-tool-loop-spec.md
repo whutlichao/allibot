@@ -14,7 +14,7 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 写类（`Write` / `Edit`）、执行类（`Bash` / MCP）、编排类（`TeamAssign` / `transfer_task` / Plan 的写工具）与 SOP 的 `SopVerdict` 通道留给后续批次，但它们在本规格里**先定契约**（尤其是审批在循环里的语义与 `SopVerdict` 的通道），避免下一批重新吵一遍。
 
-循环的边界是三条纪律。其一，**只落最终文本**：工具调用之间的中间文本不落库，只有循环结束（模型不再请求工具）后的那段文本成为本轮的回复，与既有的「一轮 ↔ 至多一条 target 消息」一致。其二，**上限复用 `max_iterations`**（默认 10，人类面已可编辑）：撞上限时本轮以 `replied` 收口，把已经在手的部分结论落成消息，`finished_reason` 读既有词条「达到迭代上限」——与脚本化 `iteration-limit` 逐字一致，消费游标照常推进，同一条消息不会被下一次唤醒重读；唯一例外是撞上限时还没有任何产出文本，那按空补全收口 `failed`。其三，**失败分层**：provider 网络错 / 超时 / 响应不可解析 → 轮次 `failed`；工具自身的失败（路径越界、文件不存在、审批拒绝）→ 作为一个工具结果回灌给模型，由模型改道，绝不当轮次失败。
+循环的边界是三条纪律。其一，**只落最终文本**：工具调用之间的中间文本不落库，只有循环结束（模型不再请求工具）后的那段文本成为本轮的回复，与既有的「一轮 ↔ 至多一条 target 消息」一致。其二，**上限复用 `max_iterations`**（默认 10，人类面已可编辑）：撞上限时本轮以 `replied` 收口，把已经在手的部分结论落成消息，`finished_reason` 读既有词条「达到迭代上限」——与脚本化 `iteration-limit` 逐字一致，消费游标照常推进，同一条消息不会被下一次唤醒重读；唯一例外是撞上限时还没有任何产出文本，那按既有 `empty completion` 规则收口 `failed`。其三，**失败分层**：provider 网络错 / 超时 / 响应不可解析 → 轮次 `failed`；工具自身的失败（路径越界、文件不存在、审批拒绝）→ 作为一个工具结果回灌给模型，由模型改道，绝不当轮次失败。
 
 ## User Stories
 
@@ -62,13 +62,13 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 **D5 工具结果整形与回灌。** 工具结果转成 provider 自己的 result 形状：Anthropic 用 `tool_result` 内容块（`is_error` 表达失败），OpenAI 兼容用 `role: "tool"` + `tool_call_id`。回灌内容对模型是**结构化摘要 + 必要正文**，不是原始 JSON 倾倒。失败结果的 `error` 稳定码原样保留（`outside-root` / `not-found` / `denied` 等），让模型能区分"路径越界"与"文件不存在"。
 
-**D6 结果大小上限（回灌层新增，文件工具侧不改）。** 文件工具本身**没有**「已截断」事实：`Read` 超过读取上限直接回 `io-error`（`file is too large to read`），`Grep` 命中数静默封顶（`MAX_GREP_MATCHES = 200`），而 `output_truncated` 只属于 `RoundShellResult`，与文件工具无关。因此本批在**回灌层**新增两件事：其一，把回灌给模型的内容压到总量上限，截断处写明「已截断」并给出已给 / 未给的规模提示（语言走词条）；其二，把 `Grep` 的 200 条封顶**显式写进回灌结果**，否则模型会把「只返回 200 条」读成「只匹配 200 条」。这一条需要文件工具给出事实：`RoundFileToolResult` 新增一个可选 `capped` 事实（只加字段，既有字段语义与既有断言不变），回灌文案据此说「命中已封顶」——不靠 `matches.length === MAX_GREP_MATCHES` 的启发式，因为恰好 200 条完整匹配与封顶在结果上无法区分。截断与封顶标记都只影响模型看到的那一份。上限是常量，不进 schema，不做每 Agent 配置。
+**D6 结果大小上限（回灌层新增，文件工具侧不改）。** 文件工具本身**没有**「已截断」事实：`Read` 超过读取上限直接回 `io-error`（`file is too large to read`），`Grep` 命中数静默封顶（`MAX_GREP_MATCHES = 200`），而 `output_truncated` 只属于 `RoundShellResult`，与文件工具无关。因此本批在**回灌层**新增两件事：其一，把回灌给模型的内容压到总量上限，截断处写明「已截断」并给出已给 / 未给的规模提示（语言走词条）；其二，把 `Grep` 的 200 条封顶**显式写进回灌结果**，否则模型会把「只返回 200 条」读成「只匹配 200 条」。这一条需要文件工具给出事实：`RoundFileToolResult` 新增一个可选 `capped` 事实（只加字段，既有字段语义与既有断言不变），取值说明**封顶原因**而不是一个布尔——local 侧是命中数封顶（`MAX_GREP_MATCHES = 200`），Docker 侧还有扫描文件数封顶（`MAX_GREP_FILES = 2000`），两者对模型的含义不同（「还有更多匹配」vs「还有文件没扫」）。不靠 `matches.length === MAX_GREP_MATCHES` 的启发式，因为恰好 200 条完整匹配与封顶在结果上无法区分。命中行的正文在工具侧已经按 300 字截断（行内带省略号，模型可见），回灌层不再叠加；这一层截断不在本批的显式标记范围内。截断与封顶标记都只影响模型看到的那一份。上限是常量，不进 schema，不做每 Agent 配置。
 
-**D7 只落最终文本。** 循环内的中间文本（模型在请求工具前说的话）不落库、不进 `replies` 之外的任何面。循环结束时把最后一段文本作为唯一一条 pending reply；为空则按既有「空补全」规则收口为失败。`replies` 的上限纪律（一轮至多落一条 target 消息）不变。
+**D7 只落最终文本。** 循环内的中间文本（模型在请求工具前说的话）不落库、不进任何面。循环正常结束时把最后一段文本作为唯一一条 pending reply，为空则按既有 `empty completion` 规则收口为失败。`replies` 的上限纪律（一轮至多落一条 target 消息）不变。**撞上限是本条的唯一例外**：循环停下时最后那段 assistant 文本——连同它请求、但已无预算执行的工具调用——按 D8 作为部分结论落库。若不留这个例外，「撞上限」这条路径按定义永远只有中间文本可落，D8 与测试项将无文本可用；而既有脚本化 `iteration-limit` 落下的正是这份部分结论。
 
-**D8 上限与收口。** `agent_config.max_iterations`（默认 10）是本轮**模型↔工具往返次数**的上限，语义在 ADR 0009 中裁定为「轮内往返」，不是「轮次级」计数。撞上限：`verdict: 'replied'`、把循环内已经产出的结论作为本轮唯一的 pending reply 落成消息、`finishedReason: 'iteration-limit'`。落库落在 `finished_reason` 列（由 `finishedReasonText` 渲染词条 `round.finished.iterationLimit` =「达到迭代上限」），**不是** `reason` 列——两列是两件事。这与脚本化 `iteration-limit` 逐字一致（`scripted-provider.ts` 展开 `replyResult` 后只补 `finishedReason`），因此两条路径共用同一份断言；因为状态是 `replied`，`advancesCursor` 照常推进，同一条触发消息不会被下一次唤醒重读。唯一的例外：撞上限时**还没有任何产出文本**，按 D7 的空文本规则收口 `failed`（空补全），不伪造一条空消息。
+**D8 上限与收口。** `agent_config.max_iterations`（默认 10）是本轮**模型↔工具往返次数**的上限，语义在 ADR 0009 中裁定为「轮内往返」，不是「轮次级」计数。撞上限：`verdict: 'replied'`、把循环内已经产出的结论作为本轮唯一的 pending reply 落成消息、`finishedReason: 'iteration-limit'`。落库落在 `finished_reason` 列（由 `finishedReasonText` 渲染词条 `round.finished.iterationLimit` =「达到迭代上限」），**不是** `reason` 列——两列是两件事。这与脚本化 `iteration-limit` 逐字一致（`scripted-provider.ts` 展开 `replyResult` 后只补 `finishedReason`），因此两条路径共用同一份断言；因为状态是 `replied`，`advancesCursor` 照常推进，同一条触发消息不会被下一次唤醒重读。唯一的例外：撞上限时**还没有任何产出文本**，按既有 `empty completion` 规则收口 `failed`，`finished_reason` 落「错误」（`finishedReasonOf` 对 `failed` 的既有映射），不写「达到迭代上限」，也不伪造一条空消息。
 
-**D9 失败分层。** provider 网络错误、超时（既有 60 秒单次调用超时）、响应不可解析、缺 consent / 缺凭证 → 轮次 `failed`，`reason` 可读且密钥掩码规则不变（`maskSecret` 继续在 reason 落库前生效）。工具失败、参数校验失败、审批拒绝 → 工具结果，轮次继续。区分判据是"错误来自 provider 链路还是来自工具面"。
+**D9 失败分层。** provider 网络错误、超时（既有 60 秒单次调用超时）、响应不可解析、缺 consent / 缺凭证 → 轮次 `failed`，`reason` 可读且密钥掩码规则不变（`maskSecret` 继续在 reason 落库前生效）。工具失败、参数校验失败、审批拒绝 → 工具结果，轮次继续。区分判据是"错误来自 provider 链路还是来自工具面"，唯一例外是审批超时：它虽从工具面抛出，但按 D10 走 `failed` 收口，不是工具结果。
 
 **D10 审批在循环里的语义（为后续批次先定）。** 需要审批的调用在循环内**阻塞等待** `RoundPermissionFace.authorize`。人类批准即继续执行；**拒绝**作为 `DENIED` 工具结果回灌，模型继续循环——拒绝是结果，不是轮次失败。**超时不回灌**：等满 600 秒批次后 `authorize` 抛 `ApprovalTimeoutError`，本轮按 ADR-0007 决定 6 收口 `failed`，可读 reason 走既有词条。循环不得把超时伪装成一个工具结果，否则一个没人看的轮次会一直续跑到上限。选择阻塞而非「暂停轮次、决定后重开」的理由写在 ADR 0009；本决策**沿用** 0007，不改它。第一批的只读工具在默认路径上不触达审批（`read` 类落到 `mode-allow`），但一条 `permission_rule(Read|Glob|Grep, …, ask)` 会让它们触达：`Read` 在文件工具内部就调 `authorize`，而 `checkPermission` 的规则合并先于模式默认（`rule-ask` 分支），此时同样阻塞等待、超时同样收口 `failed`。多批重开沿用 ADR-0007 决定 5：同一 reply 的新批次重开已 resolved 的记录、合并 `tool_calls`、只发布新调用；循环对每个批次只看到一个最终决定。本批**不**引入「每轮审批批次上限」的抑制规则，所以一条 `ask` 规则可以让一个只读轮次占满一个 600 秒批次。这是接受的风险，不是遗漏。
 
@@ -95,7 +95,7 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 - 没有可用工具面（无项目根、无 Plan face）：provider 收到**零工具定义**，行为与今天的单轮补全一致。
 - 两家 provider 用同一组用例各跑一遍：Anthropic `tool_use` 与 OpenAI `tool_calls` 的解析、回灌、终止都逐条对齐。
 
-**先例。** `server/test/agui-contract.test.ts`（AG-UI 事件顺序 + 注入 provider）、`server/test/mcp-runtime.test.ts`（假 TCP / HTTP 服务器 + 随机端口）、`server/test/permissions-http.test.ts` 与 `server/test/local-shell-http.test.ts`（`--fixed-clock` + `--approval-timeout-ms` 驱动 600 秒超时）是本批的形状先例。脚本化 provider 的既有用例一条都不改。
+**先例。** `server/test/agui-contract.test.ts`（AG-UI 事件顺序 + `--scripted-provider` 注入）、`server/test/mcp-runtime.test.ts`（假 TCP / HTTP 服务器 + 随机端口）、`server/test/remote-data-flow-http.test.ts`（`startRecordingEndpoint` 端点注入）、`server/test/permissions-http.test.ts` 与 `server/test/local-shell-http.test.ts`（`--fixed-clock` + `--approval-timeout-ms` 驱动 600 秒超时）是本批的形状先例。脚本化 provider 的既有用例一条都不改。
 
 ## Out of Scope
 
@@ -112,7 +112,7 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 ## Further Notes
 
-**基线数字与来源。** 基线 commit `eb8b07c`：`SCHEMA_VERSION = 21`；`GLOSSARY.md` 826 行；M1 规格 414 行 / 83 条 User Stories；M2 规格 483 行；ADR 0001–0008；`AGENT_DEFAULTS.maxIterations = 10`（`server/src/members.ts`）；`round.finished.iterationLimit`（「达到迭代上限」）已在词条表；`RoundInput.tools` 已按轮次算好可用工具集（`server/src/rounds.ts`）；`rounds.ts` 中 `max_iterations` 出现 0 次——即配置存在但无人执行，这是本规格要补的位。以上数字都从该 commit 的 `grep` / `wc -l` / 源码读数得到，不凭记忆。
+**基线数字与来源。** 基线 commit `eb8b07c`：`SCHEMA_VERSION = 21`；`GLOSSARY.md` 826 行；M1 规格 414 行 / 83 条 User Stories；M2 规格 483 行；ADR 0001–0008；`AGENT_DEFAULTS.maxIterations = 10`（`server/src/members.ts`）；`round.finished.iterationLimit`（「达到迭代上限」）已在词条表；`RoundInput.tools` 已按轮次算好可用工具集（`server/src/rounds.ts`）；`rounds.ts` 中 `max_iterations` 出现 0 次——即配置存在但无人执行，这是本规格要补的位。以上数字都从该 commit 上 `wc -l`、`grep -c` 与源码直读得到（`wc -l` 口径：`GLOSSARY.md` 826、M1 规格 414、M2 规格 483），不凭记忆。
 
 **ADR。** 新增 `docs/adr/0009-model-tool-loop.md`：裁定循环位置与 `deferred`、上限的语义归属、工具名作为对外契约、审批阻塞等待、只落最终文本五件事。解析细节、结果回灌长度、批次划分是实现决策，写在本规格。
 

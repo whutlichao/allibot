@@ -2,7 +2,7 @@
 
 ## Status
 
-proposed（2026-11-04）
+accepted（2026-11-04）
 
 ## Context
 
@@ -22,8 +22,8 @@ M2 把 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面与状�
 1. **循环在适配器内部，接缝不变。** `RoundProvider.runRound(input) → RoundResult` 仍是一轮一次调用；循环在这一次调用里完成 model → tool → model 的往返，`deferred` 保持 `false`。写路径、SSE 收口、"一轮 ↔ 至多一条 target 消息"的纪律全部不动。选择理由：接缝是 M1 唯一的成员面契约，把循环摊到写路径上会引入跨请求的轮内状态，而那个状态没有正本表可放（本 ADR 不同时开迁移）。
 2. **审批在循环内阻塞等待，超时不回灌。** 需要审批的调用走既有 `RoundPermissionFace.authorize`：批准即继续，`denied` 作为工具结果回灌（拒绝不是轮次失败）。等满 600 秒批次后 `authorize` 抛 `ApprovalTimeoutError`，本轮按 ADR-0007 决定 6 收口 `failed`——**不**把超时变成一个工具结果，否则无人值守的轮次会一直续跑到上限。不做"暂停轮次、决定后重开"：那要求把"半轮"落成可恢复状态，而 M2 的审批已经是"进程重启即 expired、不跨重启恢复"，两者叠加会产生第三种半完成态。
 3. **工具名是对外契约。** 沿用既有词汇，不另起体系：`Read` / `Glob` / `Grep` / `Write` / `Edit` / `Bash` / `TeamAssign` / `transfer_task` / `TaskCreate` / `TaskGet` / `TaskList` / `TaskUpdate` / `mcp:<server>/<tool>`。同一个名字同时是模型可见的工具名、`permission_rule.tool_name` 的匹配键与审批载荷里的工具名；改名等于同时改三处，且会让已配置的规则静默失效。新增工具名要同时给出 `classifyToolName` 的类别。
-4. **`max_iterations` 是轮内往返上限。** 语义定为"一次轮次内 model↔tool 往返的次数上限"，默认 10。撞上限收口为 `replied` + `finishedReason: 'iteration-limit'`：把已经产出的部分结论落成消息，`finished_reason` 读既有词条「达到迭代上限」，与脚本化 `iteration-limit` 逐字一致。唯一的例外是撞上限时还没有任何产出文本：那按空补全收口 `failed`，不伪造一条空消息。不选"failed + 零回复"的理由是游标：`advancesCursor` 只认 `replied` / `ignored`，`failed` 不推进游标，同一条触发消息会留在未读，下一次唤醒会把同一段上下文再跑一遍昂贵循环。不新增"轮次级"计数：M1 的世代与 `target_budget` 已经是轮次的界，再叠一个同义的计数器只会制造两套账。
-5. **只落最终文本。** 工具调用之间的中间文本不落库；循环结束后那段文本是本轮唯一的 pending reply，为空则按既有「空补全」规则失败。这条与第 1 条配套：既然循环不可见（本批不发 AG-UI 工具事件），中间文本就没有落点。
+4. **`max_iterations` 是轮内往返上限。** 语义定为"一次轮次内 model↔tool 往返的次数上限"，默认 10。撞上限收口为 `replied` + `finishedReason: 'iteration-limit'`：把已经产出的部分结论落成消息，`finished_reason` 读既有词条「达到迭代上限」，与脚本化 `iteration-limit` 逐字一致。唯一的例外是撞上限时还没有任何产出文本：那按既有 `empty completion` 规则收口 `failed`，不伪造一条空消息。不选"failed + 零回复"的理由是游标：`advancesCursor` 只认 `replied` / `ignored`，`failed` 不推进游标，同一条触发消息会留在未读，下一次唤醒会把同一段上下文再跑一遍昂贵循环。不新增"轮次级"计数：M1 的世代与 `target_budget` 已经是轮次的界，再叠一个同义的计数器只会制造两套账。
+5. **只落最终文本。** 工具调用之间的中间文本不落库；循环正常结束后那段文本是本轮唯一的 pending reply，为空则按既有 `empty completion` 规则失败。**撞上限是唯一例外**：停下时最后那段 assistant 文本（连同已无预算执行的工具调用）作为部分结论落库——否则「撞上限」按定义只剩中间文本，与第 4 条「落部分结论」无法同时成立。这条与第 1 条配套：既然循环不可见（本批不发 AG-UI 工具事件），中间文本就没有落点。
 
 ## Consequences
 
