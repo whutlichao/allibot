@@ -1,6 +1,7 @@
 import {
   t,
   type AgentMcpView,
+  type AgentProvider,
   type AgentRulesView,
   type AgentSkillCandidatesView,
   type AgentSkillDetailView,
@@ -12,6 +13,7 @@ import {
   type PermissionRuleInput,
   type PermissionRuleView,
   type PlanRunView,
+  type RemoteDataFlowReadView,
   type SopDefinitionCreate,
   type SopDefinitionView,
   type SopRunView,
@@ -59,12 +61,14 @@ import {
   readSopUpdateFrame,
 } from './workspace/sops.ts';
 import {
+  confirmProviderDataFlow,
   deleteAgent,
   createSopDefinition,
   joinChannelMember,
   patchChannelConfig,
   readApprovals,
   readPermissionRules,
+  readRemoteDataFlow,
   deleteAgentSkill,
   readAgentMcp,
   readAgentSkill,
@@ -133,6 +137,8 @@ let currentAgentMcp: Record<string, AgentMcpView> = {};
 let currentAgentSkills: Record<string, AgentSkillsView> = {};
 let currentAgentSkillDetails: Record<string, AgentSkillDetailView> = {};
 let currentAgentSkillCandidates: Record<string, AgentSkillCandidatesView> = {};
+/** `/api/remote-data-flow`: the provider credential env names and consent facts. */
+let currentRemoteDataFlow: RemoteDataFlowReadView | undefined;
 
 async function loadTargetMembers(targetId: string): Promise<void> {
   currentChannelMembers = {
@@ -150,6 +156,11 @@ async function loadTeamRuns(targetId: string): Promise<void> {
 
 async function loadApprovals(): Promise<void> {
   currentApprovals = await readApprovals(fetch, 'all');
+}
+
+/** The provider reading that names each credential variable and consent row. */
+async function loadRemoteDataFlow(): Promise<void> {
+  currentRemoteDataFlow = await readRemoteDataFlow(fetch);
 }
 
 /**
@@ -388,6 +399,12 @@ async function deleteAgentAction(agentId: string): Promise<void> {
   await refreshWorkspace();
 }
 
+/** One one-time provider consent; the workspace re-read refreshes the status point. */
+async function confirmProviderConsentAction(provider: AgentProvider): Promise<void> {
+  await confirmProviderDataFlow(fetch, provider);
+  await refreshWorkspace();
+}
+
 async function writeSettings(
   patch: Partial<WorkspaceSettingsView>,
 ): Promise<WorkspaceSettingsView> {
@@ -419,6 +436,8 @@ function render(): void {
         permissionRules={currentPermissionRules}
         agentRules={currentAgentRules}
         agentMcp={currentAgentMcp}
+        remoteDataFlow={currentRemoteDataFlow}
+        onConfirmProviderConsent={confirmProviderConsentAction}
         agentSkills={currentAgentSkills}
         agentSkillDetails={currentAgentSkillDetails}
         agentSkillCandidates={currentAgentSkillCandidates}
@@ -639,8 +658,9 @@ async function refreshWorkspace(): Promise<void> {
   try {
     await loadPermissionRules(reading);
     await loadApprovals();
+    await loadRemoteDataFlow();
   } catch (error: unknown) {
-    console.error('permission / approval read failed', error);
+    console.error('permission / approval / remote-flow read failed', error);
   }
   const targets = new Set(allNavEntries(buildWorkspaceNav(reading)).map((entry) => entry.targetId));
   if (currentTargetId === null || !targets.has(currentTargetId)) {

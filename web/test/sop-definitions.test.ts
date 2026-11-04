@@ -228,7 +228,7 @@ test('the SOP panel has an empty state, five distinct phase labels and an archiv
   assert.match(archived, /data-action="sop-start"[^>]*disabled/);
 });
 
-test('the SOP panel is shown for channels, not for DMs or task threads', () => {
+test('the SOP fold is shown for channels, not for DMs or task threads', () => {
   const reading = workspace();
   const channelPanel = renderToStaticMarkup(
     createElement(ContextPanel, {
@@ -242,8 +242,12 @@ test('the SOP panel is shown for channels, not for DMs or task threads', () => {
       onStartSop: () => undefined,
     }),
   );
-  assert.match(channelPanel, /data-sop-panel=""/);
-  assert.match(channelPanel, /data-sop-run-id="sop-run-1"/);
+  assert.match(channelPanel, /data-action="toggle-fold" data-fold="sop"/);
+  assert.doesNotMatch(
+    channelPanel,
+    /data-sop-panel=""/,
+    'the SOP form starts behind the fold, so the drawer stays short',
+  );
 
   const dmPanel = renderToStaticMarkup(
     createElement(ContextPanel, {
@@ -255,7 +259,7 @@ test('the SOP panel is shown for channels, not for DMs or task threads', () => {
       sopRuns: { [DEFINITION_ID]: [PENDING_RUN] },
     }),
   );
-  assert.doesNotMatch(dmPanel, /data-sop-panel=""/);
+  assert.doesNotMatch(dmPanel, /data-action="toggle-fold" data-fold="sop"/);
 
   const taskPanel = renderToStaticMarkup(
     createElement(ContextPanel, {
@@ -267,7 +271,7 @@ test('the SOP panel is shown for channels, not for DMs or task threads', () => {
       sopRuns: { [DEFINITION_ID]: [PENDING_RUN] },
     }),
   );
-  assert.doesNotMatch(taskPanel, /data-sop-panel=""/);
+  assert.doesNotMatch(taskPanel, /data-action="toggle-fold" data-fold="sop"/);
 });
 
 test('the SOP read and write helpers use the D2.3 routes and the start response is the pending run', async () => {

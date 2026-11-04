@@ -340,12 +340,23 @@ export type WorkspaceBackend = (typeof WORKSPACE_BACKENDS)[number];
  * the human face can render; the readable copy is the catalog's job.
  */
 export const WORKSPACE_STATUS_REASONS = [
+  'workspace-root-unset',
   'workspace-root-missing',
   'docker-unavailable',
   'docker-image-missing',
   'docker-consent-missing',
 ] as const;
 export type WorkspaceStatusReason = (typeof WORKSPACE_STATUS_REASONS)[number];
+
+/**
+ * The reasons that make a round fail. `workspace-root-unset` is deliberately
+ * absent: an unconfigured root is the normal default and the round simply runs
+ * without project file tools (D5.1).
+ */
+export type WorkspaceFailureReason = Exclude<
+  WorkspaceStatusReason,
+  'workspace-root-unset'
+>;
 
 /**
  * The channel's workspace configuration (D5.1 / D5.3 / D5.4): the one shared

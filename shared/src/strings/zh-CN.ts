@@ -485,6 +485,9 @@ export const ZH_CN = {
     text: '远端 http / sse 服务器需要先确认远端数据流，否则运行期不会连接。',
     params: [],
   },
+  'workspace.agentDetail.consent.confirm': { text: '确认远端数据流告知', params: [] },
+  'workspace.agentDetail.consent.confirming': { text: '确认中…', params: [] },
+  'workspace.agentDetail.consent.failed': { text: '确认失败，请重试。', params: [] },
   'workspace.agentDetail.save': { text: '保存', params: [] },
   'workspace.agentDetail.saving': { text: '保存中…', params: [] },
   'workspace.agentDetail.saveFailed': { text: '保存失败，请重试。', params: [] },
@@ -503,6 +506,11 @@ export const ZH_CN = {
     text: '对方 Agent 已被软删除，此私信已归档，只能阅读历史，无法继续发送。',
     params: [],
   },
+  'workspace.composer.placeholder': { text: '输入消息，@ 提及成员', params: [] },
+  'workspace.chat.disclaimer': {
+    text: 'AI 可能会犯错，请核对重要信息。',
+    params: [],
+  },
   // 成员面板（Member Panel）与成员名册（Member Roster）：面板按频道成员表
   // 分「已加入 / 未加入」两段，名册是含 owner 的只读全名单。
   'workspace.member.joined': { text: '已加入', params: [] },
@@ -515,8 +523,19 @@ export const ZH_CN = {
   'workspace.member.channelOnly': { text: '成员面板只属于频道。', params: [] },
   'workspace.member.reason.disabled': { text: '已停用', params: [] },
   'workspace.member.reason.modelMissing': { text: '未配置模型', params: [] },
-  'workspace.member.reason.consentMissing': { text: '未确认远端数据流告知', params: [] },
-  'workspace.member.reason.credentialMissing': { text: '缺少凭证', params: [] },
+  'workspace.member.reason.consentMissing': {
+    text: '未确认远端数据流告知：请打开 Agent 详情确认。',
+    params: [],
+  },
+  'workspace.member.reason.credentialMissing': {
+    text: '缺少凭证：需要设置环境变量 {credential_env}，设置后重启后端。',
+    params: ['credential_env'],
+  },
+  'workspace.member.reason.credentialMissingNoEnv': {
+    text: '缺少凭证：请设置该模型 provider 需要的环境变量后重启后端。',
+    params: [],
+  },
+  'workspace.member.consent.openDetail': { text: '去确认远端数据流', params: [] },
   'workspace.member.notice': { text: '有 {count} 位成员未启用或出错', params: ['count'] },
   'workspace.member.notice.open': { text: '查看成员面板', params: [] },
   'workspace.roster.channelOnly': { text: '成员名册只属于频道。', params: [] },
@@ -550,6 +569,10 @@ export const ZH_CN = {
   'workspace.status.available': { text: '可用', params: [] },
   'workspace.status.line': { text: '工作区状态：{status}', params: ['status'] },
   'workspace.status.loading': { text: '正在读取工作区状态…', params: [] },
+  'workspace.status.reason.workspaceRootUnset': {
+    text: '未配置项目根，本轮不挂文件工具',
+    params: [],
+  },
   'workspace.status.reason.workspaceRootMissing': { text: '项目根不存在或不可读', params: [] },
   'workspace.status.reason.dockerUnavailable': { text: 'Docker 后端不可用', params: [] },
   'workspace.status.reason.dockerImageMissing': { text: 'Docker 镜像不存在或无法拉取', params: [] },

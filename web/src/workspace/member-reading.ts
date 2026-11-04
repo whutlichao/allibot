@@ -160,7 +160,7 @@ export function applyJoinResult(
         workspace_status: members[0]?.workspace_status ?? {
           backend: 'local',
           available: false,
-          reason: 'workspace-root-missing',
+          reason: 'workspace-root-unset',
         },
         // The shell switch is channel-only; reuse the table's reading.
         allow_local_shell: members[0]?.allow_local_shell ?? 0,

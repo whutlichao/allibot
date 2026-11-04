@@ -1,4 +1,4 @@
-import type { ChannelTeamView, WorkspaceStatusReason } from '@allibot/shared';
+import type { ChannelTeamView, WorkspaceFailureReason } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { tFromDb } from './copy.js';
@@ -150,7 +150,7 @@ type AvailabilityFact =
         | 'consent-missing';
     }
   | { kind: 'credential-missing'; credentialEnv: string }
-  | { kind: 'workspace-unavailable'; reason: WorkspaceStatusReason };
+  | { kind: 'workspace-unavailable'; reason: WorkspaceFailureReason };
 
 /**
  * The shared D3.8 fact read. The leader and the TeamAssign target ask the same

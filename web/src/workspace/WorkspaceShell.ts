@@ -1,6 +1,7 @@
 import {
   t,
   type AgentMcpView,
+  type AgentProvider,
   type AgentRulesView,
   type AgentSkillCandidatesView,
   type AgentSkillDetailView,
@@ -12,6 +13,7 @@ import {
   type PermissionRuleInput,
   type PermissionRuleView,
   type PlanRunView,
+  type RemoteDataFlowReadView,
   type SopDefinitionCreate,
   type SopDefinitionView,
   type SopRunView,
@@ -85,6 +87,10 @@ export interface WorkspaceShellProps {
   sopRuns?: Record<string, readonly SopRunView[]>;
   /** Agent-home mcp.json readings, keyed by Agent id. */
   agentMcp?: Record<string, AgentMcpView>;
+  /** `GET /api/remote-data-flow`: provider credential variables and consent. */
+  remoteDataFlow?: RemoteDataFlowReadView;
+  /** The one-time provider consent write; absent = no confirmation entry. */
+  onConfirmProviderConsent?: (provider: AgentProvider) => void | Promise<void>;
   /** Read the Agent's mcp.json when the detail opens; the host fetches. */
   onAgentMcpNeeded?: (agentId: string) => void;
   /** The one mcp.json write shared by the structured form and raw textarea. */
@@ -210,6 +216,8 @@ export function WorkspaceShell({
   agentRules,
   onAgentRulesNeeded,
   agentMcp,
+  remoteDataFlow,
+  onConfirmProviderConsent,
   onAgentMcpNeeded,
   onAgentMcpChange,
   agentSkills,
@@ -450,6 +458,8 @@ export function WorkspaceShell({
           workspace,
           members: selectedMembers,
           locale,
+          remoteDataFlow,
+          onOpenAgentDetail: (memberId: string) => openPanel('agent-detail', memberId),
           onJoin:
             selectedTargetId === null || onJoinMember === undefined
               ? undefined
@@ -481,6 +491,8 @@ export function WorkspaceShell({
             agent: selectedAgent,
             locale,
             rules: agentRules?.[selectedAgent.id] ?? null,
+            remoteDataFlow,
+            onConfirmConsent: onConfirmProviderConsent,
             mcp: agentMcp?.[selectedAgent.id] ?? null,
             onMcpChange:
               onAgentMcpChange === undefined

@@ -1,5 +1,6 @@
 import type {
   AgentMcpView,
+  AgentProvider,
   AgentSkillCandidatesView,
   AgentSkillDetailView,
   AgentSkillsView,
@@ -11,6 +12,8 @@ import type {
   PermissionMode,
   PermissionRuleInput,
   PermissionRuleView,
+  RemoteConsentView,
+  RemoteDataFlowReadView,
   SopDefinitionCreate,
   SopDefinitionView,
   SkillImportAllView,
@@ -64,6 +67,26 @@ export async function readTargetMembers(
     `GET target ${targetId} members`,
   );
   return body.members ?? [];
+}
+
+/** `GET /api/remote-data-flow`: provider credential variable names and consent. */
+export async function readRemoteDataFlow(
+  fetchImpl: typeof fetch,
+): Promise<RemoteDataFlowReadView> {
+  const response = await fetchImpl('/api/remote-data-flow');
+  return readJson<RemoteDataFlowReadView>(response, 'GET remote data flow');
+}
+
+/** `POST /api/remote-data-flow/{provider}/consent`: one-time consent row. */
+export async function confirmProviderDataFlow(
+  fetchImpl: typeof fetch,
+  provider: AgentProvider,
+): Promise<RemoteConsentView> {
+  const response = await fetchImpl(
+    `/api/remote-data-flow/${encodeURIComponent(provider)}/consent`,
+    { method: 'POST' },
+  );
+  return readJson<RemoteConsentView>(response, `POST ${provider} consent`);
 }
 
 /** 加入频道：后端返回 `{joined}`；重复加入返回 `joined: false`，不抛错。 */

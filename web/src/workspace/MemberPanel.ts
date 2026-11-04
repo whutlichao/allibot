@@ -1,4 +1,10 @@
-import { t, type Locale, type TargetMemberView, type WorkspaceView } from '@allibot/shared';
+import {
+  t,
+  type Locale,
+  type RemoteDataFlowReadView,
+  type TargetMemberView,
+  type WorkspaceView,
+} from '@allibot/shared';
 import { createElement, useState, type ReactNode } from 'react';
 import type { AsyncAction1 } from '../async-action.ts';
 import { Avatar, type AvatarSlot } from '../components/Avatar.ts';
@@ -11,6 +17,13 @@ export interface MemberPanelProps {
   /** 当前频道的成员表；undefined 表示还没读到，不把「未加入」当成事实。 */
   members: readonly TargetMemberView[] | undefined;
   locale: Locale;
+  /** The provider credential/consent reading; names `credential_env` by provider. */
+  remoteDataFlow?: RemoteDataFlowReadView;
+  /**
+   * Open the Agent detail, where a missing consent can be confirmed. The panel
+   * itself never confirms or writes; it only points at that entry.
+   */
+  onOpenAgentDetail?: (memberId: string) => void;
   /**
    * 加入频道：由宿主调用 `POST /api/channels/{id}/members`，Promise 完成
    * 后成员表已更新。面板不自己发请求，也不在响应前移动任何一行。
@@ -26,7 +39,14 @@ export interface MemberPanelProps {
  * 这里用 createElement 而不是 JSX：Node 的类型剥离不处理 JSX，
  * 组件级 SSR 契约测试需要直接 import 本文件。
  */
-export function MemberPanel({ workspace, members, locale, onJoin }: MemberPanelProps) {
+export function MemberPanel({
+  workspace,
+  members,
+  locale,
+  remoteDataFlow,
+  onOpenAgentDetail,
+  onJoin,
+}: MemberPanelProps) {
   const [joiningId, setJoiningId] = useState<string | null>(null);
   const [joinFailed, setJoinFailed] = useState(false);
 
@@ -47,7 +67,7 @@ export function MemberPanel({ workspace, members, locale, onJoin }: MemberPanelP
   function memberRow(row: MemberRowView, joined: boolean): ReactNode {
     const reason =
       row.status === 'offline' && row.offlineReason !== null
-        ? offlineReasonLabel(locale, row.offlineReason)
+        ? offlineReasonLabel(locale, row.offlineReason, row.model, remoteDataFlow)
         : null;
     return createElement(
       'li',
@@ -79,6 +99,19 @@ export function MemberPanel({ workspace, members, locale, onJoin }: MemberPanelP
             ),
       ),
       row.status === null ? null : createElement(StatusPoint, { status: row.status, locale }),
+      joined && row.offlineReason === 'consent-missing' && onOpenAgentDetail !== undefined
+        ? createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'member-panel__action',
+              'data-action': 'open-agent-detail',
+              'data-member-id': row.id,
+              onClick: () => onOpenAgentDetail(row.id),
+            },
+            t(locale, 'workspace.member.consent.openDetail'),
+          )
+        : null,
       joined || onJoin === undefined
         ? null
         : createElement(

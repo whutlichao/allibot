@@ -21,7 +21,9 @@ import {
   modeChangePatch,
   rootChangePatch,
   workspaceStatusCopy,
+  workspaceStatusState,
 } from './channel-config.ts';
+import { ContextFold } from './ContextFold.ts';
 import { PermissionRulesEditor } from './PermissionRulesEditor.ts';
 import {
   channelPermissionModePatch,
@@ -44,6 +46,8 @@ export interface ChannelConfigPanelProps {
   permissionRules?: readonly PermissionRuleView[];
   /** The full-replacement rule write; absent = read-only display. */
   onPermissionRulesChange?: (rules: PermissionRuleInput[]) => void | Promise<void>;
+  /** The right drawer folds the rule set so the column keeps one open block. */
+  foldPermissionRules?: boolean;
 }
 
 function modeLabel(locale: Locale, mode: ChannelMode): string {
@@ -78,6 +82,7 @@ export function ChannelConfigPanel({
   onTeamConfigChange,
   permissionRules,
   onPermissionRulesChange,
+  foldPermissionRules = false,
 }: ChannelConfigPanelProps) {
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
@@ -283,7 +288,7 @@ export function ChannelConfigPanel({
           'p',
           {
             className: 'channel-config__workspace-status',
-            'data-workspace-status': workspaceStatus.available ? 'available' : 'unavailable',
+            'data-workspace-status': workspaceStatusState(workspaceStatus),
             'data-workspace-reason': workspaceStatus.reason ?? '',
             role: 'status',
           },
@@ -384,12 +389,28 @@ export function ChannelConfigPanel({
       ),
     ),
     workspaceControls,
-    createElement(PermissionRulesEditor, {
-      key: `channel-rules:${channel.id}`,
-      rules: permissionRules,
-      locale,
-      onSave: onPermissionRulesChange,
-    }),
+    foldPermissionRules
+      ? createElement(
+          ContextFold,
+          {
+            section: 'permission-rules',
+            title: t(locale, 'workspace.permission.rules.title'),
+          },
+          createElement(PermissionRulesEditor, {
+            key: `channel-rules:${channel.id}`,
+            rules: permissionRules,
+            locale,
+            onSave: onPermissionRulesChange,
+            showTitle: false,
+          }),
+        )
+      : createElement(PermissionRulesEditor, {
+          key: `channel-rules:${channel.id}`,
+          rules: permissionRules,
+          locale,
+          onSave: onPermissionRulesChange,
+          showTitle: true,
+        }),
     members === undefined
       ? createElement(
           'p',

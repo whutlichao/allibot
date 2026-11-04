@@ -4,7 +4,12 @@ import { test } from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { HttpAgent } from '@copilotkit/react-core/v2';
-import type { AgentView, TargetMemberView, WorkspaceView } from '@allibot/shared';
+import type {
+  AgentView,
+  RemoteDataFlowReadView,
+  TargetMemberView,
+  WorkspaceView,
+} from '@allibot/shared';
 import { ALLIBOT_AGENT_ID } from '../src/copilotkit-contract.ts';
 
 import {
@@ -24,7 +29,12 @@ import {
   readMemberPanel,
   readMemberRoster,
 } from '../src/workspace/member-reading.ts';
-import { joinChannelMember, readChannelMembers } from '../src/workspace-actions.ts';
+import {
+  confirmProviderDataFlow,
+  joinChannelMember,
+  readChannelMembers,
+  readRemoteDataFlow,
+} from '../src/workspace-actions.ts';
 import { hydrateThread } from '../src/workspace/message-sync.ts';
 import { ContextPanel } from '../src/workspace/ContextPanel.ts';
 import { WorkspaceShell } from '../src/workspace/WorkspaceShell.ts';
@@ -146,6 +156,29 @@ function panelRegion(html: string, name: string): string {
   const next = html.indexOf('data-tab-panel="', start + 1);
   return html.slice(start, next === -1 ? undefined : next);
 }
+
+/** The backend reading that supplies each provider's credential variable name. */
+const REMOTE_DATA_FLOW: RemoteDataFlowReadView = {
+  data_surfaces: ['消息正文'],
+  providers: [
+    {
+      provider: 'anthropic',
+      credential_env: 'ANTHROPIC_API_KEY',
+      credential_status: 'missing',
+      receiver: 'https://api.anthropic.com',
+      confirmed_at: null,
+    },
+    {
+      provider: 'openai',
+      credential_env: 'OPENAI_API_KEY',
+      credential_status: 'missing',
+      receiver: 'https://api.openai.com/v1',
+      confirmed_at: null,
+    },
+  ],
+  mcp_consents: [],
+  docker_consents: [],
+};
 
 test('the Agent detail renders the three tabs in the fixed order', () => {
   assert.deepEqual([...AGENT_DETAIL_TABS], ['basic', 'skills', 'mcp']);
@@ -271,6 +304,7 @@ test('the member panel splits joined and not-joined Agents with status, model an
       workspace: reading,
       members: channelMembers(),
       locale: 'zh-CN',
+      remoteDataFlow: REMOTE_DATA_FLOW,
       onJoin: async () => {},
     }),
   );
@@ -283,9 +317,125 @@ test('the member panel splits joined and not-joined Agents with status, model an
   assert.ok(!joined.includes('anthropic:claude-sonnet-5-5'));
   assert.ok(notJoined.includes('anthropic:claude-sonnet-5-5'), 'each row shows the model identifier');
   assert.ok(joined.includes('缺少凭证'), 'the offline row states why it is not enabled');
+  assert.ok(
+    joined.includes('OPENAI_API_KEY'),
+    'the offline row names the credential variable from /api/remote-data-flow',
+  );
+  assert.ok(joined.includes('重启后端'), 'the offline row says what to do after setting it');
   assert.ok(joined.includes('未启用'), 'the offline row shows the status point');
   assert.match(notJoined, /data-action="join-member"[^>]*data-member-id="agent-2"/, 'only not-joined rows can be joined');
   assert.doesNotMatch(joined, /data-action="join-member"/, 'joined rows carry no join control');
+});
+
+test('the Agent detail names the credential env and offers the consent entry', () => {
+  const credential = renderToStaticMarkup(
+    createElement(AgentDetailPanel, {
+      agent: agent({
+        id: OFFLINE_ID,
+        display_name: '阿灰',
+        avatar_slot: 3,
+        credential_status: 'missing',
+        status: 'offline',
+        offline_reason: 'credential-missing',
+      }),
+      locale: 'zh-CN',
+      remoteDataFlow: REMOTE_DATA_FLOW,
+    }),
+  );
+  assert.ok(credential.includes('OPENAI_API_KEY'), 'the detail names the variable to set');
+  assert.ok(credential.includes('重启后端'), 'the detail says when the setting takes effect');
+
+  const consent = renderToStaticMarkup(
+    createElement(AgentDetailPanel, {
+      agent: agent({
+        id: 'agent-4',
+        display_name: '阿橙',
+        avatar_slot: 4,
+        model: 'anthropic:claude-sonnet-5-5',
+        status: 'offline',
+        offline_reason: 'consent-missing',
+      }),
+      locale: 'zh-CN',
+      remoteDataFlow: REMOTE_DATA_FLOW,
+      onConfirmConsent: async () => {},
+    }),
+  );
+  assert.ok(consent.includes('远端数据流告知'), 'the detail says consent is missing');
+  assert.match(consent, /data-action="confirm-consent"/, 'the detail offers the confirmation');
+  assert.match(consent, /data-provider="anthropic"/, 'the entry names the provider to confirm');
+});
+
+test('the member panel points a consent-missing row at the Agent detail entry', () => {
+  const base = workspace();
+  const consentAgent = agent({
+    id: 'agent-4',
+    display_name: '阿橙',
+    avatar_slot: 4,
+    model: 'anthropic:claude-sonnet-5-5',
+    status: 'offline',
+    offline_reason: 'consent-missing',
+  });
+  const reading: WorkspaceView = {
+    ...base,
+    agents: [...base.agents, consentAgent],
+    status_points: {
+      ...base.status_points,
+      'agent-4': { status: 'offline', offline_reason: 'consent-missing' },
+    },
+  };
+  const members: TargetMemberView[] = [
+    ...channelMembers(),
+    {
+      id: 'agent-4',
+      kind: 'agent',
+      display_name: '阿橙',
+      avatar_slot: 4,
+      workspace_status: { backend: 'local', available: false, reason: 'workspace-root-unset' },
+      allow_local_shell: 0,
+      permission_mode: 'ask-writes',
+    },
+  ];
+  const html = renderToStaticMarkup(
+    createElement(MemberPanel, {
+      workspace: reading,
+      members,
+      locale: 'zh-CN',
+      remoteDataFlow: REMOTE_DATA_FLOW,
+      onOpenAgentDetail: () => {},
+    }),
+  );
+  assert.ok(html.includes('远端数据流告知'), 'the row says consent is missing');
+  assert.match(
+    html,
+    /data-action="open-agent-detail"[^>]*data-member-id="agent-4"/,
+    'the row points at the Agent detail where confirmation lives',
+  );
+});
+
+test('the remote-data-flow read and provider consent write hit the one HTTP face', async () => {
+  const calls: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    calls.push(`${init?.method ?? 'GET'} ${url}`);
+    const body =
+      init?.method === 'POST'
+        ? { provider: 'anthropic', confirmed_at: '2026-11-04T00:00:00.000Z' }
+        : REMOTE_DATA_FLOW;
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  assert.deepEqual(await readRemoteDataFlow(fetchImpl), REMOTE_DATA_FLOW);
+  assert.deepEqual(await confirmProviderDataFlow(fetchImpl, 'anthropic'), {
+    provider: 'anthropic',
+    confirmed_at: '2026-11-04T00:00:00.000Z',
+  });
+  assert.deepEqual(calls, [
+    'GET /api/remote-data-flow',
+    'POST /api/remote-data-flow/anthropic/consent',
+  ]);
 });
 
 test('a join moves the row only after the backend answers with {joined}', async () => {

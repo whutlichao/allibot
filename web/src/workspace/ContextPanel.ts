@@ -13,8 +13,9 @@ import {
   type PermissionRuleView,
 } from '@allibot/shared';
 import { createElement, type ReactNode } from 'react';
-import { workspaceStatusCopy } from './channel-config.ts';
+import { workspaceStatusCopy, workspaceStatusState } from './channel-config.ts';
 import { ChannelConfigPanel } from './ChannelConfigPanel.ts';
+import { ContextFold } from './ContextFold.ts';
 import { PlanPanel } from './PlanPanel.ts';
 import { SopPanel } from './SopPanel.ts';
 import { TeamRunsPanel } from './TeamRunsPanel.ts';
@@ -151,9 +152,7 @@ export function ContextPanel({
               'data-workspace-status':
                 targetWorkspaceStatus === undefined
                   ? 'loading'
-                  : targetWorkspaceStatus.available
-                    ? 'available'
-                    : 'unavailable',
+                  : workspaceStatusState(targetWorkspaceStatus),
               'data-workspace-reason': targetWorkspaceStatus?.reason ?? '',
             },
             targetWorkspaceStatus === undefined
@@ -183,6 +182,7 @@ export function ContextPanel({
                 onTeamConfigChange: onChannelConfigChange,
                 permissionRules,
                 onPermissionRulesChange,
+                foldPermissionRules: true,
               }),
           context.taskStatus === null
             ? null
@@ -201,15 +201,23 @@ export function ContextPanel({
             : null,
           channel === null
             ? null
-            : createElement(SopPanel, {
-                channel,
-                definitions: sopDefinitions ?? [],
-                runsByDefinition: sopRuns,
-                members: channelMembers,
-                locale,
-                onCreate: onCreateSop,
-                onStart: onStartSop,
-              }),
+            : createElement(
+                ContextFold,
+                {
+                  section: 'sop',
+                  title: t(locale, 'workspace.sop.title'),
+                },
+                createElement(SopPanel, {
+                  channel,
+                  definitions: sopDefinitions ?? [],
+                  runsByDefinition: sopRuns,
+                  members: channelMembers,
+                  locale,
+                  onCreate: onCreateSop,
+                  onStart: onStartSop,
+                  showTitle: false,
+                }),
+              ),
           showsPlan
             ? createElement(PlanPanel, {
                 plans: plans ?? [],
