@@ -230,9 +230,9 @@ test('the detail keeps the mcp panel mounted while another tab is shown, so draf
   assert.match(mcp, /data-action="save-mcp-entries"/);
   assert.match(mcp, /data-action="save-mcp-raw"/);
 
-  // The mcp tab is still the third fixed tab and the skills placeholder stays.
+  // The mcp tab is still the third fixed tab; the skills panel stays mounted.
   const tabs = [...html.matchAll(/data-tab="([^"]+)"/g)].map((match) => match[1]);
   assert.deepEqual(tabs, ['basic', 'skills', 'mcp']);
-  assert.match(panelRegion(html, 'skills'), /依赖规格 T11/);
+  assert.match(panelRegion(html, 'skills'), /data-section="skills"/);
   assert.match(html, /data-tab-panel="mcp"/);
 });
