@@ -14,7 +14,7 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 写类（`Write` / `Edit`）、执行类（`Bash` / MCP）、编排类（`TeamAssign` / `transfer_task` / Plan 的写工具）与 SOP 的 `SopVerdict` 通道留给后续批次，但它们在本规格里**先定契约**（尤其是审批在循环里的语义与 `SopVerdict` 的通道），避免下一批重新吵一遍。
 
-循环的边界是三条纪律。其一，**只落最终文本**：工具调用之间的中间文本不落库，只有循环结束（模型不再请求工具）后的那段文本成为本轮的回复，与既有的「一轮 ↔ 至多一条 target 消息」一致。其二，**上限复用 `max_iterations`**（默认 10，人类面已可编辑）：撞上限时本轮以 `replied` 收口，把已经在手的部分结论落成消息，`finished_reason` 读既有词条「达到迭代上限」——与脚本化 `iteration-limit` 逐字一致，消费游标照常推进，同一条消息不会被下一次唤醒重读。其三，**失败分层**：provider 网络错 / 超时 / 响应不可解析 → 轮次 `failed`；工具自身的失败（路径越界、文件不存在、审批拒绝）→ 作为一个工具结果回灌给模型，由模型改道，绝不当轮次失败。
+循环的边界是三条纪律。其一，**只落最终文本**：工具调用之间的中间文本不落库，只有循环结束（模型不再请求工具）后的那段文本成为本轮的回复，与既有的「一轮 ↔ 至多一条 target 消息」一致。其二，**上限复用 `max_iterations`**（默认 10，人类面已可编辑）：撞上限时本轮以 `replied` 收口，把已经在手的部分结论落成消息，`finished_reason` 读既有词条「达到迭代上限」——与脚本化 `iteration-limit` 逐字一致，消费游标照常推进，同一条消息不会被下一次唤醒重读；唯一例外是撞上限时还没有任何产出文本，那按空补全收口 `failed`。其三，**失败分层**：provider 网络错 / 超时 / 响应不可解析 → 轮次 `failed`；工具自身的失败（路径越界、文件不存在、审批拒绝）→ 作为一个工具结果回灌给模型，由模型改道，绝不当轮次失败。
 
 ## User Stories
 
@@ -62,7 +62,7 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 **D5 工具结果整形与回灌。** 工具结果转成 provider 自己的 result 形状：Anthropic 用 `tool_result` 内容块（`is_error` 表达失败），OpenAI 兼容用 `role: "tool"` + `tool_call_id`。回灌内容对模型是**结构化摘要 + 必要正文**，不是原始 JSON 倾倒。失败结果的 `error` 稳定码原样保留（`outside-root` / `not-found` / `denied` 等），让模型能区分"路径越界"与"文件不存在"。
 
-**D6 结果大小上限（回灌层新增，文件工具侧不改）。** 文件工具本身**没有**「已截断」事实：`Read` 超过读取上限直接回 `io-error`（`file is too large to read`），`Grep` 命中数静默封顶（`MAX_GREP_MATCHES = 200`），而 `output_truncated` 只属于 `RoundShellResult`，与文件工具无关。因此本批在**回灌层**新增两件事：其一，把回灌给模型的内容压到总量上限，截断处写明「已截断」并给出已给 / 未给的规模提示（语言走词条）；其二，把 `Grep` 的 200 条封顶**显式写进回灌结果**，否则模型会把「只返回 200 条」读成「只匹配 200 条」。截断只作用于模型看到的那一份，不改文件工具自身的返回，也不改 `RoundFileToolResult`，因此既有测试不变。上限是常量，不进 schema，不做每 Agent 配置。
+**D6 结果大小上限（回灌层新增，文件工具侧不改）。** 文件工具本身**没有**「已截断」事实：`Read` 超过读取上限直接回 `io-error`（`file is too large to read`），`Grep` 命中数静默封顶（`MAX_GREP_MATCHES = 200`），而 `output_truncated` 只属于 `RoundShellResult`，与文件工具无关。因此本批在**回灌层**新增两件事：其一，把回灌给模型的内容压到总量上限，截断处写明「已截断」并给出已给 / 未给的规模提示（语言走词条）；其二，把 `Grep` 的 200 条封顶**显式写进回灌结果**，否则模型会把「只返回 200 条」读成「只匹配 200 条」。这一条需要文件工具给出事实：`RoundFileToolResult` 新增一个可选 `capped` 事实（只加字段，既有字段语义与既有断言不变），回灌文案据此说「命中已封顶」——不靠 `matches.length === MAX_GREP_MATCHES` 的启发式，因为恰好 200 条完整匹配与封顶在结果上无法区分。截断与封顶标记都只影响模型看到的那一份。上限是常量，不进 schema，不做每 Agent 配置。
 
 **D7 只落最终文本。** 循环内的中间文本（模型在请求工具前说的话）不落库、不进 `replies` 之外的任何面。循环结束时把最后一段文本作为唯一一条 pending reply；为空则按既有「空补全」规则收口为失败。`replies` 的上限纪律（一轮至多落一条 target 消息）不变。
 
@@ -70,9 +70,9 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 **D9 失败分层。** provider 网络错误、超时（既有 60 秒单次调用超时）、响应不可解析、缺 consent / 缺凭证 → 轮次 `failed`，`reason` 可读且密钥掩码规则不变（`maskSecret` 继续在 reason 落库前生效）。工具失败、参数校验失败、审批拒绝 → 工具结果，轮次继续。区分判据是"错误来自 provider 链路还是来自工具面"。
 
-**D10 审批在循环里的语义（为后续批次先定）。** 需要审批的调用在循环内**阻塞等待** `RoundPermissionFace.authorize`。人类批准即继续执行；**拒绝**作为 `DENIED` 工具结果回灌，模型继续循环——拒绝是结果，不是轮次失败。**超时不回灌**：等满 600 秒批次后 `authorize` 抛 `ApprovalTimeoutError`，本轮按 ADR-0007 决定 6 收口 `failed`，可读 reason 走既有词条。循环不得把超时伪装成一个工具结果，否则一个没人看的轮次会一直续跑到上限。选择阻塞而非「暂停轮次、决定后重开」的理由写在 ADR 0009；本决策**沿用** 0007，不改它。第一批的只读工具不触达审批，本决策只是把后续批次的形状钉死。
+**D10 审批在循环里的语义（为后续批次先定）。** 需要审批的调用在循环内**阻塞等待** `RoundPermissionFace.authorize`。人类批准即继续执行；**拒绝**作为 `DENIED` 工具结果回灌，模型继续循环——拒绝是结果，不是轮次失败。**超时不回灌**：等满 600 秒批次后 `authorize` 抛 `ApprovalTimeoutError`，本轮按 ADR-0007 决定 6 收口 `failed`，可读 reason 走既有词条。循环不得把超时伪装成一个工具结果，否则一个没人看的轮次会一直续跑到上限。选择阻塞而非「暂停轮次、决定后重开」的理由写在 ADR 0009；本决策**沿用** 0007，不改它。第一批的只读工具在默认路径上不触达审批（`read` 类落到 `mode-allow`），但一条 `permission_rule(Read|Glob|Grep, …, ask)` 会让它们触达：`Read` 在文件工具内部就调 `authorize`，而 `checkPermission` 的规则合并先于模式默认（`rule-ask` 分支），此时同样阻塞等待、超时同样收口 `failed`。多批重开沿用 ADR-0007 决定 5：同一 reply 的新批次重开已 resolved 的记录、合并 `tool_calls`、只发布新调用；循环对每个批次只看到一个最终决定。本批**不**引入「每轮审批批次上限」的抑制规则，所以一条 `ask` 规则可以让一个只读轮次占满一个 600 秒批次。这是接受的风险，不是遗漏。
 
-**D11 `SopVerdict` 的通道（为后续批次先定）。** `RoundResult` 已经有结构化出口 `sopVerdict?: 'pass' | 'fail'`，本决策只锁定它的**取值来源**：一个专用工具（`internal` 类，只返回 `pass` / `fail`），由适配器把该工具调用映射到既有字段。不解析 `replies` 的散文，也不为两家 provider 各写一套结构化输出（OpenAI 的 `response_format` / Anthropic 的文本协议）。本批不实现该工具；本决策只锁定通道，避免下一批在「两家不一致」和「解析散文」之间再选一次。
+**D11 `SopVerdict` 的通道（为后续批次先定）。** `RoundResult` 已经有结构化出口 `sopVerdict?: 'pass' | 'fail'`，本决策只锁定它的**取值来源**：一个专用工具（`internal` 类，只返回 `pass` / `fail`），由适配器把该工具调用映射到既有字段。不解析 `replies` 的散文，也不为两家 provider 各写一套结构化输出（OpenAI 的 `response_format` / Anthropic 的文本协议）。同一条通道也适用于 #51 缺口 3 的另一半：`RoundResult.taskAction` 与 `taskTransferMemberId` 是既有的结构化任务动作出口（`continue_task` / `transfer_task` 等），真实模型的取值同样来自专用工具（`internal` 类），不靠解析散文决定「我要续跑」还是「我要转派」。本批不实现这些工具；本决策只锁定通道，避免下一批在「两家不一致」和「解析散文」之间再选一次。
 
 **D12 不新增可观测面。** AG-UI 契约不加 `TOOL_CALL_*` 事件，前端本批看不到工具调用；`RoundResult` 不新增字段。工具调用的可观测性留到明确需要时再开（届时是一次契约扩展，不是本规格的遗漏）。
 
@@ -80,7 +80,7 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 ## Testing Decisions
 
-**唯一 seam 不变。** 测试仍然只穿越后端 HTTP 面：真实后端进程 + 临时数据目录 + 注入 provider。本批新增的注入点是**假 provider HTTP server**——一个进程内 HTTP 服务，随机端口，返回 Anthropic `/v1/messages` 或 OpenAI `/chat/completions` 形状的响应，测试结束即关。它与 M2 的假 MCP 测试服务器同形，是 seam 的注入口，不是第二条 seam。真实网络与真实模型密钥仍然禁止。
+**唯一 seam 不变。** 测试仍然只穿越后端 HTTP 面：真实后端进程 + 临时数据目录 + 注入 provider。provider 侧**复用**既有的 `startRecordingEndpoint`（`server/test/support.ts`：`127.0.0.1` + `listen(0)` 随机端口、录请求、`respondWith` 换应答、跑完 `stop`）。它已经按路径分别返回 Anthropic `/v1/messages` 与 OpenAI `/chat/completions` 两种形状（`defaultProviderReply`），本批只加 tool 形状的应答，不改它的形状、不新开注入点。它是 seam 的注入口，不是第二条 seam；真实网络与真实模型密钥仍然禁止。先例：`server/test/remote-data-flow-http.test.ts`。
 
 **好测试的标准。** 只断言外部行为：HTTP 响应、SSE 帧、SQLite 行、AG-UI 事件顺序。不断言适配器内部的循环次数、不断言中间消息数组的形状、不断言某个私有方法被调用。
 
@@ -118,6 +118,6 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 **批次建议（供 to-tickets 用）。** 第二批：写类与执行类工具 + 审批在循环内的实跑；第三批：编排类工具（TeamAssign / transfer_task / Plan 写工具）；第四批：`SopVerdict` 与 SOP verifier 的真实模型路径。每批都必须在同一 seam 上留下外部行为断言。
 
-**词条缺口。** 本规格引入一个承重说法「轮内工具循环」（round-level tool loop），`GLOSSARY.md` 里没有这个词条。按 `docs/agents/domain.md` 的纪律，缺词要么是发明了项目不用的语言、要么是真缺口：这里是后者——它是 `RoundProvider` 接缝内部的新行为，不与任何已有词条同义（`工具闸门` 管的是判定顺序，`轮次` 管的是唤醒到收口，都不覆盖「一次调用内的多次 model↔tool 往返」）。本规格不新增 / 不改写 GLOSSARY 正文；若后续实现票需要公开这个说法，走一次 domain-modeling 补词条，而不是在代码里造同义词。
+**词条缺口。** 本规格引入一个承重说法「轮内工具循环」（round-level tool loop），`GLOSSARY.md` 里没有这个词条。按 `docs/agents/domain.md` 的纪律，缺词要么是发明了项目不用的语言、要么是真缺口：这里是后者——它是 `RoundProvider` 接缝内部的新行为，不与任何已有词条同义（ADR-0007 的工具闸门管的是判定顺序，`轮次` 管的是唤醒到收口，都不覆盖「一次调用内的多次 model↔tool 往返」）。本规格不新增 / 不改写 GLOSSARY 正文；若后续实现票需要公开这个说法，走一次 domain-modeling 补词条，而不是在代码里造同义词。
 
 **与 M2 A1 限制的关系。** 本规格实施完成后，`docs/deployment.md` 的「真实模型 provider 的已知限制（M2 A1）」一节必须改写：限制从"真实模型没有工具循环"变成"哪几类工具已进循环、哪几类仍是脚本化专用"。那条限制是部署事实，不能靠代码合入自动过期。
