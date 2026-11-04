@@ -16,15 +16,16 @@ import {
 } from './support.ts';
 
 /**
- * 轮内工具循环 (#57 / D1 / D2 / D3 / D5 / D7): the real model adapter runs
- * model → tool → model round trips inside one `runRound` call and lands only
- * the final text.
+ * 轮内工具循环 (#57 / #58 / D1 / D2 / D3 / D5 / D7 / D9): the real model adapter
+ * runs model → tool → model round trips inside one `runRound` call and lands
+ * only the final text.
  *
  * The one seam is still the backend HTTP face: a real process, a temporary data
  * directory, and `startRecordingEndpoint` answering in the provider's own wire
- * shape. The matrix is parameterised by provider (`PROVIDER_ROWS`); this ticket
- * carries the Anthropic row, and the OpenAI-compatible row (#58) must run the
- * same assertions without changing them.
+ * shape. The matrix is parameterised by provider (`PROVIDER_ROWS`) and is the
+ * only source of these cases: both rows run the same scenarios and the same
+ * assertions, so a parsing fix on one side cannot silently diverge from the
+ * other.
  */
 
 /** The sentinel credential the recording endpoint's env carries. */
@@ -78,6 +79,16 @@ interface ProviderRow {
   toolResults: (payload: Record<string, unknown>) => ToolResultShape[];
   /** The assistant tool-call ids the recorded request echoed back. */
   echoedToolCalls: (payload: Record<string, unknown>) => string[];
+  /**
+   * A 200 answer that carries no readable turn: an assistant message this
+   * provider's wire shape cannot read as either text or tool calls.
+   */
+  unparseable: () => RecordedReply;
+  /**
+   * The request body's keys for a round with no tool available, sorted: the
+   * single completion the adapter always sent, and nothing added by the loop.
+   */
+  singleCompletionKeys: readonly string[];
 }
 
 function messagesOf(payload: Record<string, unknown>): Record<string, unknown>[] {
@@ -88,6 +99,10 @@ function messagesOf(payload: Record<string, unknown>): Record<string, unknown>[]
 function blocksOf(message: Record<string, unknown>): Record<string, unknown>[] {
   const content = message['content'];
   return Array.isArray(content) ? (content as Record<string, unknown>[]) : [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 const ANTHROPIC: ProviderRow = {
@@ -155,10 +170,99 @@ const ANTHROPIC: ProviderRow = {
     }
     return ids;
   },
+  unparseable: () => ({ status: 200, body: { content: 'not-a-block-array' } }),
+  singleCompletionKeys: ['max_tokens', 'messages', 'model', 'system'],
 };
 
-/** Every row runs the same assertions; #58 adds the OpenAI-compatible row. */
-const PROVIDER_ROWS: readonly ProviderRow[] = [ANTHROPIC];
+/**
+ * The OpenAI-compatible wire shape: `tools[].function.parameters` out,
+ * `choices[0].message.{content,tool_calls}` in, `role: "tool"` results back.
+ *
+ * OpenAI carries no `is_error` flag, so a failed call states its stable error
+ * code on the result's first line (`[Read] error: outside-root`); that first
+ * line is what this row reads back as the result being an error.
+ */
+const OPENAI: ProviderRow = {
+  label: 'openai',
+  model: 'openai:gpt-5',
+  provider: 'openai',
+  env: (baseUrl) => ({ OPENAI_API_KEY: PROVIDER_KEY, OPENAI_BASE_URL: baseUrl }),
+  path: '/chat/completions',
+  toolCalls: (calls, narration) => ({
+    status: 200,
+    body: {
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: narration ?? null,
+            tool_calls: calls.map((call) => ({
+              id: call.id,
+              type: 'function',
+              function: { name: call.name, arguments: JSON.stringify(call.input) },
+            })),
+          },
+        },
+      ],
+    },
+  }),
+  text: (body) => ({
+    status: 200,
+    body: { choices: [{ message: { role: 'assistant', content: body } }] },
+  }),
+  toolDefinitions: (payload) => {
+    const tools = payload['tools'];
+    if (!Array.isArray(tools)) {
+      return [];
+    }
+    return (tools as Record<string, unknown>[]).map((tool) => {
+      const fn = isRecord(tool['function']) ? tool['function'] : {};
+      return {
+        name: String(fn['name']),
+        description: String(fn['description'] ?? ''),
+        schema: (fn['parameters'] ?? {}) as Record<string, unknown>,
+      };
+    });
+  },
+  toolResults: (payload) => {
+    const results: ToolResultShape[] = [];
+    for (const message of messagesOf(payload)) {
+      if (message['role'] !== 'tool') {
+        continue;
+      }
+      const content =
+        typeof message['content'] === 'string'
+          ? message['content']
+          : JSON.stringify(message['content']);
+      results.push({
+        id: String(message['tool_call_id']),
+        content,
+        isError: /^\[[^\]]+\] error: /.test(content),
+      });
+    }
+    return results;
+  },
+  echoedToolCalls: (payload) => {
+    const ids: string[] = [];
+    for (const message of messagesOf(payload)) {
+      if (message['role'] !== 'assistant' || !Array.isArray(message['tool_calls'])) {
+        continue;
+      }
+      for (const call of message['tool_calls'] as Record<string, unknown>[]) {
+        ids.push(String(call['id']));
+      }
+    }
+    return ids;
+  },
+  unparseable: () => ({
+    status: 200,
+    body: { choices: [{ message: { role: 'assistant', content: null } }] },
+  }),
+  singleCompletionKeys: ['messages', 'model'],
+};
+
+/** Both rows run the same cases; this list is the matrix's only source. */
+const PROVIDER_ROWS: readonly ProviderRow[] = [ANTHROPIC, OPENAI];
 
 interface Fixture {
   tmp: string;
@@ -496,6 +600,11 @@ for (const provider of PROVIDER_ROWS) {
         'a rootless round hands the provider zero tool definitions',
       );
       assert.deepEqual(
+        Object.keys(payload).sort(),
+        [...provider.singleCompletionKeys].sort(),
+        'a round with nothing to call sends exactly the single completion it always did',
+      );
+      assert.deepEqual(
         (await messages(fixture, round.channelId)).map((message) => [message['kind'], message['body']]),
         [
           ['human', '@读文件的成员 你在吗'],
@@ -778,6 +887,79 @@ for (const provider of PROVIDER_ROWS) {
       assert.equal(outcome.status, 'failed');
       assert.ok(
         outcome.reason.includes('500'),
+        `the provider status is the readable reason: ${outcome.reason}`,
+      );
+      assert.equal(outcome.finished_reason, ZH_CN['round.finished.error'].text);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] an unparseable answer fails the round and invents no tool result`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-unreadable-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      fixture.endpoint.respondWith(() => provider.unparseable());
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 读一下 notes.txt');
+
+      assert.equal(
+        fixture.endpoint.requests.length,
+        1,
+        'an answer with no readable turn ends the round instead of feeding anything back',
+      );
+      assert.deepEqual(
+        provider.toolResults(requestPayload(fixture.endpoint.requests[0]!)),
+        [],
+        'an unreadable answer is never turned into a tool result',
+      );
+      assert.deepEqual(
+        (await messages(fixture, round.channelId)).map((message) => message['kind']),
+        ['human'],
+        'an unreadable answer writes no Agent message',
+      );
+      const outcome = roundOutcome(fixture);
+      assert.equal(outcome.status, 'failed');
+      assert.ok(
+        outcome.reason.includes(`${provider.label} response`),
+        `the reason names the provider shape that could not be read: ${outcome.reason}`,
+      );
+      assert.equal(outcome.finished_reason, ZH_CN['round.finished.error'].text);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a non-2xx answer fails the round and invents no tool result`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-status-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      fixture.endpoint.respondWith(() => ({
+        status: 502,
+        body: { error: { message: 'bad gateway' } },
+      }));
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 读一下 notes.txt');
+
+      assert.equal(
+        fixture.endpoint.requests.length,
+        1,
+        'a non-2xx answer ends the round instead of feeding anything back',
+      );
+      assert.deepEqual(
+        provider.toolResults(requestPayload(fixture.endpoint.requests[0]!)),
+        [],
+        'a provider status is never turned into a tool result',
+      );
+      assert.deepEqual(
+        (await messages(fixture, round.channelId)).map((message) => message['kind']),
+        ['human'],
+        'a non-2xx answer writes no Agent message',
+      );
+      const outcome = roundOutcome(fixture);
+      assert.equal(outcome.status, 'failed');
+      assert.ok(
+        outcome.reason.includes('502'),
         `the provider status is the readable reason: ${outcome.reason}`,
       );
       assert.equal(outcome.finished_reason, ZH_CN['round.finished.error'].text);
