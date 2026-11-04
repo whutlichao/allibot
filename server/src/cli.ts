@@ -256,6 +256,7 @@ function createOrchestration(
           teamAssignMemberIds: options.scriptedTeamAssignMemberIds,
           teamAssignInstruction: options.scriptedTeamAssignInstruction,
           teamMemberFail: options.scriptedTeamMemberFail,
+          teamMemberTransferId: options.scriptedTeamMemberTransferId,
           transferMemberId: options.scriptedTransferMemberId,
           shellCommands: options.scriptedShellCommands,
         });

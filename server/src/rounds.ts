@@ -1040,8 +1040,22 @@ async function executeTeamAssignment(
     }
   }
 
+  // A TeamAssign sub-round is a real member round, so the task's current
+  // assignee can use the same structured `transfer_task` action an ordinary
+  // task round can (D3.5). The task target is the only target that offers it;
+  // on a team channel the change wakes the leader with `team-change`.
+  const transferred = await applyAssignmentTransfer(
+    db,
+    provider,
+    inFlight,
+    team,
+    request.member_id,
+    result,
+    context.signal,
+  );
+
   const output = result.replies.join('\n\n').trim();
-  if (!interrupted && result.verdict === 'replied' && output.length > 0) {
+  if (!interrupted && result.verdict === 'replied' && (output.length > 0 || transferred)) {
     const excerpt = truncateTeamAssignmentExcerpt(db, output);
     const closed = closeTeamAssignment(db, assignment.id, 'completed', {
       replyExcerpt: excerpt,
@@ -1080,6 +1094,62 @@ async function executeTeamAssignment(
     code: 'member_failed',
     output: null,
   };
+}
+
+/**
+ * Execute a `transfer_task` action returned by a TeamAssign sub-round (D3.5).
+ * The member is the task's current assignee and the task target belongs to the
+ * assignment's target; the write is the ordinary transfer path (assignee row,
+ * task-thread membership, one system change record). A team channel then
+ * delivers the `team-change` wake to the leader, deferred into the leader's
+ * in-flight round so the tool result still returns first. A refusal writes
+ * nothing and leaves the assignment's own result unchanged.
+ */
+async function applyAssignmentTransfer(
+  db: Database.Database,
+  provider: RoundProvider,
+  inFlight: InFlightRounds,
+  team: TeamTargetState,
+  actorMemberId: string,
+  result: RoundResult,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (result.verdict !== 'replied' || result.taskAction !== 'transfer_task' || team.taskId === null) {
+    return false;
+  }
+  const targetMemberId = result.taskTransferMemberId;
+  if (targetMemberId === undefined || targetMemberId.length === 0) {
+    return false;
+  }
+  const transfer = db.transaction(() =>
+    transferTaskAsMember(db, team.taskId as string, actorMemberId, targetMemberId),
+  )();
+  if (!transfer.ok) {
+    return false;
+  }
+  const state = readTeamTargetState(db, team.targetId, process.env);
+  if (state === null || actorMemberId === state.leaderMemberId) {
+    return true;
+  }
+  if (!state.available) {
+    // The transfer is a task change that should have reached the leader: an
+    // unusable leader leaves the invalid-leader run instead.
+    recordInvalidLeaderRun(db, state);
+    return true;
+  }
+  const wake: Wake = {
+    memberId: state.leaderMemberId,
+    targetId: team.targetId,
+    fromSeq: transfer.assigneeEventSeq,
+    reason: 'team-change',
+  };
+  const leaderTurn = inFlight.get(state.leaderMemberId);
+  if (leaderTurn !== undefined && leaderTurn.targetId === team.targetId) {
+    leaderTurn.deferred.push(wake);
+    return true;
+  }
+  await dispatchWakes(db, provider, [wake], inFlight, { signal });
+  return true;
 }
 
 /**

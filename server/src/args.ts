@@ -89,6 +89,13 @@ export interface CliOptions {
   /** Make the doubled member sub-round fail (a TeamAssign failure case). */
   scriptedTeamMemberFail: boolean;
   /**
+   * The member an injected TeamAssign sub-round hands a task to. It is the
+   * `transfer_task` action (D3.5) inside a leader's assignment, which is the
+   * only HTTP-observable delivery surface for an Agent transfer in a team task
+   * thread; a test injection like every other `--scripted-*` value.
+   */
+  scriptedTeamMemberTransferId: string | undefined;
+  /**
    * The commands a scripted `shell` round asks the production shell face to
    * run. Like every `--scripted-*` value it only configures the test double.
    */
@@ -159,7 +166,8 @@ const USAGE =
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
   '[--scripted-report-calls] [--scripted-report-team] [--scripted-transfer-member <member-id>] ' +
   '[--scripted-team-assign-member <member-id>] [--scripted-team-assign-instruction <text>] ' +
-  '[--scripted-team-member-fail] [--scripted-shell-command <command>] ' +
+  '[--scripted-team-member-fail] [--scripted-team-member-transfer <member-id>] ' +
+  '[--scripted-shell-command <command>] ' +
   '[--fixed-clock <ISO-8601>] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>] ' +
   '[--approval-timeout-ms <ms>] [--shell-env-name <NAME>] [--docker-command <path>]';
 
@@ -186,6 +194,7 @@ export function parseCliArgs(
       'scripted-team-assign-member': { type: 'string', multiple: true },
       'scripted-team-assign-instruction': { type: 'string' },
       'scripted-team-member-fail': { type: 'boolean' },
+      'scripted-team-member-transfer': { type: 'string' },
       'scripted-shell-command': { type: 'string', multiple: true },
       'sse-lifetime-ms': { type: 'string' },
       'reminder-tick-ms': { type: 'string' },
@@ -222,6 +231,7 @@ export function parseCliArgs(
         values['scripted-team-assign-member'] !== undefined ||
         values['scripted-team-assign-instruction'] !== undefined ||
         values['scripted-team-member-fail'] === true ||
+        values['scripted-team-member-transfer'] !== undefined ||
         values['scripted-shell-command'] !== undefined,
     ),
     scriptedProvider: parseScriptedProvider(values['scripted-provider']),
@@ -239,6 +249,9 @@ export function parseCliArgs(
       values['scripted-team-assign-instruction'],
     ),
     scriptedTeamMemberFail: values['scripted-team-member-fail'] === true,
+    scriptedTeamMemberTransferId: parseScriptedTransferMember(
+      values['scripted-team-member-transfer'],
+    ),
     scriptedShellCommands: parseScriptedShellCommands(values['scripted-shell-command']),
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
     reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),

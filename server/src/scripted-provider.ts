@@ -142,6 +142,12 @@ export interface ScriptedProviderOptions {
   /** Make the doubled member sub-round fail instead of answering. */
   teamMemberFail?: boolean;
   /**
+   * Make a doubled TeamAssign sub-round return the structured `transfer_task`
+   * action (D3.5). The production write path still validates the actor, the
+   * target and the task; the double only asks for the action.
+   */
+  teamMemberTransferId?: string;
+  /**
    * The commands a `shell` round asks the production local-shell face to run,
    * in call order. It is a test injection like `--scripted-reply`: each command
    * is what a model would have asked for, and every gate / environment /
@@ -349,6 +355,18 @@ async function teamAssignResult(
         verdict: 'failed',
         replies: [],
         detail: '脚本化 provider：成员子轮次被设定为失败',
+      };
+    }
+    if (
+      options.teamMemberTransferId !== undefined &&
+      input.team?.task_id !== null &&
+      input.team?.task_id !== undefined
+    ) {
+      return {
+        verdict: 'replied',
+        replies: [`[team-transfer] requested:${options.teamMemberTransferId}${callReport}`],
+        taskAction: 'transfer_task',
+        taskTransferMemberId: options.teamMemberTransferId,
       };
     }
     return replyResult(input, options, callReport);
