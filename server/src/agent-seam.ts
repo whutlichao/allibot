@@ -132,6 +132,14 @@ export interface EditFileRequest {
   new_string: string;
 }
 
+/** One file-tool path the adapter may preview without executing the tool. */
+export interface FilePreviewRequest {
+  tool_name: 'Read' | 'Glob' | 'Grep' | 'Write' | 'Edit';
+  path?: string;
+  /** The Glob / Grep subject, when it is the pattern rather than the path. */
+  pattern?: string;
+}
+
 /**
  * The restricted file tools a local round with a project root gets (D5.1).
  * `Read` / `Glob` / `Grep` can read the project root and the member's
@@ -143,6 +151,12 @@ export interface RoundFileTools {
   Grep(request: GrepFileRequest): Promise<RoundFileToolResult>;
   Write(request: WriteFileRequest): Promise<RoundFileToolResult>;
   Edit(request: EditFileRequest): Promise<RoundFileToolResult>;
+  /**
+   * Preview the gate decision for a path. It runs the file tool's own resolver
+   * first and passes the resolved root-internal fact to the gate, so a
+   * symlink-escaped path cannot preview `allow` while the real call is denied.
+   */
+  Preview(request: FilePreviewRequest): Promise<RoundPermissionCheck>;
 }
 
 /** Why a local-shell call did not run (D5.4). */

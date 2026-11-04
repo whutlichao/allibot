@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type {
   EditFileRequest,
+  FilePreviewRequest,
   FileToolErrorCode,
   GlobFileRequest,
   GrepFileRequest,
@@ -9,6 +10,7 @@ import type {
   RoundFileToolResult,
   RoundFileTools,
   RoundGrepMatch,
+  RoundPermissionCheck,
   RoundShell,
   RoundShellResult,
   RunShellRequest,
@@ -61,6 +63,14 @@ interface ResolvedContainerPath {
 }
 
 type PathAction = 'read' | 'write' | 'edit';
+
+const PREVIEW_ACTIONS: Record<string, PathAction | undefined> = {
+  Read: 'read',
+  Glob: 'read',
+  Grep: 'read',
+  Write: 'write',
+  Edit: 'edit',
+};
 
 export interface ContainerFileToolsOptions {
   handle: DockerContainerHandle;
@@ -441,7 +451,35 @@ export function createContainerFileTools(options: ContainerFileToolsOptions): Ro
       .sort();
   }
 
-  return { Read, Glob, Grep, Write, Edit };
+  /**
+   * The adapter preview (D5.5). The container resolver runs first and supplies
+   * the explicit root-internal fact; a path that resolves outside the mounted
+   * roots previews `deny`, never `allow`.
+   */
+  async function Preview(request: FilePreviewRequest): Promise<RoundPermissionCheck> {
+    if (gate === undefined) {
+      return { decision: 'deny', reason: 'rule-deny' };
+    }
+    const action = PREVIEW_ACTIONS[request?.tool_name];
+    if (action === undefined) {
+      return { decision: 'deny', reason: 'rule-deny' };
+    }
+    const resolved = await resolve(request.path ?? '.', action);
+    if (!('containerPath' in resolved)) {
+      return { decision: 'deny', reason: 'rule-deny' };
+    }
+    return gate.check({
+      tool_name: request.tool_name,
+      pattern: resolved.relativePath,
+      arguments: {
+        ...(request.path === undefined ? {} : { path: request.path }),
+        ...(request.pattern === undefined ? {} : { pattern: request.pattern }),
+      },
+      root_internal_write: resolved.root.scope === 'project',
+    });
+  }
+
+  return { Read, Glob, Grep, Write, Edit, Preview };
 }
 
 export interface ContainerShellOptions {
