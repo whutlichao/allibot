@@ -11,11 +11,18 @@ import {
   migrateDataDir,
   openDatabase,
 } from './db.js';
+import { createDockerCliRuntime } from './docker-runtime.js';
+import {
+  DockerWorkspaceManager,
+  dockerImageRef,
+  setDockerWorkspaceManager,
+} from './docker-workspace.js';
 import { HOST, startHttpServer, type OrchestrationRuntime } from './http.js';
 import { acquireDataDirLock } from './lock.js';
 import { setShellEnvNames } from './local-shell.js';
 import { runMcpExport } from './mcp-export.js';
 import { createModelProvider } from './model-provider.js';
+import { hasDockerConsent } from './providers.js';
 import { startReminderScheduler } from './reminders.js';
 import { createInFlightRounds } from './rounds.js';
 import { createScriptedProvider } from './scripted-provider.js';
@@ -139,6 +146,17 @@ async function run(argv: readonly string[]): Promise<number> {
 
   const lock = await acquireDataDirLock(resolution.dataDir);
   const db = openDatabase(resolution.dataDir);
+  // Docker 工作区 (#49 / D5.3): one process manager owns the (member, target)
+  // containers, the availability snapshot and the startup residual cleanup.
+  // The image is the process-level `allibot_DOCKER_IMAGE`; the pull consent is
+  // the v21 `('docker', image_ref)` row.
+  const dockerWorkspace = new DockerWorkspaceManager({
+    runtime: createDockerCliRuntime({ command: options.dockerCommand }),
+    image: dockerImageRef(process.env),
+    dataDir: resolution.dataDir,
+    hasImageConsent: (imageRef) => hasDockerConsent(db, imageRef),
+  });
+  setDockerWorkspaceManager(dockerWorkspace);
   // 运行记录 (#38 / D3.3): a residual `running` run belongs to a round the
   // previous process never concluded. It closes as failed/interrupted before
   // the server accepts work; nothing is replayed or refunded.
@@ -153,6 +171,10 @@ async function run(argv: readonly string[]): Promise<number> {
   // 提醒到点 is a backend fact, not a request: the process ticks on its own.
   // The first pass runs now, so a restart catches up overdue reminders.
   const stopReminders = startReminderScheduler(db, options.reminderTickMs);
+  // A missing daemon is a readable `workspace_runtime` fact, not a startup
+  // failure; residual containers carrying this application's marker are
+  // removed before the process accepts work.
+  await dockerWorkspace.initialize();
   try {
     const orchestration = createOrchestration(options, db);
     // The adapter line precedes the listening line: a caller that waits for
@@ -172,6 +194,10 @@ async function run(argv: readonly string[]): Promise<number> {
     return await waitForShutdown(server);
   } finally {
     stopReminders();
+    // 进程退出停删容器 (D5.3): containers are not persistent workspaces and
+    // never outlive the process that created them.
+    await dockerWorkspace.shutdown();
+    setDockerWorkspaceManager(null);
     db.close();
     await lock.release();
   }

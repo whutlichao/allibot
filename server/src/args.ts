@@ -129,9 +129,17 @@ export interface CliOptions {
    * environment at spawn time and are never stored.
    */
   shellEnvNames: readonly string[];
+  /**
+   * The Docker CLI executable the workspace backend spawns (#49). Production
+   * uses `docker`; automation injects the fake runtime fixture here, so the
+   * container lifecycle is observed without a real daemon.
+   */
+  dockerCommand: string;
 }
 
 const DEFAULT_PORT = 3000;
+/** The Docker CLI production default; `--docker-command` overrides it. */
+const DEFAULT_DOCKER_COMMAND = 'docker';
 /**
  * The production default is the real model adapter. The scripted double is a
  * test injection: `--provider scripted` (or any `--scripted-*` option, which
@@ -153,7 +161,7 @@ const USAGE =
   '[--scripted-team-assign-member <member-id>] [--scripted-team-assign-instruction <text>] ' +
   '[--scripted-team-member-fail] [--scripted-shell-command <command>] ' +
   '[--fixed-clock <ISO-8601>] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>] ' +
-  '[--approval-timeout-ms <ms>] [--shell-env-name <NAME>]';
+  '[--approval-timeout-ms <ms>] [--shell-env-name <NAME>] [--docker-command <path>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -186,6 +194,7 @@ export function parseCliArgs(
       apply: { type: 'boolean' },
       yes: { type: 'boolean' },
       'shell-env-name': { type: 'string', multiple: true },
+      'docker-command': { type: 'string' },
     },
     strict: true,
     allowPositionals: true,
@@ -238,6 +247,7 @@ export function parseCliArgs(
     apply: values.apply === true,
     yes: values.yes === true,
     shellEnvNames: parseShellEnvNames(values['shell-env-name']),
+    dockerCommand: parseDockerCommand(values['docker-command']),
   };
 }
 
@@ -377,6 +387,17 @@ function parseShellEnvNames(raw: readonly string[] | undefined): readonly string
     }
   }
   return names;
+}
+
+/** The Docker CLI path: a non-empty executable name or absolute path. */
+function parseDockerCommand(raw: string | undefined): string {
+  if (raw === undefined) {
+    return DEFAULT_DOCKER_COMMAND;
+  }
+  if (raw.trim().length === 0) {
+    throw new Error('invalid --docker-command value: a path must not be empty');
+  }
+  return raw;
 }
 
 function parseScriptedTeamAssignInstruction(raw: string | undefined): string | undefined {

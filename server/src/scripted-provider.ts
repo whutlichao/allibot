@@ -902,7 +902,7 @@ async function shellResult(
   const shell = workspace.shell;
   const outside = path.join(path.dirname(workspace.root), 'outside-cwd');
   const lines: string[] = [
-    `[shell] enabled:${workspace.allow_local_shell === 1} root:${workspace.root}`,
+    `[shell] enabled:${shell.enabled} root:${workspace.root}`,
     reportShellCall('shell-cwd-dotdot', await shell.run({ command: 'pwd -P', cwd: '..' })),
     reportShellCall(
       'shell-cwd-absolute',

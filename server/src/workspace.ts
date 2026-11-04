@@ -2,6 +2,7 @@ import type { WorkspaceView } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { countPendingApprovals } from './approvals.js';
 import { listChannels } from './channels.js';
+import { readWorkspaceRuntime } from './docker-workspace.js';
 import { listDms } from './dms.js';
 import { listAgents, readOwner } from './members.js';
 import type { InFlightRounds } from './rounds.js';
@@ -44,5 +45,8 @@ export function readWorkspace(
     settings: getSettings(db),
     status_points: readStatusPoints(db, agents, env, inFlight),
     pending_approvals: countPendingApprovals(db),
+    // #49: the process-level Docker availability + image reference. This is a
+    // deployment fact, not a member status point; no credential is read.
+    workspace_runtime: readWorkspaceRuntime(env),
   };
 }

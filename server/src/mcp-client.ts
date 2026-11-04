@@ -208,7 +208,12 @@ export function mcpChildEnvironment(
   return child;
 }
 
-/** stdio transport: the configured command is a host child process. */
+/**
+ * stdio transport. By default the configured command is a host child process;
+ * in the Docker backend (#49) the caller injects `spawnProcess`, which starts
+ * the same command inside the Agent container via `docker exec -i` with cwd
+ * `/workspace`. The JSON-RPC framing is identical on both paths.
+ */
 export function createStdioMcpClient(options: {
   command: string;
   args: readonly string[];
@@ -216,7 +221,12 @@ export function createStdioMcpClient(options: {
   env: NodeJS.ProcessEnv;
   envNames?: readonly string[];
   timeoutMs?: number;
+  /** A container exec process instead of a host child (Docker backend). */
+  spawnProcess?: () => ChildProcessWithoutNullStreams;
+  /** How diagnostics name the process; falls back to the command. */
+  label?: string;
 }): McpClient {
+  const label = options.label ?? options.command;
   let child: ChildProcessWithoutNullStreams | null = null;
   let peer: JsonRpcPeer | null = null;
   let stderrTail = '';
@@ -226,25 +236,26 @@ export function createStdioMcpClient(options: {
     if (child !== null) {
       return;
     }
-    child = spawn(options.command, [...options.args], {
-      cwd: options.cwd,
-      env: mcpChildEnvironment(options.env, options.envNames ?? []),
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    child =
+      options.spawnProcess !== undefined
+        ? options.spawnProcess()
+        : spawn(options.command, [...options.args], {
+            cwd: options.cwd,
+            env: mcpChildEnvironment(options.env, options.envNames ?? []),
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {
       stderrTail = `${stderrTail}${chunk}`.slice(-1000);
     });
     child.on('error', (error) => {
-      peer?.failAll(
-        new Error(`MCP stdio server ${options.command} failed: ${error.message}`),
-      );
+      peer?.failAll(new Error(`MCP stdio server ${label} failed: ${error.message}`));
     });
     child.on('exit', (code, signal) => {
       peer?.failAll(
         new Error(
-          `MCP stdio server ${options.command} exited (code=${String(code)}, signal=${String(signal)})${stderrTail.length > 0 ? `: ${stderrTail.trim()}` : ''}`,
+          `MCP stdio server ${label} exited (code=${String(code)}, signal=${String(signal)})${stderrTail.length > 0 ? `: ${stderrTail.trim()}` : ''}`,
         ),
       );
     });
@@ -272,7 +283,7 @@ export function createStdioMcpClient(options: {
   function requirePeer(): JsonRpcPeer {
     ensureStarted();
     if (peer === null) {
-      throw new Error('MCP stdio peer did not start');
+      throw new Error(`MCP stdio peer did not start: ${label}`);
     }
     return peer;
   }

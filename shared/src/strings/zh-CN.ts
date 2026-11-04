@@ -495,6 +495,7 @@ export const ZH_CN = {
   'channel.config.workspace.backend.label': { text: '工作区后端', params: [] },
   'channel.config.workspace.backend.local': { text: '本地', params: [] },
   'channel.config.workspace.backend.docker': { text: 'Docker', params: [] },
+  'workspace.agent.workspaceBackend.followChannel': { text: '跟随频道', params: [] },
   'channel.config.workspace.status.label': { text: '工作区状态', params: [] },
   'channel.config.workspace.shell.label': { text: '允许本地 shell', params: [] },
   'channel.config.workspace.shell.risk': {
@@ -506,12 +507,22 @@ export const ZH_CN = {
   'workspace.status.loading': { text: '正在读取工作区状态…', params: [] },
   'workspace.status.reason.workspaceRootMissing': { text: '项目根不存在或不可读', params: [] },
   'workspace.status.reason.dockerUnavailable': { text: 'Docker 后端不可用', params: [] },
+  'workspace.status.reason.dockerImageMissing': { text: 'Docker 镜像不存在或无法拉取', params: [] },
+  'workspace.status.reason.dockerConsentMissing': { text: '镜像未确认远端数据流', params: [] },
   'workspace.round.rootMissing': {
     text: '工作区不可用：项目根不存在或不可读（workspace-root-missing）。',
     params: [],
   },
   'workspace.round.dockerUnavailable': {
     text: '工作区不可用：Docker 后端不可用（docker-unavailable），本轮不回落本地文件工具。',
+    params: [],
+  },
+  'workspace.round.dockerImageMissing': {
+    text: '工作区不可用：Docker 镜像不存在或无法拉取（docker-image-missing），本轮不回落本地文件工具。',
+    params: [],
+  },
+  'workspace.round.dockerConsentMissing': {
+    text: '工作区不可用：镜像未确认远端数据流（docker-consent-missing），本轮不回落本地文件工具。',
     params: [],
   },
   // 运行面板（#38）：run 是取证面，不是消息；状态、reason、归属与时间都来自
