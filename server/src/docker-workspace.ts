@@ -76,7 +76,12 @@ export interface DockerContainerHandle {
   root: string;
   exec(
     argv: readonly string[],
-    options?: { workdir?: string; env?: Record<string, string>; input?: string },
+    options?: {
+      workdir?: string;
+      env?: Record<string, string>;
+      input?: string;
+      maxOutputBytes?: number;
+    },
   ): Promise<DockerExecResult>;
   spawn(
     argv: readonly string[],
@@ -294,6 +299,7 @@ export class DockerWorkspaceManager {
           workdir: options.workdir,
           env: options.env,
           input: options.input,
+          maxOutputBytes: options.maxOutputBytes,
         });
       },
       spawn(argv, options = {}) {

@@ -44,6 +44,7 @@ import { globMatcher, type RoundFileGate } from './workspace-files.js';
 
 const PROJECT_ROOT = '/workspace';
 const SKILLS_ROOT = '/agent-home/skills';
+const MAX_READ_BYTES = 2 * 1024 * 1024;
 const MAX_GREP_MATCHES = 200;
 const MAX_GREP_FILES = 2000;
 
@@ -81,17 +82,22 @@ export function createContainerFileTools(options: ContainerFileToolsOptions): Ro
   const hostEnv = options.hostEnv ?? process.env;
   const envNames = options.envNames ?? [];
 
-  async function run(argv: readonly string[], input?: string): Promise<{
+  async function run(
+    argv: readonly string[],
+    input?: string,
+    maxOutputBytes?: number,
+  ): Promise<{
     exitCode: number | null;
     stdout: string;
     stderr: string;
+    truncated: boolean;
   }> {
-    const result = await options.handle.exec(argv, {
+    return await options.handle.exec(argv, {
       workdir: PROJECT_ROOT,
       env: containerToolEnvironment(hostEnv, envNames, PROJECT_ROOT),
       ...(input === undefined ? {} : { input }),
+      ...(maxOutputBytes === undefined ? {} : { maxOutputBytes }),
     });
-    return result;
   }
 
   async function statKind(containerPath: string): Promise<'file' | 'dir' | 'none'> {
@@ -198,14 +204,18 @@ export function createContainerFileTools(options: ContainerFileToolsOptions): Ro
     if (denied !== null) {
       return denied;
     }
-    const result = await run([
-      'sh',
-      '-c',
-      'size=$(wc -c < "$1") || exit 2; [ "$size" -le 2097152 ] || exit 3; cat -- "$1"',
-      'sh',
-      resolved.containerPath,
-    ]);
-    if (result.exitCode === 3) {
+    const result = await run(
+      [
+        'sh',
+        '-c',
+        'size=$(wc -c < "$1") || exit 2; [ "$size" -le 2097152 ] || exit 3; cat -- "$1"',
+        'sh',
+        resolved.containerPath,
+      ],
+      undefined,
+      MAX_READ_BYTES + 1024,
+    );
+    if (result.exitCode === 3 || result.truncated) {
       return failure('io-error', 'file is too large to read');
     }
     if (result.exitCode !== 0) {
@@ -288,14 +298,18 @@ export function createContainerFileTools(options: ContainerFileToolsOptions): Ro
         break;
       }
       scanned += 1;
-      const result = await run([
-        'sh',
-        '-c',
-        'size=$(wc -c < "$1") || exit 2; [ "$size" -le 2097152 ] || exit 3; cat -- "$1"',
-        'sh',
-        file,
-      ]);
-      if (result.exitCode !== 0) {
+      const result = await run(
+        [
+          'sh',
+          '-c',
+          'size=$(wc -c < "$1") || exit 2; [ "$size" -le 2097152 ] || exit 3; cat -- "$1"',
+          'sh',
+          file,
+        ],
+        undefined,
+        MAX_READ_BYTES + 1024,
+      );
+      if (result.exitCode !== 0 || result.truncated) {
         continue;
       }
       const text = result.stdout;
@@ -380,14 +394,18 @@ export function createContainerFileTools(options: ContainerFileToolsOptions): Ro
     if (denied !== null) {
       return denied;
     }
-    const read = await run([
-      'sh',
-      '-c',
-      'size=$(wc -c < "$1") || exit 2; [ "$size" -le 2097152 ] || exit 3; cat -- "$1"',
-      'sh',
-      resolved.containerPath,
-    ]);
-    if (read.exitCode !== 0) {
+    const read = await run(
+      [
+        'sh',
+        '-c',
+        'size=$(wc -c < "$1") || exit 2; [ "$size" -le 2097152 ] || exit 3; cat -- "$1"',
+        'sh',
+        resolved.containerPath,
+      ],
+      undefined,
+      MAX_READ_BYTES + 1024,
+    );
+    if (read.exitCode !== 0 || read.truncated) {
       return failure('io-error', `file cannot be edited: ${request.path}`);
     }
     const parts = read.stdout.split(request.old_string);

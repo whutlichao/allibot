@@ -38,6 +38,11 @@ export interface DockerExecRequest {
   env?: Record<string, string>;
   /** Buffered stdin for one exec (file writes); absent means no input. */
   input?: string;
+  /**
+   * The output cap for this call. Shell output uses the 1 MiB default; a file
+   * read passes a larger cap because the tool's own limit is 2 MiB.
+   */
+  maxOutputBytes?: number;
 }
 
 export interface DockerExecResult {
@@ -85,7 +90,7 @@ export function createDockerCliRuntime(options: DockerCliRuntimeOptions): Docker
 
   async function run(
     args: readonly string[],
-    runOptions: { input?: string; timeoutMs?: number } = {},
+    runOptions: { input?: string; timeoutMs?: number; maxOutputBytes?: number } = {},
   ): Promise<{
     code: number | null;
     stdout: string;
@@ -110,15 +115,16 @@ export function createDockerCliRuntime(options: DockerCliRuntimeOptions): Docker
       let stdout = '';
       let stderr = '';
       let truncated = false;
+      const cap = runOptions.maxOutputBytes ?? MAX_DOCKER_OUTPUT_BYTES;
       const append = (current: string, chunk: Buffer): string => {
-        if (current.length >= MAX_DOCKER_OUTPUT_BYTES) {
+        if (current.length >= cap) {
           truncated = true;
           return current;
         }
         const text = chunk.toString('utf8');
-        if (current.length + text.length > MAX_DOCKER_OUTPUT_BYTES) {
+        if (current.length + text.length > cap) {
           truncated = true;
-          return current + text.slice(0, MAX_DOCKER_OUTPUT_BYTES - current.length);
+          return current + text.slice(0, cap - current.length);
         }
         return current + text;
       };
@@ -227,7 +233,7 @@ export function createDockerCliRuntime(options: DockerCliRuntimeOptions): Docker
     async exec(request) {
       const result = await run(
         ['exec', '-i', ...execArguments(request)],
-        { input: request.input },
+        { input: request.input, maxOutputBytes: request.maxOutputBytes },
       );
       return {
         exitCode: result.code,
