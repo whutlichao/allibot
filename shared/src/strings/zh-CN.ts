@@ -600,6 +600,24 @@ export const ZH_CN = {
     text: '队长所属模型 provider 缺少凭证（{credential_env}）。',
     params: ['credential_env'],
   },
+  // 目标上下文的工作区不可用也是队长无效事实（D3.8 / D5.7）：读模型、消息
+  // 触发与 team-change 触发共用这段文案，而不是让轮次失败后再说原因。
+  'team.invalid.workspaceRootMissing': {
+    text: '队长在目标上下文不可用：项目根不存在或不可读（workspace-root-missing）。',
+    params: [],
+  },
+  'team.invalid.dockerUnavailable': {
+    text: '队长在目标上下文不可用：Docker 后端不可用（docker-unavailable）。',
+    params: [],
+  },
+  'team.invalid.dockerImageMissing': {
+    text: '队长在目标上下文不可用：Docker 镜像不存在或无法拉取（docker-image-missing）。',
+    params: [],
+  },
+  'team.invalid.dockerConsentMissing': {
+    text: '队长在目标上下文不可用：镜像未确认远端数据流（docker-consent-missing）。',
+    params: [],
+  },
   // TeamAssign 目标成员的可用性（#39 / D3.4 第 1 步）：与队长的不可用原因
   // 分开措辞，因为被分派的是成员，不是队长。
   'team.member.missing': { text: '目标成员不存在或已被移除。', params: [] },
@@ -615,6 +633,22 @@ export const ZH_CN = {
   'team.member.credentialMissing': {
     text: '目标成员所属模型 provider 缺少凭证（{credential_env}）。',
     params: ['credential_env'],
+  },
+  'team.member.workspaceRootMissing': {
+    text: '目标成员在目标上下文不可用：项目根不存在或不可读（workspace-root-missing）。',
+    params: [],
+  },
+  'team.member.dockerUnavailable': {
+    text: '目标成员在目标上下文不可用：Docker 后端不可用（docker-unavailable）。',
+    params: [],
+  },
+  'team.member.dockerImageMissing': {
+    text: '目标成员在目标上下文不可用：Docker 镜像不存在或无法拉取（docker-image-missing）。',
+    params: [],
+  },
+  'team.member.dockerConsentMissing': {
+    text: '目标成员在目标上下文不可用：镜像未确认远端数据流（docker-consent-missing）。',
+    params: [],
   },
   // 分派的固定裁决顺序（D3.4）：先校验调用者与目标，再解析预算 target，
   // 再原子扣跳；失败落 failed / budget-exhausted，jump_consumed 定格。
@@ -754,4 +788,264 @@ export const ZH_CN = {
   'workspace.approval.back': { text: '返回列表', params: [] },
   'workspace.approval.shell.command': { text: '命令', params: [] },
   'workspace.approval.shell.cwd': { text: '工作目录', params: [] },
+  // 后端诊断（D2.1 / D5.4 / D6）：这些文案由后端生成，按库内语言偏好渲染；
+  // 键只描述事实，参数只带标识与可读细节，从不携带 env 值或凭据。
+  'mcp.file.invalidJson': { text: 'mcp.json 不是合法 JSON', params: [] },
+  'mcp.file.topNotObject': { text: 'mcp.json 顶层必须是对象', params: [] },
+  'mcp.file.unknownTop': {
+    text: 'mcp.json 含未知字段：{field}',
+    params: ['field'],
+  },
+  'mcp.file.serversRequired': { text: 'mcp.json 必须含 servers 数组', params: [] },
+  'mcp.file.duplicateName': {
+    text: 'mcp.json 条目名重复：{name}',
+    params: ['name'],
+  },
+  'mcp.file.entriesArray': { text: 'entries 必须是数组', params: [] },
+  'mcp.file.duplicateEntry': { text: '条目名重复：{name}', params: ['name'] },
+  'mcp.file.unreadable': { text: 'mcp.json 不可读：{path}', params: ['path'] },
+  'mcp.file.bodyObject': { text: '请求体必须是对象', params: [] },
+  'mcp.file.entriesOrRaw': {
+    text: '请求体必须恰好给 entries 或 raw 之一',
+    params: [],
+  },
+  'mcp.file.unknownField': { text: '未知字段：{field}', params: ['field'] },
+  'mcp.file.rawString': { text: 'raw 必须是字符串', params: [] },
+  'mcp.file.remoteUnconfirmed': {
+    text: '远端 MCP 未确认数据面，运行期不会连接：{names}',
+    params: ['names'],
+  },
+  'mcp.file.entryNotObject': {
+    text: '第 {index} 个条目必须是对象',
+    params: ['index'],
+  },
+  'mcp.file.entryTransport': {
+    text: '第 {index} 个条目的 transport 必须是 stdio / http / sse',
+    params: ['index'],
+  },
+  'mcp.file.entryStdioUrl': {
+    text: '第 {index} 个条目是 stdio，不能带 url',
+    params: ['index'],
+  },
+  'mcp.file.entryRemoteCommand': {
+    text: '第 {index} 个条目是 {transport}，不能带 {field}',
+    params: ['index', 'transport', 'field'],
+  },
+  'mcp.file.entryUnknownField': {
+    text: '第 {index} 个条目含未知字段：{field}',
+    params: ['index', 'field'],
+  },
+  'mcp.file.entryNameMissing': {
+    text: '第 {index} 个条目缺少条目名',
+    params: ['index'],
+  },
+  'mcp.file.entryNameChars': {
+    text: '第 {index} 个条目的条目名不能含空白或 /：{name}',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryEnabledBoolean': {
+    text: '第 {index} 个条目（{name}）的 enabled 必须是布尔值',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryCommandMissing': {
+    text: '第 {index} 个条目（{name}）缺少 command',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryArgsArray': {
+    text: '第 {index} 个条目（{name}）的 args 必须是字符串数组',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryUrlMissing': {
+    text: '第 {index} 个条目（{name}）缺少 url',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryUrlInvalid': {
+    text: '第 {index} 个条目（{name}）的 url 不是合法 URL',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryUrlProtocol': {
+    text: '第 {index} 个条目（{name}）的 url 必须是 http / https',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryEnvNames': {
+    text: '第 {index} 个条目（{name}）的 env_names 必须是变量名数组',
+    params: ['index', 'name'],
+  },
+  'mcp.runtime.permissionContextMissing': {
+    text: 'MCP 装配失败：找不到 {target_id} 的权限上下文',
+    params: ['target_id'],
+  },
+  'mcp.runtime.remoteUnconfirmed': {
+    text: 'MCP 服务器 {name}（{transport}）未确认远端数据流，未连接',
+    params: ['name', 'transport'],
+  },
+  'mcp.runtime.assembleFailed': {
+    text: 'MCP 服务器 {name} 装配失败：{detail}',
+    params: ['name', 'detail'],
+  },
+  'mcp.runtime.connectFailed': {
+    text: 'MCP 服务器 {name} 连接失败：{detail}',
+    params: ['name', 'detail'],
+  },
+  'mcp.runtime.serverMissing': {
+    text: 'MCP 服务器未装配：{name}',
+    params: ['name'],
+  },
+  'mcp.export.applyYes': {
+    text: 'export-mcp：--apply 与 --yes 必须同时给出；未写入任何文件。',
+    params: [],
+  },
+  'mcp.export.noRows': {
+    text: 'export-mcp：没有可导出的 Agent 级 mcp_server 行。',
+    params: [],
+  },
+  'mcp.export.rejectedHeader': {
+    text: 'export-mcp：整次导出被拒绝，未写入任何文件：',
+    params: [],
+  },
+  'mcp.export.dryRunLine': {
+    text: '[dry-run] agent {agent_id}：{count} 条声明{status}',
+    params: ['agent_id', 'count', 'status'],
+  },
+  'mcp.export.latestSuffix': { text: '（已是最新）', params: [] },
+  'mcp.export.dryRunEnd': {
+    text: 'export-mcp：dry-run，未写入；同时给出 --apply --yes 才会写入。',
+    params: [],
+  },
+  'mcp.export.unchanged': {
+    text: 'agent {agent_id}：mcp.json 已包含这些声明，未改写。',
+    params: ['agent_id'],
+  },
+  'mcp.export.written': {
+    text: 'agent {agent_id}：写入 {path}{backup}',
+    params: ['agent_id', 'path', 'backup'],
+  },
+  'mcp.export.backupSuffix': { text: '（备份 {path}）', params: ['path'] },
+  'mcp.export.done': {
+    text: 'export-mcp：完成；mcp_server 行保留未删（{rows} 行），远端确认只保留旧行上已有的 {consents} 条。',
+    params: ['rows', 'consents'],
+  },
+  'mcp.export.missingAgent': {
+    text: 'agent {agent_id}：mcp_server 行指向不存在的 Agent，拒绝导出',
+    params: ['agent_id'],
+  },
+  'mcp.export.invalidExisting': {
+    text: 'agent {agent_id}：现有 mcp.json 不可用（{diagnostic}），拒绝覆盖',
+    params: ['agent_id', 'diagnostic'],
+  },
+  'mcp.export.shapeConflict': {
+    text: 'agent {agent_id} / {name}：同名条目在 mcp.json 中的形状与旧行不同，拒绝整次写入',
+    params: ['agent_id', 'name'],
+  },
+  'mcp.export.configInvalidJson': { text: 'config 不是合法 JSON', params: [] },
+  'mcp.export.configNotObject': { text: 'config 必须是对象', params: [] },
+  'mcp.export.configUnsupported': {
+    text: 'config 含 M2 不支持的字段：{field}',
+    params: ['field'],
+  },
+  'skill.migrate.applyYes': {
+    text: 'migrate-skills：--apply 与 --yes 必须同时给出；未写入任何文件。',
+    params: [],
+  },
+  'skill.migrate.refused': {
+    text: '拒绝执行：存在目标同名但内容不同或无法读取的条目。请先手动裁定；本命令不覆盖、不提供 --force；本次未写入任何文件。',
+    params: [],
+  },
+  'skill.migrate.dryRunEnd': {
+    text: '预演结束：未写入任何文件、未改动数据库、未创建备份或迁移清单。',
+    params: [],
+  },
+  'skill.migrate.nothingToDo': {
+    text: '技能迁移：没有需要写入的条目（全部已就位或没有成员级字节）；未写入任何文件。',
+    params: [],
+  },
+  'skill.migrate.processedZero': {
+    text: '处理条目： 0 条（已复制 0 / 只补行 0 / 跳过 {skipped}）',
+    params: ['skipped'],
+  },
+  'skill.migrate.channelDeprecated': { text: '频道级已弃用，请按成员安装', params: [] },
+  'skill.migrate.done': { text: '技能迁移完成', params: [] },
+  'skill.migrate.backupLine': { text: '  数据目录备份： {path}', params: ['path'] },
+  'skill.migrate.manifestLine': { text: '  迁移清单： {path}', params: ['path'] },
+  'skill.migrate.processed': {
+    text: '处理条目： {processed} 条（已复制 {copied} / 只补行 {rows_only} / 跳过 {skipped}）',
+    params: ['processed', 'copied', 'rows_only', 'skipped'],
+  },
+  'skill.migrate.entryLine': {
+    text: '  {action} {source} → {target}（{files} 个文件 / {bytes} 字节；hash {hash}）',
+    params: ['action', 'source', 'target', 'files', 'bytes', 'hash'],
+  },
+  'skill.migrate.copy': { text: '复制', params: [] },
+  'skill.migrate.rowOnly': { text: '只补行', params: [] },
+  'skill.migrate.new': { text: '新建', params: [] },
+  'skill.migrate.skip': { text: '跳过', params: [] },
+  'skill.migrate.refuse': { text: '拒绝', params: [] },
+  'skill.migrate.removable': {
+    text: '可手工删除的源路径（确认后；本命令不删除任何源文件）：',
+    params: [],
+  },
+  'skill.migrate.unknownPartitionMember': { text: '未匹配现行成员或频道', params: [] },
+  'skill.migrate.unsafePartition': { text: '分区名不是安全 slug', params: [] },
+  'skill.migrate.unsafeName': { text: '技能名不是安全 slug，拒绝迁移', params: [] },
+  'skill.migrate.multiRootConflict': {
+    text: '同一成员的同名旧技能在多个频道根内容不同，需人工裁定',
+    params: [],
+  },
+  'skill.migrate.targetDiffers': {
+    text: '目标已存在但内容不同，需人工裁定后再迁移（本命令不覆盖）',
+    params: [],
+  },
+  'skill.migrate.targetUnreadable': {
+    text: '目标已存在但不可读取：{detail}',
+    params: ['detail'],
+  },
+  'skill.migrate.rowHashDiffers': { text: '库行已存在且 hash 不同，需人工裁定', params: [] },
+  'skill.migrate.skippedPresent': { text: '目标字节与库行均已就位，跳过', params: [] },
+  'skill.migrate.rowOnlyPresent': {
+    text: '目标字节已存在且内容相同，只补写 Agent 级库行',
+    params: [],
+  },
+  'skill.migrate.rowMissingBytes': {
+    text: '库行已存在但目标字节缺失，补齐成员家目录副本',
+    params: [],
+  },
+  'skill.migrate.copyNew': {
+    text: '目标不存在，将复制字节并新建 Agent 级库行',
+    params: [],
+  },
+  'skill.migrate.planTitle': { text: '技能迁移计划（migrate-skills，只读扫描）', params: [] },
+  'skill.migrate.dataDirLine': { text: '数据目录： {path}', params: ['path'] },
+  'skill.migrate.globalLayerLine': { text: '全局层根： {path}', params: ['path'] },
+  'skill.migrate.empty': {
+    text: '没有发现旧项目层技能字节；空操作（未写入任何文件、未改动数据库）。',
+    params: [],
+  },
+  'skill.migrate.memberEntries': {
+    text: '成员级技能： {total} 条（新建 {copy} / 只补行 {row} / 跳过 {skip} / 拒绝 {refuse}）',
+    params: ['total', 'copy', 'row', 'skip', 'refuse'],
+  },
+  'skill.migrate.entryHead': {
+    text: '  {action} {source} → {target}',
+    params: ['action', 'source', 'target'],
+  },
+  'skill.migrate.entryDetail': {
+    text: '（{files} 个文件 / {bytes} 字节；hash {hash}）',
+    params: ['files', 'bytes', 'hash'],
+  },
+  'skill.migrate.reasonLine': { text: '    原因：{reason}', params: ['reason'] },
+  'skill.migrate.channelSection': {
+    text: '频道级技能（不迁移）： {partitions} 个分区 / {skills} 个技能 —— 频道级已弃用，请按成员安装',
+    params: ['partitions', 'skills'],
+  },
+  'skill.migrate.channelLine': {
+    text: '  频道 {channel_id}：{path}（{count} 个技能：{skills}）',
+    params: ['channel_id', 'path', 'count', 'skills'],
+  },
+  'skill.migrate.channelNotice': { text: '    频道级已弃用，请按成员安装', params: [] },
+  'skill.migrate.unknownSection': {
+    text: '未匹配分区（不迁移）： {count} 个',
+    params: ['count'],
+  },
+  'plan.error.limit': { text: 'limit 必须是 1 到 50 之间的整数', params: [] },
+  'plan.error.targetNotFound': { text: 'target 不存在：{target_id}', params: ['target_id'] },
 } as const satisfies Record<string, CatalogEntry>;

@@ -7,7 +7,6 @@ import {
 import { tFromDb } from './copy.js';
 import {
   checkPermission,
-  classifyToolName,
   type PermissionDecision,
   type PermissionRequest,
   type TargetPermissionContext,
@@ -54,7 +53,9 @@ export function createToolGate(options: ToolGateOptions): ToolGate {
   const { db, permission, replyId, contextKind, contextId } = options;
   return {
     mode: permission.effective,
-    check: (request) => checkPermission(db, permission, previewRequest(request)),
+    // The caller supplies `root_internal_write`, resolved from its own path
+    // boundary; the gate never infers it from the pattern text (D5.5).
+    check: (request) => checkPermission(db, permission, request),
     authorize: async (request) => {
       const decided = checkPermission(db, permission, request);
       if (decided.decision === 'allow') {
@@ -89,27 +90,6 @@ export function createToolGate(options: ToolGateOptions): ToolGate {
       return outcome === 'approved' ? 'allow' : 'denied';
     },
   };
-}
-
-/**
- * The preview has no resolved real path: a file tool's subject is already a
- * root-relative path (the file tools enforce the root hard boundary first), so
- * `trusted-writes` may classify it as a root-internal write. The executable
- * path passes the resolver's own flag instead.
- */
-function previewRequest(request: PermissionRequest): PermissionRequest {
-  if (request.root_internal_write !== undefined) {
-    return request;
-  }
-  const reading = classifyToolName(request.tool_name);
-  if (reading?.tool_class !== 'write') {
-    return request;
-  }
-  const segments = request.pattern.split('/');
-  if (request.pattern.startsWith('/') || segments.includes('..')) {
-    return { ...request, root_internal_write: false };
-  }
-  return { ...request, root_internal_write: true };
 }
 
 /** The readable round failure for a batch that timed out (already stored failed). */

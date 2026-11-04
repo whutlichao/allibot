@@ -1,4 +1,10 @@
-import type { AgentMcpView, McpServerEntry, McpTransport } from '@allibot/shared';
+import type {
+  AgentMcpView,
+  McpServerEntry,
+  McpTransport,
+  MessageKey,
+  MessageValues,
+} from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import {
@@ -11,6 +17,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import { ApiFailure } from './api-error.js';
+import { tFromDb } from './copy.js';
 import { agentHomeRoot } from './workspace-root.js';
 
 /**
@@ -32,7 +39,8 @@ export interface McpDocument {
 }
 
 interface McpProblem {
-  message: string;
+  key: MessageKey;
+  values?: MessageValues;
 }
 
 type ParseResult = { ok: true; document: McpDocument } | { ok: false; problem: McpProblem };
@@ -64,17 +72,20 @@ export function parseMcpDocument(raw: string): ParseResult {
   try {
     body = JSON.parse(raw) as unknown;
   } catch {
-    return { ok: false, problem: { message: 'mcp.json 不是合法 JSON' } };
+    return { ok: false, problem: { key: 'mcp.file.invalidJson' } };
   }
   if (!isPlainObject(body)) {
-    return { ok: false, problem: { message: 'mcp.json 顶层必须是对象' } };
+    return { ok: false, problem: { key: 'mcp.file.topNotObject' } };
   }
   const unknownTop = Object.keys(body).find((key) => !TOP_LEVEL_KEYS.has(key));
   if (unknownTop !== undefined) {
-    return { ok: false, problem: { message: `mcp.json 含未知字段：${unknownTop}` } };
+    return {
+      ok: false,
+      problem: { key: 'mcp.file.unknownTop', values: { field: unknownTop } },
+    };
   }
   if (!Array.isArray(body.servers)) {
-    return { ok: false, problem: { message: 'mcp.json 必须含 servers 数组' } };
+    return { ok: false, problem: { key: 'mcp.file.serversRequired' } };
   }
 
   const servers: McpServerEntry[] = [];
@@ -87,7 +98,7 @@ export function parseMcpDocument(raw: string): ParseResult {
     if (names.has(parsed.entry.name)) {
       return {
         ok: false,
-        problem: { message: `mcp.json 条目名重复：${parsed.entry.name}` },
+        problem: { key: 'mcp.file.duplicateName', values: { name: parsed.entry.name } },
       };
     }
     names.add(parsed.entry.name);
@@ -97,23 +108,29 @@ export function parseMcpDocument(raw: string): ParseResult {
 }
 
 /** `PUT {entries}` validation: the same rules as the file, over a JS value. */
-export function parseEntries(value: unknown): McpServerEntry[] {
+export function parseEntries(value: unknown, db: Database.Database): McpServerEntry[] {
   if (!Array.isArray(value)) {
-    throw ApiFailure.validation('entries 必须是数组', { field: 'entries' });
+    throw ApiFailure.validation(tFromDb(db, 'mcp.file.entriesArray'), { field: 'entries' });
   }
   const entries: McpServerEntry[] = [];
   const names = new Set<string>();
   for (let index = 0; index < value.length; index += 1) {
     const parsed = parseEntry(value[index], index);
     if (!parsed.ok) {
-      throw ApiFailure.validation(parsed.problem.message, { field: 'entries', index });
-    }
-    if (names.has(parsed.entry.name)) {
-      throw ApiFailure.validation(`条目名重复：${parsed.entry.name}`, {
+      throw ApiFailure.validation(renderMcpProblem(db, parsed.problem), {
         field: 'entries',
         index,
-        name: parsed.entry.name,
       });
+    }
+    if (names.has(parsed.entry.name)) {
+      throw ApiFailure.validation(
+        tFromDb(db, 'mcp.file.duplicateEntry', { name: parsed.entry.name }),
+        {
+          field: 'entries',
+          index,
+          name: parsed.entry.name,
+        },
+      );
     }
     names.add(parsed.entry.name);
     entries.push(parsed.entry);
@@ -144,7 +161,10 @@ export function canonicalMcpJson(entries: readonly McpServerEntry[]): string {
 }
 
 /** Read the one file; a missing file is a normal zero-MCP fact, not an error. */
-export function readMcpFile(filePath: string): McpFileReading {
+export function readMcpFile(
+  filePath: string,
+  db: Database.Database,
+): McpFileReading {
   if (!existsSync(filePath)) {
     return { path: filePath, present: false, raw: '', entries: [], diagnostic: null };
   }
@@ -157,7 +177,7 @@ export function readMcpFile(filePath: string): McpFileReading {
       present: true,
       raw: '',
       entries: [],
-      diagnostic: `mcp.json 不可读：${filePath}`,
+      diagnostic: tFromDb(db, 'mcp.file.unreadable', { path: filePath }),
     };
   }
   const parsed = parseMcpDocument(raw);
@@ -167,7 +187,7 @@ export function readMcpFile(filePath: string): McpFileReading {
       present: true,
       raw,
       entries: [],
-      diagnostic: parsed.problem.message,
+      diagnostic: renderMcpProblem(db, parsed.problem),
     };
   }
   return {
@@ -191,7 +211,7 @@ export function readAgentMcp(
   memberId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): AgentMcpView {
-  const file = readMcpFile(mcpFilePath(memberId, env));
+  const file = readMcpFile(mcpFilePath(memberId, env), db);
   const diagnostic =
     file.diagnostic ?? unconfirmedRemoteDiagnostic(db, file.entries);
   return {
@@ -216,23 +236,25 @@ export function replaceAgentMcp(
   env: NodeJS.ProcessEnv = process.env,
 ): AgentMcpView {
   if (!isPlainObject(body)) {
-    throw ApiFailure.validation('请求体必须是对象');
+    throw ApiFailure.validation(tFromDb(db, 'mcp.file.bodyObject'));
   }
   const keys = Object.keys(body);
   const hasEntries = Object.hasOwn(body, 'entries');
   const hasRaw = Object.hasOwn(body, 'raw');
   if (hasEntries === hasRaw) {
-    throw ApiFailure.validation('请求体必须恰好给 entries 或 raw 之一');
+    throw ApiFailure.validation(tFromDb(db, 'mcp.file.entriesOrRaw'));
   }
   const unknown = keys.find((key) => key !== 'entries' && key !== 'raw');
   if (unknown !== undefined) {
-    throw ApiFailure.validation(`未知字段：${unknown}`, { field: unknown });
+    throw ApiFailure.validation(tFromDb(db, 'mcp.file.unknownField', { field: unknown }), {
+      field: unknown,
+    });
   }
 
   const filePath = mcpFilePath(memberId, env);
   if (hasEntries) {
-    const entries = parseEntries(body.entries);
-    const current = readMcpFile(filePath);
+    const entries = parseEntries(body.entries, db);
+    const current = readMcpFile(filePath, db);
     if (current.diagnostic === null && sameEntries(current.entries, entries)) {
       return readAgentMcp(db, memberId, env);
     }
@@ -240,11 +262,11 @@ export function replaceAgentMcp(
   } else {
     const raw = body.raw;
     if (typeof raw !== 'string') {
-      throw ApiFailure.validation('raw 必须是字符串', { field: 'raw' });
+      throw ApiFailure.validation(tFromDb(db, 'mcp.file.rawString'), { field: 'raw' });
     }
     const parsed = parseMcpDocument(raw);
     if (!parsed.ok) {
-      throw ApiFailure.validation(parsed.problem.message, { field: 'raw' });
+      throw ApiFailure.validation(renderMcpProblem(db, parsed.problem), { field: 'raw' });
     }
     if (existsSync(filePath) && readFileSync(filePath, 'utf8') === raw) {
       return readAgentMcp(db, memberId, env);
@@ -306,22 +328,25 @@ export function unconfirmedRemoteDiagnostic(
   if (unconfirmed.length === 0) {
     return null;
   }
-  return `远端 MCP 未确认数据面，运行期不会连接：${unconfirmed.join(', ')}`;
+  return tFromDb(db, 'mcp.file.remoteUnconfirmed', { names: unconfirmed.join(', ') });
 }
 
 function parseEntry(
   value: unknown,
   index: number,
 ): { ok: true; entry: McpServerEntry } | { ok: false; problem: McpProblem } {
-  const label = `第 ${index + 1} 个条目`;
+  const entryIndex = index + 1;
   if (!isPlainObject(value)) {
-    return { ok: false, problem: { message: `${label}必须是对象` } };
+    return {
+      ok: false,
+      problem: { key: 'mcp.file.entryNotObject', values: { index: entryIndex } },
+    };
   }
   const transport = value.transport;
   if (transport !== 'stdio' && transport !== 'http' && transport !== 'sse') {
     return {
       ok: false,
-      problem: { message: `${label}的 transport 必须是 stdio / http / sse` },
+      problem: { key: 'mcp.file.entryTransport', values: { index: entryIndex } },
     };
   }
   const allowed = transport === 'stdio' ? STDIO_KEYS : REMOTE_KEYS;
@@ -330,30 +355,51 @@ function parseEntry(
     if (transport === 'stdio' && unknown === 'url') {
       return {
         ok: false,
-        problem: { message: `${label}是 stdio，不能带 url` },
+        problem: { key: 'mcp.file.entryStdioUrl', values: { index: entryIndex } },
       };
     }
     if (transport !== 'stdio' && (unknown === 'command' || unknown === 'args')) {
       return {
         ok: false,
-        problem: { message: `${label}是 ${transport}，不能带 ${unknown}` },
+        problem: {
+          key: 'mcp.file.entryRemoteCommand',
+          values: { index: entryIndex, transport, field: unknown },
+        },
       };
     }
-    return { ok: false, problem: { message: `${label}含未知字段：${unknown}` } };
+    return {
+      ok: false,
+      problem: {
+        key: 'mcp.file.entryUnknownField',
+        values: { index: entryIndex, field: unknown },
+      },
+    };
   }
 
   const name = value.name;
   if (typeof name !== 'string' || name.length === 0) {
-    return { ok: false, problem: { message: `${label}缺少条目名` } };
+    return {
+      ok: false,
+      problem: { key: 'mcp.file.entryNameMissing', values: { index: entryIndex } },
+    };
   }
   if (/[\s/]/.test(name)) {
     return {
       ok: false,
-      problem: { message: `${label}的条目名不能含空白或 /：${name}` },
+      problem: {
+        key: 'mcp.file.entryNameChars',
+        values: { index: entryIndex, name },
+      },
     };
   }
   if (typeof value.enabled !== 'boolean') {
-    return { ok: false, problem: { message: `${label}（${name}）的 enabled 必须是布尔值` } };
+    return {
+      ok: false,
+      problem: {
+        key: 'mcp.file.entryEnabledBoolean',
+        values: { index: entryIndex, name },
+      },
+    };
   }
 
   const entry: McpServerEntry = {
@@ -364,30 +410,42 @@ function parseEntry(
 
   if (transport === 'stdio') {
     if (typeof value.command !== 'string' || value.command.length === 0) {
-      return { ok: false, problem: { message: `${label}（${name}）缺少 command` } };
+      return {
+        ok: false,
+        problem: {
+          key: 'mcp.file.entryCommandMissing',
+          values: { index: entryIndex, name },
+        },
+      };
     }
     if (!Array.isArray(value.args) || value.args.some((arg) => typeof arg !== 'string')) {
       return {
         ok: false,
-        problem: { message: `${label}（${name}）的 args 必须是字符串数组` },
+        problem: { key: 'mcp.file.entryArgsArray', values: { index: entryIndex, name } },
       };
     }
     entry.command = value.command;
     entry.args = value.args as string[];
   } else {
     if (typeof value.url !== 'string' || value.url.length === 0) {
-      return { ok: false, problem: { message: `${label}（${name}）缺少 url` } };
+      return {
+        ok: false,
+        problem: { key: 'mcp.file.entryUrlMissing', values: { index: entryIndex, name } },
+      };
     }
     let url: URL;
     try {
       url = new URL(value.url);
     } catch {
-      return { ok: false, problem: { message: `${label}（${name}）的 url 不是合法 URL` } };
+      return {
+        ok: false,
+        problem: { key: 'mcp.file.entryUrlInvalid', values: { index: entryIndex, name } },
+      };
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
       return {
         ok: false,
-        problem: { message: `${label}（${name}）的 url 必须是 http / https` },
+        problem: { key: 'mcp.file.entryUrlProtocol', values: { index: entryIndex, name } },
       };
     }
     entry.url = value.url;
@@ -403,7 +461,7 @@ function parseEntry(
     ) {
       return {
         ok: false,
-        problem: { message: `${label}（${name}）的 env_names 必须是变量名数组` },
+        problem: { key: 'mcp.file.entryEnvNames', values: { index: entryIndex, name } },
       };
     }
     if (envNames.length > 0) {
@@ -412,6 +470,53 @@ function parseEntry(
   }
 
   return { ok: true, entry };
+}
+
+/** Render one structured problem through the stored language preference. */
+function renderMcpProblem(db: Database.Database, problem: McpProblem): string {
+  const values = problem.values ?? {};
+  switch (problem.key) {
+    case 'mcp.file.invalidJson':
+      return tFromDb(db, 'mcp.file.invalidJson');
+    case 'mcp.file.topNotObject':
+      return tFromDb(db, 'mcp.file.topNotObject');
+    case 'mcp.file.unknownTop':
+      return tFromDb(db, 'mcp.file.unknownTop', values);
+    case 'mcp.file.serversRequired':
+      return tFromDb(db, 'mcp.file.serversRequired');
+    case 'mcp.file.duplicateName':
+      return tFromDb(db, 'mcp.file.duplicateName', values);
+    case 'mcp.file.entryNotObject':
+      return tFromDb(db, 'mcp.file.entryNotObject', values);
+    case 'mcp.file.entryTransport':
+      return tFromDb(db, 'mcp.file.entryTransport', values);
+    case 'mcp.file.entryStdioUrl':
+      return tFromDb(db, 'mcp.file.entryStdioUrl', values);
+    case 'mcp.file.entryRemoteCommand':
+      return tFromDb(db, 'mcp.file.entryRemoteCommand', values);
+    case 'mcp.file.entryUnknownField':
+      return tFromDb(db, 'mcp.file.entryUnknownField', values);
+    case 'mcp.file.entryNameMissing':
+      return tFromDb(db, 'mcp.file.entryNameMissing', values);
+    case 'mcp.file.entryNameChars':
+      return tFromDb(db, 'mcp.file.entryNameChars', values);
+    case 'mcp.file.entryEnabledBoolean':
+      return tFromDb(db, 'mcp.file.entryEnabledBoolean', values);
+    case 'mcp.file.entryCommandMissing':
+      return tFromDb(db, 'mcp.file.entryCommandMissing', values);
+    case 'mcp.file.entryArgsArray':
+      return tFromDb(db, 'mcp.file.entryArgsArray', values);
+    case 'mcp.file.entryUrlMissing':
+      return tFromDb(db, 'mcp.file.entryUrlMissing', values);
+    case 'mcp.file.entryUrlInvalid':
+      return tFromDb(db, 'mcp.file.entryUrlInvalid', values);
+    case 'mcp.file.entryUrlProtocol':
+      return tFromDb(db, 'mcp.file.entryUrlProtocol', values);
+    case 'mcp.file.entryEnvNames':
+      return tFromDb(db, 'mcp.file.entryEnvNames', values);
+    default:
+      return tFromDb(db, problem.key, values);
+  }
 }
 
 function sortEntries(entries: readonly McpServerEntry[]): McpServerEntry[] {

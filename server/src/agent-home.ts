@@ -15,7 +15,8 @@ import { agentHomeRoot } from './workspace-root.js';
  * no database column stores it. Creation happens when an Agent is created, and
  * only that directory is made: `skills/`, `mcp.json` and memory directories are
  * never created by startup (or by this path). The home is human-owned for
- * `AGENTS.md` and app-owned for skills later (#48); #43 only reads rules from it.
+ * `AGENTS.md` and app-owned for skills under `skills/`; the rules path only
+ * reads the human-maintained rule files.
  */
 
 /** Create `<home>/agents/<member_id>/` (idempotent) and return it. */

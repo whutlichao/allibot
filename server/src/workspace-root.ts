@@ -64,14 +64,15 @@ export function agentsRoot(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * 成员家目录 (Agent Home): derived from `member_id`, never stored. #43 creates
- * it; this ticket only reads the `skills/` second root below it.
+ * 成员家目录 (Agent Home): derived from `member_id`, never stored. Creation
+ * owns the directory; this module only derives its path and the read-only
+ * `skills/` second root below it.
  */
 export function agentHomeRoot(memberId: string, env: NodeJS.ProcessEnv = process.env): string {
   return path.join(agentsRoot(env), memberId);
 }
 
-/** The member's read-only skills second root; absent until #43 creates it. */
+/** The member's read-only skills second root; absent until skills are installed. */
 export function agentSkillsRoot(memberId: string, env: NodeJS.ProcessEnv = process.env): string {
   return path.join(agentHomeRoot(memberId, env), 'skills');
 }

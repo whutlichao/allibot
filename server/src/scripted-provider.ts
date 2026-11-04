@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type {
@@ -638,9 +639,18 @@ async function permissionResult(
   const mcpArgs = stableJson({ z: 'last', a: 1 });
   const checks: string[] = [
     `[permission] mode:${permission.mode} shell:${workspace.allow_local_shell}`,
-    checkLine('Read:notes.txt', permission.check({ tool_name: 'Read', pattern: 'notes.txt' })),
-    checkLine('Write:notes.txt', permission.check({ tool_name: 'Write', pattern: 'notes.txt' })),
-    checkLine('Write:sub/deep.txt', permission.check({ tool_name: 'Write', pattern: 'sub/deep.txt' })),
+    // File previews resolve the path first and pass the explicit root fact;
+    // the gate itself never infers it from the pattern text (D5.5).
+    checkLine('Read:notes.txt', await files.Preview({ tool_name: 'Read', path: 'notes.txt' })),
+    checkLine('Write:notes.txt', await files.Preview({ tool_name: 'Write', path: 'notes.txt' })),
+    checkLine(
+      'Write:sub/deep.txt',
+      await files.Preview({ tool_name: 'Write', path: 'sub/deep.txt' }),
+    ),
+    checkLine(
+      'Write:escape/evil.txt',
+      await files.Preview({ tool_name: 'Write', path: 'escape/evil.txt' }),
+    ),
     checkLine('Bash:rm -rf /', permission.check({ tool_name: 'Bash', pattern: 'rm -rf /' })),
     checkLine('Bash:ls -la', permission.check({ tool_name: 'Bash', pattern: 'ls -la' })),
     checkLine(
@@ -659,6 +669,14 @@ async function permissionResult(
       await files.Write({ path: 'approval-two.txt', content: 'two' }),
     ),
     reportFileCall('approval-read', await files.Read({ path: 'notes.txt' })),
+    ...(existsSync(path.join(workspace.root, 'escape'))
+      ? [
+          reportFileCall(
+            'workspace-symlink-write',
+            await files.Write({ path: 'escape/evil.txt', content: 'ESCAPED' }),
+          ),
+        ]
+      : []),
     `[shell-approval] ${await permission.authorize({
       tool_name: 'Bash',
       pattern: 'ls -la',

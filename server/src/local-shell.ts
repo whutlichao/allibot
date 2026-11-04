@@ -45,23 +45,6 @@ export const SHELL_ENV_ALLOWLIST = [
 /** The output cap one call returns to the adapter; larger output is truncated. */
 export const MAX_SHELL_OUTPUT_BYTES = 1024 * 1024;
 
-/**
- * The declared `env_names` merged into every shell environment. #47 owns
- * reading the member's `mcp.json`; it replaces the source of this list with the
- * enabled servers' `env_names`. The startup injection (`--shell-env-name`) is
- * the documented merge point until then: a name is a variable name only, its
- * value is read from the process environment at spawn time.
- */
-let declaredEnvNames: readonly string[] = [];
-
-export function setShellEnvNames(names: readonly string[]): void {
-  declaredEnvNames = [...new Set(names)];
-}
-
-export function getShellEnvNames(): readonly string[] {
-  return declaredEnvNames;
-}
-
 /** The gate face the shell asks; the one tool gate implements it. */
 export interface LocalShellGate {
   authorize(request: {
@@ -78,9 +61,8 @@ export interface LocalShellOptions {
   /** The channel's explicit switch. */
   allowLocalShell: 0 | 1;
   /**
-   * The declared `env_names` for this round. #47 passes the enabled MCP
-   * servers' names here; the current round assembly passes the startup-declared
-   * list, which is why the injection exists at all.
+   * The declared `env_names` for this round: the enabled MCP servers'
+   * declarations, read from the member's `mcp.json` by the round assembly.
    */
   envNames?: readonly string[];
   gate: LocalShellGate;

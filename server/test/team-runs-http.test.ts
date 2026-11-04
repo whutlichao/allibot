@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
@@ -393,6 +394,122 @@ async function postMessage(
   const parsed = await readJson(response);
   return { id: parsed['id'] as string, seq: parsed['seq'] as number };
 }
+
+interface TeamReading {
+  team: { leader_member_id: string | null; status: string; reason: string | null };
+  workspace: { root: string | null; backend: string };
+}
+
+/** The channel read model's team status and reason (D2.2 / D3.8). */
+async function readTeam(fixture: Fixture, channelId: string): Promise<TeamReading> {
+  const response = await fetch(`${fixture.base}/api/channels/${channelId}`);
+  assert.equal(response.status, 200, await response.clone().text());
+  return (await readJson(response)) as unknown as TeamReading;
+}
+
+/**
+ * Create a team channel whose leader's workspace is unusable, then trigger the
+ * three wakes D3.8 lists: a channel message, a task creation and a task-thread
+ * message. Asserts the read model and every run record agree, with zero wake,
+ * assignment and budget instead of a failed leader round.
+ */
+async function assertInvalidLeaderWorkspace(
+  fixture: Fixture,
+  backend: 'local' | 'docker',
+  reason: RegExp,
+): Promise<void> {
+  const leader = await createAgent(fixture, '队长');
+  const channelId = await createChannel(fixture);
+  await joinChannel(fixture, channelId, leader);
+  const project = await makeTempDir('allibot-team-workspace-');
+  mkdirSync(project, { recursive: true });
+  try {
+    const configured = await patchJson(fixture, `/api/channels/${channelId}`, {
+      workspace_root: project,
+      workspace_backend: backend,
+    });
+    assert.equal(configured.status, 200, await configured.clone().text());
+    await makeTeam(fixture, channelId, leader);
+    if (backend === 'local') {
+      // A configured local root that disappeared is the D5.1 failure; a
+      // rootless channel stays valid because it simply has no file tools.
+      rmSync(project, { recursive: true, force: true });
+    }
+
+    const reading = await readTeam(fixture, channelId);
+    assert.equal(reading.team.status, 'invalid');
+    assert.match(String(reading.team.reason), reason);
+
+    await postMessage(fixture, channelId, '频道消息触发队长');
+    const created = await createTask(fixture, channelId, '不可用队长下的任务');
+    await postMessage(fixture, created.targetId, '任务线程消息触发队长');
+
+    const channelRuns = readDatabase<RunReading>(
+      fixture,
+      'SELECT id, target_id, channel_id, task_id, leader_member_id, status, reason, started_at, finished_at FROM team_run WHERE target_id = ? ORDER BY rowid',
+      [channelId],
+    );
+    assert.equal(channelRuns.length, 1, 'the channel message leaves one record');
+    assert.equal(channelRuns[0]?.status, 'invalid-leader');
+    assert.equal(channelRuns[0]?.reason, reading.team.reason);
+    assert.ok(channelRuns[0]?.finished_at !== null);
+
+    const taskRuns = readDatabase<RunReading>(
+      fixture,
+      'SELECT id, target_id, channel_id, task_id, leader_member_id, status, reason, started_at, finished_at FROM team_run WHERE target_id = ? ORDER BY rowid',
+      [created.targetId],
+    );
+    assert.equal(taskRuns.length, 2, 'task creation and a task-thread message each leave one record');
+    for (const run of taskRuns) {
+      assert.equal(run.status, 'invalid-leader');
+      assert.equal(run.reason, reading.team.reason);
+      assert.equal(run.task_id, created.taskId);
+    }
+
+    const targets = [channelId, created.targetId];
+    for (const targetId of targets) {
+      const assignments = readDatabase<{ total: number }>(
+        fixture,
+        'SELECT count(*) AS total FROM team_assignment WHERE target_id = ?',
+        [targetId],
+      );
+      assert.equal(assignments[0]?.total, 0, 'an invalid leader assigns nobody');
+      const outcomes = readDatabase<{ total: number }>(
+        fixture,
+        'SELECT count(*) AS total FROM round_outcome WHERE target_id = ?',
+        [targetId],
+      );
+      assert.equal(outcomes[0]?.total, 0, 'no leader round starts, so no outcome exists');
+      const budget = readDatabase<{ used: number }>(
+        fixture,
+        'SELECT used FROM target_budget WHERE target_id = ?',
+        [targetId],
+      );
+      assert.equal(budget[0]?.used ?? 0, 0, 'an invalid leader consumes no budget');
+    }
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+test('a missing local workspace root makes the leader invalid and records invalid-leader wakes', async () => {
+  const fixture = await startFixture('allibot-team-invalid-root-');
+  try {
+    await assertInvalidLeaderWorkspace(fixture, 'local', /项目根不存在或不可读/);
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('an unavailable Docker backend makes the leader invalid and records invalid-leader wakes', async () => {
+  const fixture = await startFixture('allibot-team-invalid-docker-');
+  try {
+    // The every-suite fake docker defaults to a missing daemon.
+    await assertInvalidLeaderWorkspace(fixture, 'docker', /Docker 后端不可用/);
+  } finally {
+    await fixture.stop();
+  }
+});
 
 function readDatabase<T>(
   fixture: Fixture,

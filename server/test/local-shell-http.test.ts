@@ -50,6 +50,8 @@ interface StartOptions {
   commands?: readonly string[];
   allowLocalShell?: 0 | 1;
   env?: NodeJS.ProcessEnv;
+  /** Declare these names on one enabled remote MCP server in the agent's mcp.json. */
+  mcpEnvNames?: readonly string[];
 }
 
 async function startFixture(prefix: string, options: StartOptions = {}): Promise<Fixture> {
@@ -68,8 +70,6 @@ async function startFixture(prefix: string, options: StartOptions = {}): Promise
     '--scripted-provider',
     'shell',
     ...commands.flatMap((command) => ['--scripted-shell-command', command]),
-    '--shell-env-name',
-    DECLARED_NAME,
     ...(options.args ?? []),
   ];
   const running = await startServer(dataDir, {
@@ -101,6 +101,23 @@ async function startFixture(prefix: string, options: StartOptions = {}): Promise
     },
   };
   fixture.agentId = await createAgent(fixture, '本地成员');
+  if (options.mcpEnvNames !== undefined && options.mcpEnvNames.length > 0) {
+    // D5.4 / D6.1: the member's mcp.json is the only source of extra tool
+    // environment variables. The remote entry is enabled but has no consent,
+    // so runtime declares the names without connecting anywhere.
+    const declaration = await putJson(fixture, `/api/agents/${fixture.agentId}/mcp`, {
+      entries: [
+        {
+          name: 'declared-env',
+          transport: 'http',
+          enabled: true,
+          url: 'http://127.0.0.1:9/mcp',
+          env_names: options.mcpEnvNames,
+        },
+      ],
+    });
+    assert.equal(declaration.status, 200, await declaration.clone().text());
+  }
   fixture.channelId = await createChannel(fixture, '本地频道');
   await joinChannel(fixture, fixture.channelId, fixture.agentId);
   if (options.configureWorkspace !== false) {
@@ -492,7 +509,10 @@ test('the shell environment is the allowlist plus declared env_names; provider k
     "printf '%s|%s|%s|%s|%s|%s|%s' \"$MCP_DECLARED_SENTINEL\" " +
     "\"${ANTHROPIC_API_KEY-ABSENT}\" \"${OPENAI_API_KEY-ABSENT}\" " +
     "\"${ALLIBOT_WEB_CREDENTIAL-ABSENT}\" \"$LANG\" \"$TERM\" \"$HOME\"";
-  const fixture = await startFixture('allibot-shell-env-', { commands: [command] });
+  const fixture = await startFixture('allibot-shell-env-', {
+    commands: [command],
+    mcpEnvNames: [DECLARED_NAME],
+  });
   try {
     // `HOME` in the child must be the server's temp home, not the test process
     // home; compute it from the fixture after startup.
@@ -519,6 +539,51 @@ test('the shell environment is the allowlist plus declared env_names; provider k
     assert.equal(body.includes(DECLARED_VALUE), false, 'values stay out of the reply');
     assert.equal(body.includes(PROVIDER_SENTINEL), false);
     assert.equal(body.includes(WEB_SENTINEL), false);
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('Bash approval summaries mask token-shaped values but keep the command readable', async () => {
+  const command = 'echo Authorization: Bearer sk-live-TOPSECRET MY_API_KEY=sk-env-SECRET sk-query-SECRET';
+  const fixture = await startFixture('allibot-shell-mask-', { commands: [command] });
+  try {
+    const pendingReply = sendMessage(fixture, fixture.channelId, '掩码审批');
+    pendingReply.catch(() => undefined);
+    const pending = await waitForPending(fixture);
+    const call = pending.tool_calls[0]!;
+    assert.equal(call.tool_name, 'Bash');
+    assert.match(call.pattern, /Authorization: \*\*\*/);
+    assert.match(call.pattern, /MY_API_KEY=\*\*\*/);
+    for (const secret of ['TOPSECRET', 'sk-env-SECRET', 'sk-query-SECRET']) {
+      assert.equal(call.pattern.includes(secret), false, `the pattern keeps ${secret}`);
+      assert.equal(JSON.stringify(call.arguments).includes(secret), false);
+    }
+    assert.equal(call.pattern.includes('echo'), true, 'the readable command survives');
+
+    const stored = queryDatabase<{ tool_calls: string }>(
+      fixture.dataDir,
+      'SELECT tool_calls FROM approval_request WHERE reply_id = ?',
+      [pending.reply_id],
+    )[0]!.tool_calls;
+    for (const secret of ['TOPSECRET', 'sk-env-SECRET', 'sk-query-SECRET']) {
+      assert.equal(stored.includes(secret), false, `SQLite keeps ${secret}`);
+    }
+    const listed = await fetch(`${fixture.base}/api/approvals?status=all`);
+    const listedText = await listed.text();
+    for (const secret of ['TOPSECRET', 'sk-env-SECRET', 'sk-query-SECRET']) {
+      assert.equal(listedText.includes(secret), false, `the human face keeps ${secret}`);
+    }
+
+    const denied = await postJson(fixture, `/api/approvals/${pending.reply_id}`, {
+      tool_call_id: call.tool_call_id,
+      confirmed: false,
+    });
+    assert.equal(denied.status, 200, await denied.clone().text());
+    const sent = await pendingReply;
+    assert.equal(sent.status, 201, await sent.clone().text());
+    const body = await lastAgentBody(fixture, fixture.channelId);
+    assert.match(body, /\[shell-run-1\] error:denied/);
   } finally {
     await fixture.stop();
   }

@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ApiFailure } from './api-error.js';
+import { tFromDb } from './copy.js';
 import {
   canonicalMcpJson,
   mcpFilePath,
@@ -71,7 +72,7 @@ export function runMcpExport(
   if (options.apply !== options.yes) {
     return {
       exitCode: 2,
-      lines: ['export-mcp：--apply 与 --yes 必须同时给出；未写入任何文件。'],
+      lines: [tFromDb(db, 'mcp.export.applyYes')],
       written: [],
     };
   }
@@ -84,7 +85,11 @@ export function runMcpExport(
     )
     .all() as LegacyRow[];
   if (rows.length === 0) {
-    return { exitCode: 0, lines: ['export-mcp：没有可导出的 Agent 级 mcp_server 行。'], written: [] };
+    return {
+      exitCode: 0,
+      lines: [tFromDb(db, 'mcp.export.noRows')],
+      written: [],
+    };
   }
 
   const byAgent = new Map<string, LegacyRow[]>();
@@ -108,7 +113,7 @@ export function runMcpExport(
     return {
       exitCode: 1,
       lines: [
-        'export-mcp：整次导出被拒绝，未写入任何文件：',
+        tFromDb(db, 'mcp.export.rejectedHeader'),
         ...problems.map((problem) => `  - ${problem}`),
       ],
       written: [],
@@ -118,14 +123,19 @@ export function runMcpExport(
   if (!options.apply || !options.yes) {
     for (const plan of plans) {
       lines.push(
-        `[dry-run] agent ${plan.agentId}：${plan.exported.length} 条声明` +
-          `${plan.unchanged ? '（已是最新）' : ` → ${plan.filePath}`}`,
+        tFromDb(db, 'mcp.export.dryRunLine', {
+          agent_id: plan.agentId,
+          count: plan.exported.length,
+          status: plan.unchanged
+            ? tFromDb(db, 'mcp.export.latestSuffix')
+            : ` → ${plan.filePath}`,
+        }),
       );
       for (const entry of plan.exported) {
         lines.push(`  - ${entry.name} (${entry.transport}${entry.enabled ? '' : ', disabled'})`);
       }
     }
-    lines.push('export-mcp：dry-run，未写入；同时给出 --apply --yes 才会写入。');
+    lines.push(tFromDb(db, 'mcp.export.dryRunEnd'));
     return { exitCode: 0, lines, written: [] };
   }
 
@@ -133,7 +143,7 @@ export function runMcpExport(
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   for (const plan of plans) {
     if (plan.unchanged) {
-      lines.push(`agent ${plan.agentId}：mcp.json 已包含这些声明，未改写。`);
+      lines.push(tFromDb(db, 'mcp.export.unchanged', { agent_id: plan.agentId }));
       continue;
     }
     mkdirSync(plan.home, { recursive: true, mode: 0o700 });
@@ -162,12 +172,21 @@ export function runMcpExport(
     );
     written.push(plan.filePath);
     lines.push(
-      `agent ${plan.agentId}：写入 ${plan.filePath}` +
-        `${backupPath === null ? '' : `（备份 ${backupPath}）`}`,
+      tFromDb(db, 'mcp.export.written', {
+        agent_id: plan.agentId,
+        path: plan.filePath,
+        backup:
+          backupPath === null
+            ? ''
+            : tFromDb(db, 'mcp.export.backupSuffix', { path: backupPath }),
+      }),
     );
   }
   lines.push(
-    `export-mcp：完成；mcp_server 行保留未删（${rows.length} 行），远端确认只保留旧行上已有的 ${countConsents(plans)} 条。`,
+    tFromDb(db, 'mcp.export.done', {
+      rows: rows.length,
+      consents: countConsents(plans),
+    }),
   );
   return { exitCode: 0, lines, written };
 }
@@ -182,12 +201,12 @@ function planOneAgent(
     .prepare("SELECT kind FROM member WHERE id = ? AND kind = 'agent'")
     .get(agentId) as { kind: string } | undefined;
   if (member === undefined) {
-    return `agent ${agentId}：mcp_server 行指向不存在的 Agent，拒绝导出`;
+    return tFromDb(db, 'mcp.export.missingAgent', { agent_id: agentId });
   }
 
   const exported: McpServerEntry[] = [];
   for (const row of rows) {
-    const parsed = legacyEntry(row);
+    const parsed = legacyEntry(db, row);
     if (typeof parsed === 'string') {
       return `agent ${agentId} / ${row.name}：${parsed}`;
     }
@@ -196,9 +215,12 @@ function planOneAgent(
 
   const home = agentHomeRoot(agentId, env);
   const filePath = mcpFilePath(agentId, env);
-  const current = readMcpFile(filePath);
+  const current = readMcpFile(filePath, db);
   if (current.diagnostic !== null) {
-    return `agent ${agentId}：现有 mcp.json 不可用（${current.diagnostic}），拒绝覆盖`;
+    return tFromDb(db, 'mcp.export.invalidExisting', {
+      agent_id: agentId,
+      diagnostic: current.diagnostic,
+    });
   }
 
   const merged = new Map<string, McpServerEntry>();
@@ -209,7 +231,10 @@ function planOneAgent(
     const existing = merged.get(entry.name);
     if (existing !== undefined) {
       if (JSON.stringify(existing) !== JSON.stringify(entry)) {
-        return `agent ${agentId} / ${entry.name}：同名条目在 mcp.json 中的形状与旧行不同，拒绝整次写入`;
+        return tFromDb(db, 'mcp.export.shapeConflict', {
+          agent_id: agentId,
+          name: entry.name,
+        });
       }
       continue;
     }
@@ -247,15 +272,15 @@ function planOneAgent(
 }
 
 /** One historical row → one file entry; unknown config fields are refused. */
-function legacyEntry(row: LegacyRow): McpServerEntry | string {
+function legacyEntry(db: Database.Database, row: LegacyRow): McpServerEntry | string {
   let config: unknown;
   try {
     config = JSON.parse(row.config) as unknown;
   } catch {
-    return 'config 不是合法 JSON';
+    return tFromDb(db, 'mcp.export.configInvalidJson');
   }
   if (typeof config !== 'object' || config === null || Array.isArray(config)) {
-    return 'config 必须是对象';
+    return tFromDb(db, 'mcp.export.configNotObject');
   }
   const record = config as Record<string, unknown>;
   const allowed =
@@ -264,7 +289,7 @@ function legacyEntry(row: LegacyRow): McpServerEntry | string {
       : new Set(['url', 'env_names']);
   const unsupported = Object.keys(record).find((key) => !allowed.has(key));
   if (unsupported !== undefined) {
-    return `config 含 M2 不支持的字段：${unsupported}`;
+    return tFromDb(db, 'mcp.export.configUnsupported', { field: unsupported });
   }
   const candidate: Record<string, unknown> = {
     name: row.name,
@@ -281,7 +306,7 @@ function legacyEntry(row: LegacyRow): McpServerEntry | string {
     candidate['env_names'] = record['env_names'];
   }
   try {
-    return parseEntries([candidate])[0]!;
+    return parseEntries([candidate], db)[0]!;
   } catch (error) {
     if (error instanceof ApiFailure) {
       return error.message;

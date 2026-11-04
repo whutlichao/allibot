@@ -11,6 +11,7 @@ import {
 import path from 'node:path';
 import type {
   EditFileRequest,
+  FilePreviewRequest,
   FileToolErrorCode,
   GlobFileRequest,
   GrepFileRequest,
@@ -19,6 +20,7 @@ import type {
   RoundFileToolResult,
   RoundFileTools,
   RoundGrepMatch,
+  RoundPermissionCheck,
   WriteFileRequest,
 } from './agent-seam.js';
 import { isInsideOrEqual } from './workspace-root.js';
@@ -58,14 +60,29 @@ interface ResolvedPath {
 
 type PathAction = 'read' | 'write' | 'edit';
 
-const MAX_READ_BYTES = 2 * 1024 * 1024;
-const MAX_GREP_MATCHES = 200;
+const PREVIEW_ACTIONS: Record<string, PathAction | undefined> = {
+  Read: 'read',
+  Glob: 'read',
+  Grep: 'read',
+  Write: 'write',
+  Edit: 'edit',
+};
+
+export const MAX_READ_BYTES = 2 * 1024 * 1024;
+export const MAX_GREP_MATCHES = 200;
 
 /**
  * The one gate face the file tools ask before executing. The gate decides
  * allow / deny / ask; an ask waits for the human decision inside `authorize`.
  */
 export interface RoundFileGate {
+  check(request: {
+    tool_name: string;
+    pattern: string;
+    arguments: Record<string, unknown>;
+    root_internal_write?: boolean;
+    tool_call_id?: string;
+  }): RoundPermissionCheck;
   authorize(request: {
     tool_name: string;
     pattern: string;
@@ -373,14 +390,40 @@ export function createRoundFileTools(options: {
     }
   }
 
-  return { Read, Glob, Grep, Write, Edit };
+  /**
+   * The adapter preview for one file path (D5.5). The resolver runs first, so
+   * the explicit `root_internal_write` fact is the realpath result — the same
+   * fact the executable call passes to `authorize`. A hard path failure is a
+   * preview `deny`; it can never preview `allow` and then fail the real call.
+   */
+  async function Preview(request: FilePreviewRequest): Promise<RoundPermissionCheck> {
+    const action = PREVIEW_ACTIONS[request?.tool_name];
+    if (action === undefined || gate === undefined) {
+      return { decision: 'deny', reason: 'rule-deny' };
+    }
+    const resolved = resolve(request.path ?? '.', action);
+    if (!('realPath' in resolved)) {
+      return { decision: 'deny', reason: 'rule-deny' };
+    }
+    return gate.check({
+      tool_name: request.tool_name,
+      pattern: resolved.relativePath,
+      arguments: {
+        ...(request.path === undefined ? {} : { path: request.path }),
+        ...(request.pattern === undefined ? {} : { pattern: request.pattern }),
+      },
+      root_internal_write: resolved.root.scope === 'project',
+    });
+  }
+
+  return { Read, Glob, Grep, Write, Edit, Preview };
 }
 
-function failure(error: FileToolErrorCode, message: string): RoundFileToolResult {
+export function failure(error: FileToolErrorCode, message: string): RoundFileToolResult {
   return { ok: false, error, message };
 }
 
-function hasParentSegment(value: string): boolean {
+export function hasParentSegment(value: string): boolean {
   return value.split(/[\\/]+/).some((segment) => segment === '..');
 }
 

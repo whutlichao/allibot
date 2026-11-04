@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type {
   EditFileRequest,
-  FileToolErrorCode,
+  FilePreviewRequest,
   GlobFileRequest,
   GrepFileRequest,
   ReadFileRequest,
@@ -9,6 +9,7 @@ import type {
   RoundFileToolResult,
   RoundFileTools,
   RoundGrepMatch,
+  RoundPermissionCheck,
   RoundShell,
   RoundShellResult,
   RunShellRequest,
@@ -18,7 +19,14 @@ import {
   containerToolEnvironment,
   type DockerContainerHandle,
 } from './docker-workspace.js';
-import { globMatcher, type RoundFileGate } from './workspace-files.js';
+import {
+  MAX_GREP_MATCHES,
+  MAX_READ_BYTES,
+  failure,
+  globMatcher,
+  hasParentSegment,
+  type RoundFileGate,
+} from './workspace-files.js';
 
 /**
  * 容器内文件 / shell 工具 (#49 / D5.3 / ADR-0006 decision 4).
@@ -44,8 +52,6 @@ import { globMatcher, type RoundFileGate } from './workspace-files.js';
 
 const PROJECT_ROOT = '/workspace';
 const SKILLS_ROOT = '/agent-home/skills';
-const MAX_READ_BYTES = 2 * 1024 * 1024;
-const MAX_GREP_MATCHES = 200;
 const MAX_GREP_FILES = 2000;
 
 interface ContainerRoot {
@@ -61,6 +67,14 @@ interface ResolvedContainerPath {
 }
 
 type PathAction = 'read' | 'write' | 'edit';
+
+const PREVIEW_ACTIONS: Record<string, PathAction | undefined> = {
+  Read: 'read',
+  Glob: 'read',
+  Grep: 'read',
+  Write: 'write',
+  Edit: 'edit',
+};
 
 export interface ContainerFileToolsOptions {
   handle: DockerContainerHandle;
@@ -441,7 +455,35 @@ export function createContainerFileTools(options: ContainerFileToolsOptions): Ro
       .sort();
   }
 
-  return { Read, Glob, Grep, Write, Edit };
+  /**
+   * The adapter preview (D5.5). The container resolver runs first and supplies
+   * the explicit root-internal fact; a path that resolves outside the mounted
+   * roots previews `deny`, never `allow`.
+   */
+  async function Preview(request: FilePreviewRequest): Promise<RoundPermissionCheck> {
+    if (gate === undefined) {
+      return { decision: 'deny', reason: 'rule-deny' };
+    }
+    const action = PREVIEW_ACTIONS[request?.tool_name];
+    if (action === undefined) {
+      return { decision: 'deny', reason: 'rule-deny' };
+    }
+    const resolved = await resolve(request.path ?? '.', action);
+    if (!('containerPath' in resolved)) {
+      return { decision: 'deny', reason: 'rule-deny' };
+    }
+    return gate.check({
+      tool_name: request.tool_name,
+      pattern: resolved.relativePath,
+      arguments: {
+        ...(request.path === undefined ? {} : { path: request.path }),
+        ...(request.pattern === undefined ? {} : { pattern: request.pattern }),
+      },
+      root_internal_write: resolved.root.scope === 'project',
+    });
+  }
+
+  return { Read, Glob, Grep, Write, Edit, Preview };
 }
 
 export interface ContainerShellOptions {
@@ -595,14 +637,6 @@ function isInsideHostRoot(candidate: string, root: string): boolean {
   const normal = path.resolve(candidate);
   const base = path.resolve(root);
   return normal === base || normal.startsWith(`${base}${path.sep}`);
-}
-
-function hasParentSegment(value: string): boolean {
-  return value.split(/[\\/]+/).some((segment) => segment === '..');
-}
-
-function failure(error: FileToolErrorCode, message: string): RoundFileToolResult {
-  return { ok: false, error, message };
 }
 
 function shellFailure(error: RoundShellResult['error'], message: string): RoundShellResult {

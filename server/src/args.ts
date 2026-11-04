@@ -130,13 +130,6 @@ export interface CliOptions {
   apply: boolean;
   yes: boolean;
   /**
-   * The MCP `env_names` declared for the local shell (#46 / D5.4). #47 reads
-   * them from the member's `mcp.json`; until then this startup injection is the
-   * documented merge point. Names only: values come from the process
-   * environment at spawn time and are never stored.
-   */
-  shellEnvNames: readonly string[];
-  /**
    * The Docker CLI executable the workspace backend spawns (#49). Production
    * uses `docker`; automation injects the fake runtime fixture here, so the
    * container lifecycle is observed without a real daemon.
@@ -169,7 +162,7 @@ const USAGE =
   '[--scripted-team-member-fail] [--scripted-team-member-transfer <member-id>] ' +
   '[--scripted-shell-command <command>] ' +
   '[--fixed-clock <ISO-8601>] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>] ' +
-  '[--approval-timeout-ms <ms>] [--shell-env-name <NAME>] [--docker-command <path>]';
+  '[--approval-timeout-ms <ms>] [--docker-command <path>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -202,7 +195,6 @@ export function parseCliArgs(
       'approval-timeout-ms': { type: 'string' },
       apply: { type: 'boolean' },
       yes: { type: 'boolean' },
-      'shell-env-name': { type: 'string', multiple: true },
       'docker-command': { type: 'string' },
     },
     strict: true,
@@ -259,7 +251,6 @@ export function parseCliArgs(
     approvalTimeoutMs: parseApprovalTimeoutMs(values['approval-timeout-ms']),
     apply: values.apply === true,
     yes: values.yes === true,
-    shellEnvNames: parseShellEnvNames(values['shell-env-name']),
     dockerCommand: parseDockerCommand(values['docker-command']),
   };
 }
@@ -386,23 +377,6 @@ function parseScriptedShellCommands(raw: readonly string[] | undefined): readonl
     throw new Error('invalid --scripted-shell-command value: a command must not be empty');
   }
   return raw;
-}
-
-/** Shell env names are variable names only: no `=` and no empty name. */
-function parseShellEnvNames(raw: readonly string[] | undefined): readonly string[] {
-  if (raw === undefined) {
-    return [];
-  }
-  const names: string[] = [];
-  for (const name of raw) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-      throw new Error(`invalid --shell-env-name value: ${name}`);
-    }
-    if (!names.includes(name)) {
-      names.push(name);
-    }
-  }
-  return names;
 }
 
 /** The Docker CLI path: a non-empty executable name or absolute path. */

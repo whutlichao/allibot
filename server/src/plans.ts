@@ -48,7 +48,10 @@ export interface PlanQuery {
   memberId?: string;
 }
 
-export function parsePlanQuery(searchParams: URLSearchParams): PlanQuery {
+export function parsePlanQuery(
+  db: Database.Database,
+  searchParams: URLSearchParams,
+): PlanQuery {
   const rawLimit = searchParams.get('limit');
   let limit = PLAN_DEFAULT_LIMIT;
   if (rawLimit !== null) {
@@ -57,7 +60,7 @@ export function parsePlanQuery(searchParams: URLSearchParams): PlanQuery {
       Number(rawLimit) < 1 ||
       Number(rawLimit) > PLAN_MAX_LIMIT
     ) {
-      throw ApiFailure.validation('limit must be an integer between 1 and 50', {
+      throw ApiFailure.validation(tFromDb(db, 'plan.error.limit'), {
         field: 'limit',
         value: rawLimit,
       });
@@ -76,7 +79,7 @@ export function parsePlanQuery(searchParams: URLSearchParams): PlanQuery {
  */
 export function listPlans(db: Database.Database, targetId: string, query: PlanQuery): PlanRunView[] {
   if (readTargetKind(db, targetId) === null) {
-    throw ApiFailure.notFound(`target not found: ${targetId}`);
+    throw ApiFailure.notFound(tFromDb(db, 'plan.error.targetNotFound', { target_id: targetId }));
   }
   if (query.memberId !== undefined) {
     const membership = db
@@ -358,19 +361,19 @@ function prunePlanRuns(
   now: string,
 ): void {
   const cutoff = retentionCutoff(now);
-  const rows = db
-    .prepare(
-      `SELECT id, created_at FROM plan_run
-        WHERE target_id = ? AND member_id = ?
-        ORDER BY created_at DESC, rowid DESC`,
-    )
-    .all(targetId, memberId) as { id: string; created_at: string }[];
-  const doomed = rows
-    .filter((row, index) => index >= PLAN_RUN_RETENTION || row.created_at < cutoff)
-    .map((row) => row.id);
-  if (doomed.length === 0) {
-    return;
-  }
-  const placeholders = doomed.map(() => '?').join(', ');
-  db.prepare(`DELETE FROM plan_run WHERE id IN (${placeholders})`).run(...doomed);
+  db.prepare(
+    `DELETE FROM plan_run
+      WHERE target_id = ?
+        AND member_id = ?
+        AND (
+          created_at < ?
+          OR id NOT IN (
+            SELECT id FROM plan_run
+             WHERE target_id = ?
+               AND member_id = ?
+             ORDER BY created_at DESC, rowid DESC
+             LIMIT ?
+          )
+        )`,
+  ).run(targetId, memberId, cutoff, targetId, memberId, PLAN_RUN_RETENTION);
 }

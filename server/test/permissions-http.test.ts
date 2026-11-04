@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -825,6 +825,31 @@ test('read-only denies writes and execution hard, even with an allow rule; trust
     assert.match(trustedBody, /\[approval-two\] ok path:approval-two\.txt/);
     assert.equal(readFileSync(path.join(fixture.root, 'approval-one.txt'), 'utf8'), 'one');
     assert.equal(latestOutcome(fixture, fixture.channelId)?.['status'], 'replied');
+  } finally {
+    await fixture.stop();
+  }
+});
+
+
+test('a symlink-escaped write is previewed as a non-allow and never executes outside the root', async () => {
+  const fixture = await startFixture('allibot-approval-symlink-', {
+    permissionMode: 'trusted-writes',
+  });
+  try {
+    const outside = path.join(fixture.tmp, 'outside');
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, path.join(fixture.root, 'escape'));
+
+    const sent = await sendMessage(fixture, fixture.channelId, '符号链接逃逸');
+    assert.equal(sent.status, 201, await sent.clone().text());
+    const body = (await messages(fixture, fixture.channelId))
+      .filter((row) => row['kind'] === 'agent')
+      .at(-1)?.['body'] as string;
+
+    assert.match(body, /\[permission-check\] Write:escape\/evil\.txt=deny:rule-deny/);
+    assert.match(body, /\[workspace-symlink-write\] error:outside-root/);
+    assert.equal(existsSync(path.join(outside, 'evil.txt')), false);
+    assert.deepEqual(await listApprovals(fixture), [], 'a hard root escape never asks');
   } finally {
     await fixture.stop();
   }
