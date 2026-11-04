@@ -30,12 +30,12 @@ export const MAX_TOOL_RESULT_CHARS = 20000;
  * scale that is missing: the model must see that what it read is not all of it.
  * A result already within the cap is returned untouched.
  */
-export function capToolResultContent(content: string, copy: ToolCopy): string {
+export function capToolResultContent(content: string, t: ToolCopy): string {
   if (content.length <= MAX_TOOL_RESULT_CHARS) {
     return content;
   }
   const kept = content.slice(0, MAX_TOOL_RESULT_CHARS);
-  return `${kept}\n${copy('tool.result.truncated', {
+  return `${kept}\n${t('tool.result.truncated', {
     given: kept.length,
     total: content.length,
   })}`;
@@ -394,11 +394,19 @@ function shapeGlob(requested: GlobFileRequest, result: RoundFileToolResult): Too
   return { ok: true, content: lines.join('\n') };
 }
 
-/** One `Grep` result: the request, then one `path:line: text` line per hit. */
-function shapeGrep(
+/**
+ * One `Grep` result: the request, then one `path:line: text` line per hit.
+ *
+ * `t` is the round's translation function — the same entry point every backend
+ * string uses, bound from `tFromDb` by the caller that holds the database —
+ * passed in rather than imported so this module never reads the language
+ * preference itself. Exported so a test can pin the model-visible capped copy
+ * without a provider round trip.
+ */
+export function shapeGrep(
   requested: GrepFileRequest,
   result: RoundFileToolResult,
-  copy: ToolCopy,
+  t: ToolCopy,
 ): ToolAnswer {
   const request = [
     `pattern: ${requested.pattern}`,
@@ -414,9 +422,9 @@ function shapeGrep(
   const matches = result.matches ?? [];
   lines.push(`matches: ${matches.length}`);
   if (result.capped === 'matches') {
-    lines.push(copy('tool.grep.capped.matches', { limit: MAX_GREP_MATCHES }));
+    lines.push(t('tool.grep.capped.matches', { limit: MAX_GREP_MATCHES }));
   } else if (result.capped === 'files') {
-    lines.push(copy('tool.grep.capped.files', { limit: MAX_GREP_FILES }));
+    lines.push(t('tool.grep.capped.files', { limit: MAX_GREP_FILES }));
   }
   lines.push(
     ...(matches.length === 0

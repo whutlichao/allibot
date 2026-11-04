@@ -14,7 +14,7 @@ import { maskSecret } from './providers.js';
 /** One request, plus the facts the failure copy needs. */
 export interface PostJsonRequest {
   fetch: typeof fetch;
-  /** The round's resolved provider base URL: the only origin a call may reach. */
+  /** The round's resolved provider base URL, prepended to the endpoint path. */
   baseUrl: string;
   /** The adapter's own endpoint path, appended to the base URL. */
   path: string;
@@ -33,7 +33,7 @@ export interface PostJsonRequest {
  * and the masked body, and both are the round adapter's existing failure path.
  */
 export async function postJson(request: PostJsonRequest): Promise<unknown> {
-  const url = requestUrl(request.baseUrl, request.path);
+  const url = `${request.baseUrl}${request.path}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), request.timeoutMs);
   try {
@@ -68,19 +68,6 @@ export async function postJson(request: PostJsonRequest): Promise<unknown> {
   } finally {
     clearTimeout(timer);
   }
-}
-
-/**
- * The one outbound URL a call may use: the round's resolved base URL plus the
- * adapter's own fixed path. The credential travels in this request's header, so
- * a URL that leaves the base URL's origin is a programmer error, never a call.
- */
-function requestUrl(baseUrl: string, path: string): string {
-  const url = new URL(`${baseUrl}${path}`);
-  if (url.origin !== new URL(baseUrl).origin) {
-    throw new Error(`provider request must stay on the configured base URL: ${url.origin}`);
-  }
-  return url.toString();
 }
 
 /** The one record guard both adapters read a provider payload with. */

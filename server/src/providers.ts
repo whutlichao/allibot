@@ -111,7 +111,7 @@ export function maskSecret(text: string, secret: string): string {
 }
 
 /** The human-face form of a credential: a head, an ellipsis and a tail. */
-export function maskKey(secret: string): string {
+function maskKey(secret: string): string {
   return secret.length <= 8 ? '…' : `${secret.slice(0, 3)}…${secret.slice(-4)}`;
 }
 
