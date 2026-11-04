@@ -103,6 +103,12 @@ let currentTargetId: string | null = null;
 let currentViewportWidth = window.innerWidth;
 let refreshGeneration = 0;
 /**
+ * 两条失败路径各一位：`GET /api/workspace` 读不到与 `PATCH /api/settings` 写不落库
+ * 是两条不同的失败，各用一条词条说明；合成一个标志会把读数失败说成写入失败。
+ */
+let loadFailed = false;
+let saveFailed = false;
+/**
  * 当前 target 的成员表（成员面板 / 名册 / workspace_status）：按需读，
  * 不把「未加入」或工作区可用性当猜测。
  */
@@ -396,7 +402,7 @@ async function writeSettings(
   return (await response.json()) as WorkspaceSettingsView;
 }
 
-function render(saveFailed = false): void {
+function render(): void {
   root.render(
     <StrictMode>
       <App
@@ -457,6 +463,7 @@ function render(saveFailed = false): void {
         }}
         onAgentMcpChange={changeAgentMcp}
         saveFailed={saveFailed}
+        loadFailed={loadFailed}
         onSelectTarget={(targetId) => {
           currentTargetId = targetId;
           render();
@@ -530,9 +537,13 @@ function render(saveFailed = false): void {
               if (currentWorkspace !== null) {
                 currentWorkspace = { ...currentWorkspace, settings: saved };
               }
+              saveFailed = false;
               render();
             })
-            .catch(() => render(true));
+            .catch(() => {
+              saveFailed = true;
+              render();
+            });
         }}
         onLiveEvent={(event) => {
           if (event.event === 'plan_update') {
@@ -623,6 +634,8 @@ async function refreshWorkspace(): Promise<void> {
 
   currentWorkspace = reading;
   currentSettings = reading.settings;
+  // 读数又读到了：兜底设置面的「设置读取失败」随之消失。
+  loadFailed = false;
   try {
     await loadPermissionRules(reading);
     await loadApprovals();
@@ -672,7 +685,8 @@ window.addEventListener('resize', () => {
 });
 
 refreshWorkspace().catch(() => {
-  // 后端不可达时壳仍显示可读文案；它说明读数没读到，而不是静默空白。
+  // 后端不可达时壳仍显示可读文案：它说明读数没读到，而不是静默空白。
   console.error(t(DEFAULT_SETTINGS.locale, 'settings.error.load'));
-  render(true);
+  loadFailed = true;
+  render();
 });
