@@ -5,14 +5,19 @@ import { tFromDb } from './copy.js';
 import {
   PROVIDER_CREDENTIAL_ENV,
   checkProviderAvailability,
+  maskSecret,
   providerBaseUrl,
   readCredential,
 } from './providers.js';
+import { createAnthropicConversation } from './tool-conversation-anthropic.js';
+import { createRoundToolExecutor, runToolLoop } from './tool-loop.js';
+import { roundToolSpecs } from './tool-specs.js';
 
 /**
- * The real provider adapters (D4.1): a minimal chat completion for Anthropic
- * and for OpenAI-compatible endpoints, behind the same `RoundProvider`
- * interface the scripted double implements.
+ * The real provider adapters (D4.1): a round-level tool loop for Anthropic and
+ * a minimal chat completion for OpenAI-compatible endpoints (#58 brings that
+ * line the same loop), behind the same `RoundProvider` interface the scripted
+ * double implements.
  *
  * Two disciplines shape every call. First, no remote call happens before the
  * one-time remote-data-flow consent for the provider, and none happens without
@@ -21,6 +26,11 @@ import {
  * round's output shape stays the seam's: zero or more pending replies plus one
  * round result. The credential value travels only in the request header; it
  * never enters a reason, a message body or a log line.
+ *
+ * 轮内工具循环 (D1 / D7): a round may ask the model, run the tools it
+ * requested and ask again, all inside this one `runRound` call. Only the text
+ * of the turn that requests nothing lands, and a round whose tool set is empty
+ * sends exactly the single completion it always did.
  */
 
 /** The adapter's resolved inputs for one call. */
@@ -88,20 +98,6 @@ export function resolveAvailability(
   };
 }
 
-/**
- * Mask a credential inside arbitrary text: only the head and tail survive, so
- * a provider echoing the key back in an error cannot leak it into a round
- * reason or a log line.
- */
-export function maskSecret(text: string, secret: string): string {
-  return secret.length === 0 ? text : text.split(secret).join(maskKey(secret));
-}
-
-/** The human-face form of a credential: a head, an ellipsis and a tail. */
-export function maskKey(secret: string): string {
-  return secret.length <= 8 ? '…' : `${secret.slice(0, 3)}…${secret.slice(-4)}`;
-}
-
 /** The user message a round sends: every message it read, in seq order. */
 function userMessage(input: RoundInput): string {
   return input.messages
@@ -134,7 +130,7 @@ export function createModelProvider(
       }
       const { available } = availability;
       try {
-        const text = await callProvider(doFetch, available, input.systemPrompt, userMessage(input), timeoutMs);
+        const text = await callModel(doFetch, available, input, timeoutMs);
         if (text.trim().length === 0) {
           return {
             verdict: 'failed',
@@ -160,9 +156,36 @@ function failureReason(db: Database.Database, message: string, secret: string): 
 }
 
 /**
+ * One round's model text. The Anthropic line runs the round-level tool loop:
+ * the loop's final turn is the round's answer. The OpenAI-compatible line is
+ * still the single completion it always was (#58 brings it the same loop).
+ */
+async function callModel(
+  doFetch: typeof fetch,
+  available: ProviderAvailability,
+  input: RoundInput,
+  timeoutMs: number,
+): Promise<string> {
+  if (available.provider === 'anthropic') {
+    const conversation = createAnthropicConversation({
+      fetch: doFetch,
+      baseUrl: available.baseUrl,
+      credential: available.credential,
+      model: available.model,
+      system: input.systemPrompt,
+      user: userMessage(input),
+      // The round's own availability calculation decides the tool set (D2); an
+      // empty list means the request carries no tool definitions at all.
+      tools: roundToolSpecs(input),
+    });
+    return await runToolLoop(conversation, createRoundToolExecutor(input), { timeoutMs });
+  }
+  return await callProvider(doFetch, available, input.systemPrompt, userMessage(input), timeoutMs);
+}
+
+/**
  * One minimal chat completion: a system prompt and one user message in, a text
- * answer out. Only the path, the auth header and the response shape differ
- * between the two providers.
+ * answer out.
  */
 async function callProvider(
   doFetch: typeof fetch,
@@ -174,38 +197,21 @@ async function callProvider(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response =
-      available.provider === 'anthropic'
-        ? await doFetch(`${available.baseUrl}/v1/messages`, {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              'x-api-key': available.credential,
-              'anthropic-version': '2023-06-01',
-            },
-            body: JSON.stringify({
-              model: available.model,
-              max_tokens: 1024,
-              system,
-              messages: [{ role: 'user', content: user }],
-            }),
-            signal: controller.signal,
-          })
-        : await doFetch(`${available.baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              authorization: `Bearer ${available.credential}`,
-            },
-            body: JSON.stringify({
-              model: available.model,
-              messages: [
-                { role: 'system', content: system },
-                { role: 'user', content: user },
-              ],
-            }),
-            signal: controller.signal,
-          });
+    const response = await doFetch(`${available.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${available.credential}`,
+      },
+      body: JSON.stringify({
+        model: available.model,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+      signal: controller.signal,
+    });
 
     if (!response.ok) {
       // Mask before truncating: a 500-character cut could otherwise leave an
@@ -217,45 +223,23 @@ async function callProvider(
       );
     }
     const payload: unknown = await response.json();
-    return available.provider === 'anthropic'
-      ? readAnthropicText(payload)
-      : readOpenAiText(payload);
+    return readOpenAiText(payload);
   } finally {
     clearTimeout(timer);
   }
 }
 
-function readAnthropicText(payload: unknown): string {
-  const content = readPath(payload, ['content']);
-  if (!Array.isArray(content)) {
-    throw new Error('anthropic response carried no content array');
-  }
-  return content
-    .map((block) => (isRecord(block) && typeof block['text'] === 'string' ? block['text'] : ''))
-    .join('');
-}
-
 function readOpenAiText(payload: unknown): string {
-  const choices = readPath(payload, ['choices']);
+  const choices = isRecord(payload) ? payload['choices'] : undefined;
   if (!Array.isArray(choices) || choices.length === 0) {
     throw new Error('openai response carried no choices array');
   }
-  const content = readPath(choices[0], ['message', 'content']);
+  const message = isRecord(choices[0]) ? choices[0]['message'] : undefined;
+  const content = isRecord(message) ? message['content'] : undefined;
   if (typeof content !== 'string') {
     throw new Error('openai response carried no message content');
   }
   return content;
-}
-
-function readPath(value: unknown, path: readonly string[]): unknown {
-  let current = value;
-  for (const key of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[key];
-  }
-  return current;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
