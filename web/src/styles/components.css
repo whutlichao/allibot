@@ -537,6 +537,47 @@
   margin-block-start: 6px;
 }
 
+/*
+ * 折叠分区（F4）：权限规则与 SOP 默认收起，只把标题留在右抽屉的单列里。
+ * 展开时才挂载内容；不加新的色值，沿用既有 surface / border token。
+ */
+.context-fold {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-block-start: 4px;
+  padding-block-start: 8px;
+  border-block-start: 1px solid var(--border);
+}
+
+.context-fold__toggle {
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  padding: 4px 0;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.context-fold__toggle::before {
+  content: '▸';
+  display: inline-block;
+  inline-size: 1em;
+  color: var(--faint);
+}
+
+.context-fold__toggle[aria-expanded='true']::before {
+  content: '▾';
+}
+
+.context-fold__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .workspace-panel__title {
   margin: 0 0 8px;
   font-size: 15px;
@@ -947,6 +988,36 @@
   color: var(--warn-deep);
 }
 
+.agent-detail__consent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.agent-detail__consent-action {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  color: var(--fg);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.agent-detail__consent-action:disabled {
+  cursor: default;
+  color: var(--faint);
+}
+
+.agent-detail__consent-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--error);
+}
+
 .agent-detail__prompt {
   inline-size: 100%;
   min-block-size: 120px;
@@ -1153,7 +1224,8 @@
   color: var(--warn-deep);
 }
 
-.member-panel__join {
+.member-panel__join,
+.member-panel__action {
   font: inherit;
   padding: 4px 8px;
   color: var(--fg);

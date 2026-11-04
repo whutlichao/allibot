@@ -538,7 +538,7 @@ test('the workspace reading carries the channel workspace, Agent override and ta
   }
 });
 
-test('a missing runtime root reads workspace-root-missing on the target members', async () => {
+test('an unset root reads workspace-root-unset, a deleted configured root reads workspace-root-missing', async () => {
   const fixture = await startWorkspaceFixture('allibot-workspace-root-missing-read-');
   try {
     const channelId = await createChannel(fixture);
@@ -566,7 +566,7 @@ test('a missing runtime root reads workspace-root-missing on the target members'
     assert.deepEqual(noRootMembers[0]!['workspace_status'], {
       backend: 'local',
       available: false,
-      reason: 'workspace-root-missing',
+      reason: 'workspace-root-unset',
     });
 
     const dm = await postJson(fixture, '/api/dms', { agent_id: agentId });
@@ -578,7 +578,7 @@ test('a missing runtime root reads workspace-root-missing on the target members'
       assert.deepEqual(member['workspace_status'], {
         backend: 'local',
         available: false,
-        reason: 'workspace-root-missing',
+        reason: 'workspace-root-unset',
       });
     }
   } finally {

@@ -17,6 +17,7 @@ import type {
   TaskView,
   WorkspaceView,
 } from '@allibot/shared';
+import { ZH_CN } from '../../shared/dist/index.js';
 import {
   AGUI_RUNTIME_URL,
   AGUI_USE_SINGLE_ENDPOINT,
@@ -576,6 +577,36 @@ test('the main area is one CopilotChat bound to agentId="allibot" and threadId=t
   assert.equal(secondProps.agentId, ALLIBOT_AGENT_ID, 'the one agent id never follows the target');
   assert.equal(secondProps.threadId, DM_ID, 'the thread identity follows the selected target');
   assert.equal('threadId' in workspaceChatProps(null), false, 'no target means no thread binding');
+});
+
+test('the composer placeholder and disclaimer come from the zh-CN catalog', () => {
+  const props = workspaceChatProps(CHANNEL_ID, 'zh-CN');
+  assert.equal(
+    props.labels?.chatInputPlaceholder,
+    ZH_CN['workspace.composer.placeholder'].text,
+    'the input placeholder is the workspace catalog copy',
+  );
+  assert.equal(
+    props.labels?.chatDisclaimerText,
+    ZH_CN['workspace.chat.disclaimer'].text,
+    'the footer disclaimer is the workspace catalog copy',
+  );
+
+  const rendered = renderToStaticMarkup(
+    createElement(
+      CopilotKitProvider as never,
+      { runtimeUrl: AGUI_RUNTIME_URL, useSingleEndpoint: AGUI_USE_SINGLE_ENDPOINT } as never,
+      createElement(WorkspaceChatArea, { targetId: CHANNEL_ID }),
+    ),
+  );
+  assert.ok(
+    rendered.includes(ZH_CN['workspace.composer.placeholder'].text),
+    'the rendered input carries the catalog placeholder',
+  );
+  assert.ok(
+    rendered.includes(ZH_CN['workspace.chat.disclaimer'].text),
+    'the rendered footer carries the catalog disclaimer',
+  );
 });
 
 test('the shell docks one sidebar and every drawer keeps the same thread identity', async () => {

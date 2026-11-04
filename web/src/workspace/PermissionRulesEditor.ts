@@ -19,6 +19,8 @@ export interface PermissionRulesEditorProps {
   locale: Locale;
   /** The host's full-replacement write; absent = read-only display. */
   onSave?: (rules: PermissionRuleInput[]) => void | Promise<void>;
+  /** The fold's summary already names the section, so the inner title yields. */
+  showTitle?: boolean;
 }
 
 /**
@@ -32,6 +34,7 @@ export function PermissionRulesEditor({
   rules,
   locale,
   onSave,
+  showTitle = true,
 }: PermissionRulesEditorProps) {
   const [drafts, setDrafts] = useState<PermissionRuleDraft[]>(() =>
     permissionRuleDrafts(rules),
@@ -127,11 +130,13 @@ export function PermissionRulesEditor({
   return createElement(
     'section',
     { className: 'permission-rules', 'data-permission-rules': '' },
-    createElement(
-      'h4',
-      { className: 'permission-rules__title' },
-      t(locale, 'workspace.permission.rules.title'),
-    ),
+    showTitle
+      ? createElement(
+          'h4',
+          { className: 'permission-rules__title' },
+          t(locale, 'workspace.permission.rules.title'),
+        )
+      : null,
     rules === undefined
       ? createElement('p', { className: 'workspace-panel__pending' }, t(locale, 'workspace.status.loading'))
       : drafts.length === 0

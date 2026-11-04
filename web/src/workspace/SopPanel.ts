@@ -36,6 +36,8 @@ export interface SopPanelProps {
   onCreate?: (input: SopDefinitionCreate) => void | Promise<void>;
   /** The host's start write; the returned pending run is rendered by the host. */
   onStart?: (definitionId: string) => void | Promise<void>;
+  /** The fold's summary already names the section, so the inner title yields. */
+  showTitle?: boolean;
 }
 
 function emptyStep(): DraftStep {
@@ -66,6 +68,7 @@ export function SopPanel({
   locale,
   onCreate,
   onStart,
+  showTitle = true,
 }: SopPanelProps) {
   const [name, setName] = useState('');
   const [steps, setSteps] = useState<DraftStep[]>(() => [emptyStep()]);
@@ -529,7 +532,13 @@ export function SopPanel({
       'data-sop-writable': writable ? 'true' : 'false',
       'aria-label': t(locale, 'workspace.sop.title'),
     },
-    createElement('h3', { className: 'sop-panel__title' }, t(locale, 'workspace.sop.title')),
+    showTitle
+      ? createElement(
+          'h3',
+          { className: 'sop-panel__title' },
+          t(locale, 'workspace.sop.title'),
+        )
+      : null,
     writable
       ? null
       : createElement(

@@ -200,6 +200,59 @@ test('the target context shows the workspace-root-missing reason for a channel a
   }
 });
 
+test('an unset project root renders a neutral status, not the missing-root error', () => {
+  const html = renderContext(channel(), CHANNEL_ID, {
+    backend: 'local',
+    available: false,
+    reason: 'workspace-root-unset',
+  });
+  assert.match(html, /data-workspace-status="unset"/);
+  assert.match(html, /data-workspace-reason="workspace-root-unset"/);
+  assert.ok(
+    html.includes(ZH_CN['workspace.status.reason.workspaceRootUnset'].text),
+    'the neutral unset copy renders',
+  );
+  assert.doesNotMatch(
+    html,
+    /data-workspace-status="unavailable"/,
+    'an unset root is not an error state',
+  );
+  assert.ok(
+    !html.includes(ZH_CN['workspace.status.reason.workspaceRootMissing'].text),
+    'an unset root never reads as missing or unreadable',
+  );
+});
+
+test('the context drawer folds permission rules and SOP so the column stays readable', () => {
+  const html = renderToStaticMarkup(
+    createElement(ContextPanel, {
+      workspace: workspace(channel()),
+      targetId: CHANNEL_ID,
+      locale: 'zh-CN',
+      channelMembers: members({ backend: 'local', available: false, reason: 'workspace-root-unset' }),
+      permissionRules: [],
+      onPermissionRulesChange: () => undefined,
+      sopDefinitions: [],
+      onCreateSop: () => undefined,
+      onStartSop: () => undefined,
+    }),
+  );
+  assert.match(
+    html,
+    /data-action="toggle-fold" data-fold="permission-rules" aria-expanded="false"/,
+    'permission rules start collapsed',
+  );
+  assert.match(
+    html,
+    /data-action="toggle-fold" data-fold="sop" aria-expanded="false"/,
+    'SOP starts collapsed',
+  );
+  assert.ok(!html.includes('data-permission-rules=""'), 'the rule editor is not in the initial scroll');
+  assert.ok(!html.includes('data-sop-panel=""'), 'the SOP form is not in the initial scroll');
+  assert.ok(html.includes(ZH_CN['workspace.permission.rules.title'].text));
+  assert.ok(html.includes(ZH_CN['workspace.sop.title'].text));
+});
+
 test('workspaceStatusCopy never invents a reason for an available workspace', () => {
   assert.equal(
     workspaceStatusCopy('zh-CN', { backend: 'local', available: true, reason: null }),

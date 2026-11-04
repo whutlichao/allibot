@@ -1,6 +1,7 @@
 import {
   t,
   type AgentMcpView,
+  type AgentProvider,
   type AgentRulesView,
   type AgentSkillCandidatesView,
   type AgentSkillDetailView,
@@ -9,6 +10,7 @@ import {
   type ApprovalView,
   type ChannelConfigPatch,
   type PlanRunView,
+  type RemoteDataFlowReadView,
   type SopDefinitionCreate,
   type SopDefinitionView,
   type SopRunView,
@@ -58,6 +60,10 @@ export interface AppProps {
   onAgentRulesNeeded?: (agentId: string, channelId: string | null) => void;
   /** Agent-home mcp.json readings, keyed by Agent. */
   agentMcp?: Record<string, AgentMcpView>;
+  /** `GET /api/remote-data-flow`: provider credential variables and consent. */
+  remoteDataFlow?: RemoteDataFlowReadView;
+  /** The one-time provider consent write; absent = no confirmation entry. */
+  onConfirmProviderConsent?: (provider: AgentProvider) => void | Promise<void>;
   onAgentMcpNeeded?: (agentId: string) => void;
   onAgentMcpChange?: (
     agentId: string,
@@ -122,6 +128,8 @@ export function App({
   agentRules,
   onAgentRulesNeeded,
   agentMcp,
+  remoteDataFlow,
+  onConfirmProviderConsent,
   onAgentMcpNeeded,
   onAgentMcpChange,
   agentSkills,
@@ -164,6 +172,8 @@ export function App({
       agentRules,
       onAgentRulesNeeded,
       agentMcp,
+      remoteDataFlow,
+      onConfirmProviderConsent,
       onAgentMcpNeeded,
       onAgentMcpChange,
       agentSkills,

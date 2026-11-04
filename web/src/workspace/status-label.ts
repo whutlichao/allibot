@@ -1,8 +1,11 @@
 import {
+  AGENT_PROVIDERS,
   t,
+  type AgentProvider,
   type AgentStatus,
   type Locale,
   type OfflineReason,
+  type RemoteDataFlowReadView,
   type TaskStatus,
 } from '@allibot/shared';
 
@@ -21,11 +24,49 @@ export function statusLabel(locale: Locale, status: AgentStatus): string {
 }
 
 /**
+ * The provider prefix of a `provider:model` identifier. The web only parses
+ * the shared identifier shape; the credential variable name itself always
+ * comes from `/api/remote-data-flow`, never from a frontend table.
+ */
+export function providerFromModel(model: string | null): AgentProvider | null {
+  if (model === null) {
+    return null;
+  }
+  const separator = model.indexOf(':');
+  if (separator <= 0) {
+    return null;
+  }
+  const provider = model.slice(0, separator);
+  return AGENT_PROVIDERS.find((candidate) => candidate === provider) ?? null;
+}
+
+/** The provider's credential variable, read from the backend's flow reading. */
+export function credentialEnvFor(
+  model: string | null,
+  remoteDataFlow: RemoteDataFlowReadView | undefined,
+): string | null {
+  const provider = providerFromModel(model);
+  if (provider === null || remoteDataFlow === undefined) {
+    return null;
+  }
+  return (
+    remoteDataFlow.providers.find((entry) => entry.provider === provider)
+      ?.credential_env ?? null
+  );
+}
+
+/**
  * 「为什么未启用」的可读原因。原因本身是后端给的可用性事实
  * （model-missing / consent-missing / credential-missing），前端只按取值
- * 取词条，不从状态点反推。
+ * 取词条，不从状态点反推。缺凭证时点名 `/api/remote-data-flow` 给出的环境
+ * 变量；未确认告知时指向 Agent 详情里的确认入口。
  */
-export function offlineReasonLabel(locale: Locale, reason: OfflineReason): string {
+export function offlineReasonLabel(
+  locale: Locale,
+  reason: OfflineReason,
+  model: string | null = null,
+  remoteDataFlow: RemoteDataFlowReadView | undefined = undefined,
+): string {
   switch (reason) {
     case 'disabled':
       return t(locale, 'workspace.member.reason.disabled');
@@ -33,8 +74,14 @@ export function offlineReasonLabel(locale: Locale, reason: OfflineReason): strin
       return t(locale, 'workspace.member.reason.modelMissing');
     case 'consent-missing':
       return t(locale, 'workspace.member.reason.consentMissing');
-    case 'credential-missing':
-      return t(locale, 'workspace.member.reason.credentialMissing');
+    case 'credential-missing': {
+      const credentialEnv = credentialEnvFor(model, remoteDataFlow);
+      return credentialEnv === null
+        ? t(locale, 'workspace.member.reason.credentialMissingNoEnv')
+        : t(locale, 'workspace.member.reason.credentialMissing', {
+            credential_env: credentialEnv,
+          });
+    }
   }
 }
 

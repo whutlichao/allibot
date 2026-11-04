@@ -11,6 +11,7 @@ import path from 'node:path';
 import {
   WORKSPACE_BACKENDS,
   type WorkspaceBackend,
+  type WorkspaceFailureReason,
   type WorkspaceStatusReason,
   type WorkspaceStatusView,
 } from '@allibot/shared';
@@ -144,7 +145,10 @@ export function workspaceRootAvailability(
   root: string | null,
 ): { available: boolean; reason: WorkspaceStatusReason | null } {
   if (root === null) {
-    return { available: false, reason: 'workspace-root-missing' };
+    // No configured root is the product default, not a fault: the round runs
+    // without project file tools. Only a configured root that vanished reads
+    // as `workspace-root-missing`.
+    return { available: false, reason: 'workspace-root-unset' };
   }
   try {
     const canonical = realpathSync(root);
@@ -251,7 +255,7 @@ export function readRoundWorkspaceFailure(
   db: Database.Database,
   memberId: string,
   targetId: string,
-): { backend: WorkspaceBackend; reason: WorkspaceStatusReason } | null {
+): { backend: WorkspaceBackend; reason: WorkspaceFailureReason } | null {
   const binding = readTargetWorkspaceBinding(db, targetId);
   if (binding === null || binding.targetKind === 'dm') {
     return null;
@@ -281,7 +285,14 @@ export function readRoundWorkspaceFailure(
   }
   const availability = workspaceRootAvailability(binding.root);
   if (!availability.available) {
-    return { backend, reason: availability.reason ?? 'workspace-root-missing' };
+    // `binding.root` is non-null here, so this branch never sees `unset`.
+    return {
+      backend,
+      reason:
+        availability.reason === null || availability.reason === 'workspace-root-unset'
+          ? 'workspace-root-missing'
+          : availability.reason,
+    };
   }
   return null;
 }

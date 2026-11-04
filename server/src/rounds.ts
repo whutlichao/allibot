@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
+import type { WorkspaceFailureReason } from '@allibot/shared';
 import type {
   RoundDiscipline,
   RoundInput,
@@ -1441,7 +1442,7 @@ export async function readSopRoundInput(
 /** The readable copy for a zero-fallback workspace failure (D5.3 / D5.7). */
 function workspaceFailureReason(
   db: Database.Database,
-  reason: 'workspace-root-missing' | 'docker-unavailable' | 'docker-image-missing' | 'docker-consent-missing',
+  reason: WorkspaceFailureReason,
 ): string {
   switch (reason) {
     case 'docker-image-missing':
@@ -1500,7 +1501,12 @@ async function readRoundWorkspace(
     const availability = workspaceRootAvailability(binding.root);
     if (!availability.available) {
       throw new Error(
-        workspaceFailureReason(db, availability.reason ?? 'workspace-root-missing'),
+        workspaceFailureReason(
+          db,
+          availability.reason === null || availability.reason === 'workspace-root-unset'
+            ? 'workspace-root-missing'
+            : availability.reason,
+        ),
       );
     }
   }

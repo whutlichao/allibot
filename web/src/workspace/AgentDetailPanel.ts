@@ -1,6 +1,7 @@
 import {
   t,
   type AgentMcpView,
+  type AgentProvider,
   type AgentRuleSectionKind,
   type AgentRulesView,
   type AgentView,
@@ -8,6 +9,7 @@ import {
   type PermissionMode,
   type PermissionRuleInput,
   type PermissionRuleView,
+  type RemoteDataFlowReadView,
   type WorkspaceBackend,
 } from '@allibot/shared';
 import { createElement, useState, type ReactNode } from 'react';
@@ -28,7 +30,7 @@ import type { McpSaveBody } from './mcp-tab.ts';
 import { PermissionRulesEditor } from './PermissionRulesEditor.ts';
 import { agentPermissionModePatch, permissionModeOptions } from './permissions.ts';
 import { StatusPoint } from './StatusPoint.ts';
-import { offlineReasonLabel } from './status-label.ts';
+import { offlineReasonLabel, providerFromModel } from './status-label.ts';
 import {
   agentBackendChangePatch,
   workspaceBackendLabel,
@@ -77,6 +79,13 @@ export interface AgentDetailPanelProps {
   onMcpChange?: (body: McpSaveBody) => void | Promise<AgentMcpView | void>;
   /** The skills tab face (#48 / D6.5): list, selected detail and the writes. */
   skills?: AgentSkillsFace;
+  /** The provider credential/consent reading; names `credential_env` by provider. */
+  remoteDataFlow?: RemoteDataFlowReadView;
+  /**
+   * The one-time remote-data-flow consent write, when the host wired it. The
+   * panel only shows the entry for an Agent whose provider has no consent row.
+   */
+  onConfirmConsent?: (provider: AgentProvider) => void | Promise<void>;
 }
 
 function emptySkillsFace(): AgentSkillsFace {
@@ -109,6 +118,8 @@ export function AgentDetailPanel({
   mcp = null,
   onMcpChange,
   skills,
+  remoteDataFlow,
+  onConfirmConsent,
 }: AgentDetailPanelProps) {
   const [state, setState] = useState(() =>
     initialAgentDetailState(agent, initialTab, initialDraft),
@@ -118,6 +129,8 @@ export function AgentDetailPanel({
   const [deleteConfirming, setDeleteConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteFailed, setDeleteFailed] = useState(false);
+  const [confirmingConsent, setConfirmingConsent] = useState(false);
+  const [confirmConsentFailed, setConfirmConsentFailed] = useState(false);
 
   const dirty = hasUnsavedSystemPrompt(state, agent);
 
@@ -161,11 +174,27 @@ export function AgentDetailPanel({
     );
   }
 
+  function confirmConsent(provider: AgentProvider): void {
+    if (onConfirmConsent === undefined || confirmingConsent) {
+      return;
+    }
+    setConfirmingConsent(true);
+    setConfirmConsentFailed(false);
+    void Promise.resolve(onConfirmConsent(provider))
+      .then(() => setConfirmingConsent(false))
+      .catch(() => {
+        setConfirmingConsent(false);
+        setConfirmConsentFailed(true);
+      });
+  }
+
   function statsSection(): ReactNode {
     const reason =
       agent.status === 'offline' && agent.offline_reason !== null
-        ? offlineReasonLabel(locale, agent.offline_reason)
+        ? offlineReasonLabel(locale, agent.offline_reason, agent.model, remoteDataFlow)
         : null;
+    const consentProvider =
+      agent.offline_reason === 'consent-missing' ? providerFromModel(agent.model) : null;
     return createElement(
       'section',
       { className: 'agent-detail__section', 'data-section': 'stats' },
@@ -202,6 +231,33 @@ export function AgentDetailPanel({
             : t(locale, 'workspace.agentDetail.credential.missing'),
         ),
       ),
+      consentProvider === null || onConfirmConsent === undefined
+        ? null
+        : createElement(
+            'div',
+            { className: 'agent-detail__consent', 'data-consent-provider': consentProvider },
+            createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'agent-detail__consent-action',
+                'data-action': 'confirm-consent',
+                'data-provider': consentProvider,
+                disabled: confirmingConsent,
+                onClick: () => confirmConsent(consentProvider),
+              },
+              confirmingConsent
+                ? t(locale, 'workspace.agentDetail.consent.confirming')
+                : t(locale, 'workspace.agentDetail.consent.confirm'),
+            ),
+            confirmConsentFailed
+              ? createElement(
+                  'p',
+                  { className: 'agent-detail__consent-error', role: 'alert' },
+                  t(locale, 'workspace.agentDetail.consent.failed'),
+                )
+              : null,
+          ),
     );
   }
 

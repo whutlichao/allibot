@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import type { WorkspaceStatusReason } from '@allibot/shared';
+import type { WorkspaceFailureReason } from '@allibot/shared';
 import type {
   DockerContainerSpec,
   DockerExecResult,
@@ -43,12 +43,12 @@ export interface DockerRuntimeView {
   available: boolean;
   /** The process-level image reference; never a credential. */
   image: string;
-  reason: WorkspaceStatusReason | null;
+  reason: WorkspaceFailureReason | null;
 }
 
 export interface DockerTargetStatus {
   available: boolean;
-  reason: WorkspaceStatusReason | null;
+  reason: WorkspaceFailureReason | null;
 }
 
 export interface DockerWorkspaceManagerOptions {
@@ -65,7 +65,7 @@ interface ContainerRecord {
 }
 
 interface FailureRecord {
-  reason: WorkspaceStatusReason;
+  reason: WorkspaceFailureReason;
   detail: string | null;
 }
 
@@ -92,7 +92,7 @@ export interface DockerContainerHandle {
 /** One readable Docker workspace failure; the round never falls back to local. */
 export class DockerWorkspaceError extends Error {
   constructor(
-    readonly reason: WorkspaceStatusReason,
+    readonly reason: WorkspaceFailureReason,
     readonly detail: string | null,
   ) {
     super(detail === null ? reason : `${reason}: ${detail}`);
@@ -315,7 +315,7 @@ export class DockerWorkspaceManager {
 
   private recordFailure(
     key: string,
-    reason: WorkspaceStatusReason,
+    reason: WorkspaceFailureReason,
     detail: string | null,
   ): DockerWorkspaceError {
     this.failures.set(key, { reason, detail });

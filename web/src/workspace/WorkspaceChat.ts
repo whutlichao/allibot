@@ -17,6 +17,7 @@ import {
   useState,
 } from 'react';
 import { ALLIBOT_AGENT_ID } from '../copilotkit-contract.ts';
+import { workspaceChatLabels } from './chat-labels.ts';
 import {
   LIVE_EVENT_TYPES,
   ROTATE_EVENT,
@@ -222,10 +223,16 @@ function ThreadSync({ onEvent, onSnapshot }: ThreadSyncProps) {
 }
 
 /** The props the shell's main area binds; the target id is the thread id. */
-export function workspaceChatProps(targetId: string | null): CopilotChatProps {
+export function workspaceChatProps(
+  targetId: string | null,
+  locale: Locale = 'zh-CN',
+): CopilotChatProps {
   return {
     agentId: ALLIBOT_AGENT_ID,
     ...(targetId === null ? {} : { threadId: targetId }),
+    // CopilotKit's own defaults are English; the shell binds the same two
+    // labels to the one workspace catalog instead of adding a second i18n path.
+    labels: workspaceChatLabels(locale),
     chatView: WorkspaceChatView,
     messageView: WorkspaceMessageView as unknown as CopilotChatViewProps['messageView'],
     input: WorkspaceComposer as unknown as CopilotChatViewProps['input'],
@@ -257,6 +264,6 @@ export function WorkspaceChatArea({
   return createElement(
     WorkspaceChatContext.Provider,
     { value: { tasks, locale, archivedDm, onSelectTarget } },
-    createElement(CopilotChat, workspaceChatProps(targetId)),
+    createElement(CopilotChat, workspaceChatProps(targetId, locale)),
   );
 }

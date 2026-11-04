@@ -114,6 +114,8 @@ export function workspaceStatusCopy(locale: Locale, status: WorkspaceStatusView)
     return t(locale, 'workspace.status.available');
   }
   switch (status.reason) {
+    case 'workspace-root-unset':
+      return t(locale, 'workspace.status.reason.workspaceRootUnset');
     case 'workspace-root-missing':
       return t(locale, 'workspace.status.reason.workspaceRootMissing');
     case 'docker-unavailable':
@@ -125,4 +127,18 @@ export function workspaceStatusCopy(locale: Locale, status: WorkspaceStatusView)
     default:
       return t(locale, 'workspace.status.reason.workspaceRootMissing');
   }
+}
+
+/**
+ * The presentation state of `data-workspace-status`. An unset root is neutral:
+ * it is the default configuration, never the red error state a configured but
+ * vanished root uses.
+ */
+export type WorkspaceStatusState = 'available' | 'unset' | 'unavailable';
+
+export function workspaceStatusState(status: WorkspaceStatusView): WorkspaceStatusState {
+  if (status.available) {
+    return 'available';
+  }
+  return status.reason === 'workspace-root-unset' ? 'unset' : 'unavailable';
 }
