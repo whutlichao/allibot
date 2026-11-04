@@ -52,7 +52,12 @@ import {
 
 const PROJECT_ROOT = '/workspace';
 const SKILLS_ROOT = '/agent-home/skills';
-const MAX_GREP_FILES = 2000;
+/**
+ * The scanned-file cap of the container `Grep` walk (D6). Exported so the
+ * re-feed layer can name the limit it reports to the model. A walk that stops
+ * here has files it never scanned.
+ */
+export const MAX_GREP_FILES = 2000;
 
 interface ContainerRoot {
   containerPath: string;
@@ -307,8 +312,16 @@ export function createContainerFileTools(options: ContainerFileToolsOptions): Ro
       kind === 'dir' ? await listFiles(base.containerPath) : kind === 'file' ? [base.containerPath] : [];
     const matches: RoundGrepMatch[] = [];
     let scanned = 0;
-    for (const file of files) {
-      if (matches.length >= MAX_GREP_MATCHES || scanned >= MAX_GREP_FILES) {
+    // Same fact-not-heuristic rule as the local face: a hit list that happens to
+    // hold exactly MAX_GREP_MATCHES keeps scanning until it finds one more hit
+    // before calling itself capped, and the file cap is only a cap when a file
+    // is left unscanned. When both cut the walk, the hit cap is the reason
+    // reported: it is the one the model can act on by narrowing the pattern.
+    let cappedForMatches = false;
+    let cappedForFiles = false;
+    scan: for (const file of files) {
+      if (scanned >= MAX_GREP_FILES) {
+        cappedForFiles = true;
         break;
       }
       scanned += 1;
@@ -332,20 +345,28 @@ export function createContainerFileTools(options: ContainerFileToolsOptions): Ro
       }
       const lines = text.split('\n');
       for (let index = 0; index < lines.length; index += 1) {
-        if (matches.length >= MAX_GREP_MATCHES) {
-          break;
-        }
         const line = lines[index]!;
-        if (expression.test(line)) {
-          matches.push({
-            path: path.posix.relative(base.containerPath, file) || path.posix.basename(file),
-            line: index + 1,
-            text: line.length > 300 ? `${line.slice(0, 300)}…` : line,
-          });
+        if (!expression.test(line)) {
+          continue;
         }
+        if (matches.length >= MAX_GREP_MATCHES) {
+          cappedForMatches = true;
+          break scan;
+        }
+        matches.push({
+          path: path.posix.relative(base.containerPath, file) || path.posix.basename(file),
+          line: index + 1,
+          text: line.length > 300 ? `${line.slice(0, 300)}…` : line,
+        });
       }
     }
-    return { ok: true, scope: base.root.scope, matches };
+    const capped = cappedForMatches ? 'matches' : cappedForFiles ? 'files' : null;
+    return {
+      ok: true,
+      scope: base.root.scope,
+      matches,
+      ...(capped === null ? {} : { capped }),
+    };
   }
 
   async function Write(request: WriteFileRequest): Promise<RoundFileToolResult> {

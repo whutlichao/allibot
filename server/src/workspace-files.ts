@@ -275,10 +275,12 @@ export function createRoundFileTools(options: {
     }
 
     const matches: RoundGrepMatch[] = [];
-    for (const file of files) {
-      if (matches.length >= MAX_GREP_MATCHES) {
-        break;
-      }
+    // The cap is a fact about what is left, not about the count: a hit list that
+    // happens to hold exactly MAX_GREP_MATCHES keeps scanning until it either
+    // finds one more hit (then the cap cut the list) or runs out of input (then
+    // the cap's worth of hits was the whole answer).
+    let capped = false;
+    scan: for (const file of files) {
       let text: string;
       try {
         const stat = statSync(file);
@@ -294,20 +296,27 @@ export function createRoundFileTools(options: {
       }
       const lines = text.split('\n');
       for (let index = 0; index < lines.length; index += 1) {
-        if (matches.length >= MAX_GREP_MATCHES) {
-          break;
-        }
         const line = lines[index]!;
-        if (expression.test(line)) {
-          matches.push({
-            path: path.relative(base.realPath, file).split(path.sep).join('/') || path.basename(file),
-            line: index + 1,
-            text: line.length > 300 ? `${line.slice(0, 300)}…` : line,
-          });
+        if (!expression.test(line)) {
+          continue;
         }
+        if (matches.length >= MAX_GREP_MATCHES) {
+          capped = true;
+          break scan;
+        }
+        matches.push({
+          path: path.relative(base.realPath, file).split(path.sep).join('/') || path.basename(file),
+          line: index + 1,
+          text: line.length > 300 ? `${line.slice(0, 300)}…` : line,
+        });
       }
     }
-    return { ok: true, scope: base.root.scope, matches };
+    return {
+      ok: true,
+      scope: base.root.scope,
+      matches,
+      ...(capped ? { capped: 'matches' as const } : {}),
+    };
   }
 
   async function Write(request: WriteFileRequest): Promise<RoundFileToolResult> {

@@ -1,5 +1,5 @@
 import type { RoundInput } from './agent-seam.js';
-import { checkToolArguments, roundToolFaces, roundToolSpecs } from './tool-specs.js';
+import { checkToolArguments, capToolResultContent, roundToolFaces, roundToolSpecs } from './tool-specs.js';
 
 /**
  * 轮内工具循环 (round-level tool loop, D1 / D7): inside one
@@ -108,7 +108,14 @@ export function createRoundToolExecutor(input: RoundInput): ToolExecutor {
       // result is still better than an exception the round would die of.
       return failure(call, 'unknown-tool', `this round has no face for the tool: ${call.name}`);
     }
-    return { id: call.id, ok: outcome.ok, error: outcome.error, content: outcome.content };
+    return {
+      id: call.id,
+      ok: outcome.ok,
+      error: outcome.error,
+      // Only the copy the model reads is capped (D6); the tool's own result is
+      // untouched, and a capped result still carries its state and request.
+      content: capToolResultContent(outcome.content),
+    };
   };
 }
 

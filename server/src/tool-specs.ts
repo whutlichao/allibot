@@ -1,3 +1,4 @@
+import { t } from '@allibot/shared';
 import type { PlanTaskView } from '@allibot/shared';
 import type {
   GlobFileRequest,
@@ -7,6 +8,31 @@ import type {
   RoundInput,
   RoundPlanFace,
 } from './agent-seam.js';
+import { MAX_GREP_FILES } from './docker-files.js';
+import { MAX_GREP_MATCHES } from './workspace-files.js';
+
+/**
+ * The re-feed cap (D6): the most characters one tool result may feed back to
+ * the model. A constant, not a schema field and not a per-Agent setting; the
+ * file tools themselves are unchanged — only the copy the model sees is cut.
+ */
+export const MAX_TOOL_RESULT_CHARS = 20000;
+
+/**
+ * Cut one tool result down to the re-feed cap, keeping the head and naming the
+ * scale that is missing: the model must see that what it read is not all of it.
+ * A result already within the cap is returned untouched.
+ */
+export function capToolResultContent(content: string): string {
+  if (content.length <= MAX_TOOL_RESULT_CHARS) {
+    return content;
+  }
+  const kept = content.slice(0, MAX_TOOL_RESULT_CHARS);
+  return `${kept}\n${t('zh-CN', 'tool.result.truncated', {
+    given: kept.length,
+    total: content.length,
+  })}`;
+}
 
 /**
  * 轮内工具规格 (D2 / D3): one internal description per tool the round's model
@@ -347,6 +373,11 @@ function shapeGrep(requested: GrepFileRequest, result: RoundFileToolResult): Too
   }
   const matches = result.matches ?? [];
   lines.push(`matches: ${matches.length}`);
+  if (result.capped === 'matches') {
+    lines.push(t('zh-CN', 'tool.grep.capped.matches', { limit: MAX_GREP_MATCHES }));
+  } else if (result.capped === 'files') {
+    lines.push(t('zh-CN', 'tool.grep.capped.files', { limit: MAX_GREP_FILES }));
+  }
   lines.push(
     ...(matches.length === 0
       ? ['(no line matched)']
