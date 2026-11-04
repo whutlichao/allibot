@@ -2,6 +2,9 @@ import {
   t,
   type AgentMcpView,
   type AgentRulesView,
+  type AgentSkillCandidatesView,
+  type AgentSkillDetailView,
+  type AgentSkillsView,
   type ApprovalDecisionInput,
   type ApprovalView,
   type ChannelConfigPatch,
@@ -57,6 +60,17 @@ export interface AppProps {
     agentId: string,
     body: { entries: import('@allibot/shared').McpServerEntry[] } | { raw: string },
   ) => void | Promise<AgentMcpView | void>;
+  /** Installed skills (#48), keyed by Agent. */
+  agentSkills?: Record<string, AgentSkillsView>;
+  agentSkillDetails?: Record<string, AgentSkillDetailView>;
+  agentSkillCandidates?: Record<string, AgentSkillCandidatesView>;
+  onAgentSkillsNeeded?: (agentId: string) => void;
+  onAgentSkillNeeded?: (agentId: string, name: string) => void;
+  onAgentSkillRefreshCandidates?: (agentId: string) => void | Promise<void>;
+  onAgentSkillImport?: (agentId: string, name: string) => void | Promise<void>;
+  onAgentSkillsImportAll?: (agentId: string) => void | Promise<void>;
+  onAgentSkillToggle?: (agentId: string, name: string, enabled: boolean) => void | Promise<void>;
+  onAgentSkillDelete?: (agentId: string, name: string) => void | Promise<void>;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
   onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
@@ -102,6 +116,16 @@ export function App({
   agentMcp,
   onAgentMcpNeeded,
   onAgentMcpChange,
+  agentSkills,
+  agentSkillDetails,
+  agentSkillCandidates,
+  onAgentSkillsNeeded,
+  onAgentSkillNeeded,
+  onAgentSkillRefreshCandidates,
+  onAgentSkillImport,
+  onAgentSkillsImportAll,
+  onAgentSkillToggle,
+  onAgentSkillDelete,
   onSelectTarget,
   onTaskTransition,
   onJoinMember,
@@ -133,6 +157,16 @@ export function App({
       agentMcp,
       onAgentMcpNeeded,
       onAgentMcpChange,
+      agentSkills,
+      agentSkillDetails,
+      agentSkillCandidates,
+      onAgentSkillsNeeded,
+      onAgentSkillNeeded,
+      onAgentSkillRefreshCandidates,
+      onAgentSkillImport,
+      onAgentSkillsImportAll,
+      onAgentSkillToggle,
+      onAgentSkillDelete,
       onSelectTarget,
       onTaskTransition,
       onSettingsChange,

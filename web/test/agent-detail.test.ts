@@ -190,14 +190,18 @@ test('the basic tab holds stats, system prompt, config, rules and the danger blo
   );
 });
 
-test('skills stays the T11 placeholder; mcp is the file editor with no fabricated data', () => {
+test('skills is the two-column installer panel; mcp is the file editor with no fabricated data', () => {
   const html = renderToStaticMarkup(
     createElement(AgentDetailPanel, { agent: agent({ id: AGENT_ID, display_name: '阿蓝' }), locale: 'zh-CN' }),
   );
 
   const skills = panelRegion(html, 'skills');
-  assert.ok(skills.includes('依赖规格 T11（M2）'), 'skills states its dependency');
-  assert.doesNotMatch(skills, /<(button|input|textarea|select)\b/, 'skills must not carry a control');
+  assert.match(skills, /data-section="skills"/);
+  assert.match(skills, /data-action="refresh-skill-candidates"/);
+  assert.match(skills, /data-action="import-all-skills"/);
+  assert.match(skills, /data-field="skills-pending"/);
+  assert.doesNotMatch(skills, /<a\b/, 'skills opens no route or link');
+  assert.doesNotMatch(skills, /data-skill-name=/, 'a null reading fabricates no skill row');
 
   // mcp is now the #47 file editor: structured + raw blocks read the same file.
   const mcp = panelRegion(html, 'mcp');

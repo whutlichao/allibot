@@ -2,6 +2,9 @@ import {
   t,
   type AgentMcpView,
   type AgentRulesView,
+  type AgentSkillCandidatesView,
+  type AgentSkillDetailView,
+  type AgentSkillsView,
   type ApprovalDecisionInput,
   type ApprovalView,
   type ChannelConfigPatch,
@@ -88,6 +91,26 @@ export interface WorkspaceShellProps {
   onAgentMcpChange?: (agentId: string, body: McpSaveBody) => void | Promise<AgentMcpView | void>;
   /** Effective rules per Agent id, read on demand when the detail opens. */
   agentRules?: Record<string, AgentRulesView>;
+  /** Installed skills per Agent id (#48); read when the detail opens. */
+  agentSkills?: Record<string, AgentSkillsView>;
+  /** The selected skill detail (metadata + SKILL.md) per Agent id. */
+  agentSkillDetails?: Record<string, AgentSkillDetailView>;
+  /** `~/.agents/skills/` candidates per Agent id; the host reads them. */
+  agentSkillCandidates?: Record<string, AgentSkillCandidatesView>;
+  /** Read the list + candidates when the Agent detail opens. */
+  onAgentSkillsNeeded?: (agentId: string) => void;
+  /** Read one skill's metadata + SKILL.md when it is selected. */
+  onAgentSkillNeeded?: (agentId: string, name: string) => void;
+  /** Re-scan the landing directory. */
+  onAgentSkillRefreshCandidates?: (agentId: string) => void | Promise<void>;
+  /** Import one candidate through the single-entry install path. */
+  onAgentSkillImport?: (agentId: string, name: string) => void | Promise<void>;
+  /** Import every importable, not-installed candidate. */
+  onAgentSkillsImportAll?: (agentId: string) => void | Promise<void>;
+  /** Enable / disable one installed skill. */
+  onAgentSkillToggle?: (agentId: string, name: string, enabled: boolean) => void | Promise<void>;
+  /** Delete one installed skill (bytes and row). */
+  onAgentSkillDelete?: (agentId: string, name: string) => void | Promise<void>;
   viewportWidth?: number;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
@@ -184,6 +207,16 @@ export function WorkspaceShell({
   agentMcp,
   onAgentMcpNeeded,
   onAgentMcpChange,
+  agentSkills,
+  agentSkillDetails,
+  agentSkillCandidates,
+  onAgentSkillsNeeded,
+  onAgentSkillNeeded,
+  onAgentSkillRefreshCandidates,
+  onAgentSkillImport,
+  onAgentSkillsImportAll,
+  onAgentSkillToggle,
+  onAgentSkillDelete,
   saveFailed = false,
   onLiveEvent,
 }: WorkspaceShellProps) {
@@ -229,6 +262,7 @@ export function WorkspaceShell({
         rulesChannelId(workspace, selectedTargetId),
       );
       onAgentMcpNeeded?.(agentId);
+      onAgentSkillsNeeded?.(agentId);
     }
     setDrawer(openWorkspacePanel({ activeTargetId: selectedTargetId, drawer }, panel).drawer);
   }
@@ -447,6 +481,35 @@ export function WorkspaceShell({
               onAgentMcpChange === undefined
                 ? undefined
                 : (body) => onAgentMcpChange(selectedAgent.id, body),
+            skills: {
+              view: agentSkills?.[selectedAgent.id] ?? null,
+              detail: agentSkillDetails?.[selectedAgent.id] ?? null,
+              candidates: agentSkillCandidates?.[selectedAgent.id] ?? null,
+              onSelect:
+                onAgentSkillNeeded === undefined
+                  ? undefined
+                  : (name) => onAgentSkillNeeded(selectedAgent.id, name),
+              onRefreshCandidates:
+                onAgentSkillRefreshCandidates === undefined
+                  ? undefined
+                  : () => onAgentSkillRefreshCandidates(selectedAgent.id),
+              onImport:
+                onAgentSkillImport === undefined
+                  ? undefined
+                  : (name) => onAgentSkillImport(selectedAgent.id, name),
+              onImportAll:
+                onAgentSkillsImportAll === undefined
+                  ? undefined
+                  : () => onAgentSkillsImportAll(selectedAgent.id),
+              onToggleEnabled:
+                onAgentSkillToggle === undefined
+                  ? undefined
+                  : (name, enabled) => onAgentSkillToggle(selectedAgent.id, name, enabled),
+              onDelete:
+                onAgentSkillDelete === undefined
+                  ? undefined
+                  : (name) => onAgentSkillDelete(selectedAgent.id, name),
+            },
             onSave:
               onSaveAgent === undefined
                 ? undefined

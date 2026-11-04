@@ -2,6 +2,9 @@ import {
   t,
   type AgentMcpView,
   type AgentRulesView,
+  type AgentSkillCandidatesView,
+  type AgentSkillDetailView,
+  type AgentSkillsView,
   type ApprovalDecisionInput,
   type ApprovalView,
   type ChannelConfigPatch,
@@ -61,8 +64,15 @@ import {
   patchChannelConfig,
   readApprovals,
   readPermissionRules,
+  deleteAgentSkill,
   readAgentMcp,
+  readAgentSkill,
+  readAgentSkills,
+  readSkillCandidates,
+  importAllAgentSkills,
+  installAgentSkill,
   readTargetMembers,
+  setAgentSkillEnabled,
   saveAgentConfig,
   saveAgentMcp,
   savePermissionRules,
@@ -112,6 +122,10 @@ let currentSopRuns: Record<string, readonly SopRunView[]> = {};
 let currentAgentRules: Record<string, AgentRulesView> = {};
 /** mcp.json 读数 (#47)：结构与原文共用这一份，打开详情时按需读。 */
 let currentAgentMcp: Record<string, AgentMcpView> = {};
+/** Skill readings (#48): list, selected detail and the landing candidates. */
+let currentAgentSkills: Record<string, AgentSkillsView> = {};
+let currentAgentSkillDetails: Record<string, AgentSkillDetailView> = {};
+let currentAgentSkillCandidates: Record<string, AgentSkillCandidatesView> = {};
 
 async function loadTargetMembers(targetId: string): Promise<void> {
   currentChannelMembers = {
@@ -162,6 +176,70 @@ async function loadAgentRules(agentId: string, channelId: string | null): Promis
 async function loadAgentMcp(agentId: string): Promise<void> {
   const reading = await readAgentMcp(fetch, agentId);
   currentAgentMcp = { ...currentAgentMcp, [agentId]: reading };
+}
+
+async function loadAgentSkill(agentId: string, name: string): Promise<void> {
+  const detail = await readAgentSkill(fetch, agentId, name);
+  currentAgentSkillDetails = { ...currentAgentSkillDetails, [agentId]: detail };
+}
+
+/**
+ * The list + candidates are one reading; the first (or preferred) skill's
+ * detail follows so the right column is never a fabricated placeholder.
+ */
+async function loadAgentSkills(agentId: string, preferredName?: string): Promise<void> {
+  const previousName = currentAgentSkillDetails[agentId]?.skill.name;
+  const [view, candidates] = await Promise.all([
+    readAgentSkills(fetch, agentId),
+    readSkillCandidates(fetch, agentId),
+  ]);
+  currentAgentSkills = { ...currentAgentSkills, [agentId]: view };
+  currentAgentSkillCandidates = { ...currentAgentSkillCandidates, [agentId]: candidates };
+  // Keep the user's selected row across a reload (import / toggle) while it
+  // still exists; an explicit preferred name (a successful single import)
+  // wins, and a deleted selection falls back to the first row.
+  const name =
+    preferredName !== undefined && view.skills.some((skill) => skill.name === preferredName)
+      ? preferredName
+      : previousName !== undefined && view.skills.some((skill) => skill.name === previousName)
+        ? previousName
+        : view.skills[0]?.name;
+  if (name === undefined) {
+    const rest = { ...currentAgentSkillDetails };
+    delete rest[agentId];
+    currentAgentSkillDetails = rest;
+    return;
+  }
+  await loadAgentSkill(agentId, name);
+}
+
+async function refreshSkillCandidates(agentId: string): Promise<void> {
+  const candidates = await readSkillCandidates(fetch, agentId);
+  currentAgentSkillCandidates = { ...currentAgentSkillCandidates, [agentId]: candidates };
+}
+
+async function importOneSkill(agentId: string, name: string): Promise<void> {
+  await installAgentSkill(fetch, agentId, name);
+  await loadAgentSkills(agentId, name);
+}
+
+async function importAllSkills(agentId: string): Promise<void> {
+  await importAllAgentSkills(fetch, agentId);
+  await loadAgentSkills(agentId);
+}
+
+async function toggleAgentSkill(
+  agentId: string,
+  name: string,
+  enabled: boolean,
+): Promise<void> {
+  await setAgentSkillEnabled(fetch, agentId, name, enabled);
+  await loadAgentSkills(agentId, name);
+}
+
+async function removeAgentSkill(agentId: string, name: string): Promise<void> {
+  await deleteAgentSkill(fetch, agentId, name);
+  await loadAgentSkills(agentId);
 }
 
 /** The one mcp.json write; the returned reading refreshes both blocks. */
@@ -330,6 +408,34 @@ function render(saveFailed = false): void {
         permissionRules={currentPermissionRules}
         agentRules={currentAgentRules}
         agentMcp={currentAgentMcp}
+        agentSkills={currentAgentSkills}
+        agentSkillDetails={currentAgentSkillDetails}
+        agentSkillCandidates={currentAgentSkillCandidates}
+        onAgentSkillsNeeded={(agentId) => {
+          void loadAgentSkills(agentId)
+            .then(() => render())
+            .catch((error: unknown) => {
+              console.error('Agent skills read failed', error);
+            });
+        }}
+        onAgentSkillNeeded={(agentId, name) => {
+          void loadAgentSkill(agentId, name)
+            .then(() => render())
+            .catch((error: unknown) => {
+              console.error('Agent skill read failed', error);
+            });
+        }}
+        onAgentSkillRefreshCandidates={(agentId) =>
+          refreshSkillCandidates(agentId).then(() => render())
+        }
+        onAgentSkillImport={(agentId, name) => importOneSkill(agentId, name).then(() => render())}
+        onAgentSkillsImportAll={(agentId) => importAllSkills(agentId).then(() => render())}
+        onAgentSkillToggle={(agentId, name, enabled) =>
+          toggleAgentSkill(agentId, name, enabled).then(() => render())
+        }
+        onAgentSkillDelete={(agentId, name) =>
+          removeAgentSkill(agentId, name).then(() => render())
+        }
         onAgentRulesNeeded={(agentId, channelId) => {
           void loadAgentRules(agentId, channelId)
             .then(() => render())
