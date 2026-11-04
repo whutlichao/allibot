@@ -135,7 +135,12 @@ function backups(fixture: Fixture): string[] {
   return readdirSync(fixture.tmp).filter((entry) => entry.includes('backup-skills'));
 }
 
+/** The manifest lives beside the data directory, not inside it (D1.4). */
 function manifests(fixture: Fixture): string[] {
+  return readdirSync(fixture.tmp).filter((entry) => entry.startsWith('skill-migration-'));
+}
+
+function dataDirManifests(fixture: Fixture): string[] {
   return readdirSync(fixture.dataDir).filter((entry) => entry.startsWith('skill-migration-'));
 }
 
@@ -163,6 +168,7 @@ test('migrate-skills is a readable no-op in a clean repository and never runs at
     assert.equal(existsSync(path.join(fixture.home, '.allibot', 'agents', fixture.agentId, 'skills')), false);
     assert.deepEqual(backups(fixture), []);
     assert.deepEqual(manifests(fixture), []);
+    assert.deepEqual(dataDirManifests(fixture), []);
 
     writeLegacySkill(fixture, fixture.agentId, 'startup-legacy', 'STARTUP-LEGACY');
     await fixture.restartServer();
@@ -207,6 +213,7 @@ test('dry-run prints the plan with zero side effects; --apply --yes copies, reco
     assert.deepEqual(rows(fixture), []);
     assert.deepEqual(backups(fixture), []);
     assert.deepEqual(manifests(fixture), []);
+    assert.deepEqual(dataDirManifests(fixture), []);
 
     assert.equal(migrateSkills(fixture, ['--apply']).exitCode, 2);
     assert.equal(migrateSkills(fixture, ['--yes']).exitCode, 2);
@@ -236,8 +243,15 @@ test('dry-run prints the plan with zero side effects; --apply --yes copies, reco
 
     assert.equal(backups(fixture).length, 1, 'apply backs up the whole data directory');
     assert.equal(manifests(fixture).length, 1, 'apply writes one migration manifest');
+    assert.deepEqual(dataDirManifests(fixture), [], 'the data directory keeps only its D1.4 files');
+    assert.ok(
+      readdirSync(path.join(fixture.tmp, backups(fixture)[0]!)).every(
+        (entry) => !entry.startsWith('skill-migration-'),
+      ),
+      'the whole-directory backup does not contain the manifest',
+    );
     const manifest = JSON.parse(
-      readFileSync(path.join(fixture.dataDir, manifests(fixture)[0]!), 'utf8'),
+      readFileSync(path.join(fixture.tmp, manifests(fixture)[0]!), 'utf8'),
     ) as Record<string, unknown>;
     assert.equal((manifest['entries'] as unknown[]).length, 1);
     const manifestEntry = (manifest['entries'] as Record<string, unknown>[])[0]!;
@@ -253,6 +267,7 @@ test('dry-run prints the plan with zero side effects; --apply --yes copies, reco
     assert.equal(rows(fixture).length, 1);
     assert.equal(backups(fixture).length, 1);
     assert.equal(manifests(fixture).length, 1);
+    assert.deepEqual(dataDirManifests(fixture), []);
   } finally {
     await cleanup(fixture);
   }
@@ -274,6 +289,7 @@ test('a conflicting target refuses the whole apply without overwriting it', asyn
     assert.deepEqual(rows(fixture), []);
     assert.deepEqual(backups(fixture), []);
     assert.deepEqual(manifests(fixture), []);
+    assert.deepEqual(dataDirManifests(fixture), []);
   } finally {
     await cleanup(fixture);
   }

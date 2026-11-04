@@ -119,7 +119,13 @@ export function runSkillMigration(
   const startedAt = new Date().toISOString();
   const backupPath = createDataDirBackup(dataDir, startedAt, 'skills');
   const stamp = startedAt.replaceAll(':', '-').replaceAll('.', '-');
-  const manifestPath = path.join(dataDir, `skill-migration-${stamp}.json`);
+  // D1.4: the data directory carries only the database, attachments, the
+  // schema ledger and disposable mcp-hosts/. The manifest is migration evidence
+  // and sits beside the whole-directory backup, so no later backup inherits it.
+  const manifestPath = path.join(
+    path.dirname(dataDir),
+    `skill-migration-${stamp}.json`,
+  );
   writeFileSync(
     manifestPath,
     `${JSON.stringify(
