@@ -31,7 +31,10 @@ import type { LiveEvent } from './workspace/message-sync.ts';
 export interface AppProps {
   settings: WorkspaceSettingsView;
   onSettingsChange?: (patch: Partial<WorkspaceSettingsView>) => void;
+  /** `PATCH /api/settings` 写不落库。 */
   saveFailed?: boolean;
+  /** `GET /api/workspace` 读不到；与 `saveFailed` 是两条失败，文案不共用。 */
+  loadFailed?: boolean;
   /** The one backend reading; when present the full workspace shell renders. */
   workspace?: WorkspaceView;
   activeTargetId?: string | null;
@@ -105,6 +108,7 @@ export function App({
   settings,
   onSettingsChange,
   saveFailed = false,
+  loadFailed = false,
   workspace,
   activeTargetId,
   viewportWidth,
@@ -201,7 +205,7 @@ export function App({
       'data-theme': settings.theme,
       'data-locale': locale,
     },
-    createElement(SettingsPanel, { settings, onChange: onSettingsChange, saveFailed }),
+    createElement(SettingsPanel, { settings, onChange: onSettingsChange, loadFailed, saveFailed }),
     createElement(
       'section',
       { className: 'sample-message', 'data-density': settings.density },

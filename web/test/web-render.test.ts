@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { MessageView, TargetMemberView, TaskView } from '@allibot/shared';
+import { t, type MessageView, type TargetMemberView, type TaskView } from '@allibot/shared';
 import {
   CopilotKitProvider,
   type AssistantMessage,
@@ -9,6 +9,7 @@ import {
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
+import { App } from '../src/App.ts';
 import { MentionCompletion } from '../src/components/MentionCompletion.ts';
 import { MessageBody } from '../src/components/MessageBody.ts';
 import { renderMessageBody } from '../src/markdown.ts';
@@ -673,4 +674,86 @@ test('the stream state tells a routine rotation from an unreachable backend', ()
 
   const errorAfterRotate = reduceStreamState(rotating.state, 'error');
   assert.equal(errorAfterRotate.state.phase, 'rotating', 'a close after rotate is not an outage');
+});
+
+// ---------------------------------------------------------------------------
+// 兜底设置面：读数失败与写入失败是两条事实
+// ---------------------------------------------------------------------------
+
+const FALLBACK_SETTINGS = { locale: 'zh-CN', density: 'comfortable', theme: 'system' } as const;
+
+/**
+ * `GET /api/workspace` 读不到时，页面说明的是「设置读取失败」。它和
+ * 「设置未保存」是两条不同的失败：一条说读数没读到，一条说写没落库。
+ */
+test('an unreachable workspace reading renders the reading-failure copy', () => {
+  const html = renderToStaticMarkup(
+    createElement(App, { settings: FALLBACK_SETTINGS, loadFailed: true }),
+  );
+
+  assert.ok(
+    html.includes(t('zh-CN', 'settings.error.load')),
+    'the fallback face names the reading failure',
+  );
+  assert.ok(
+    !html.includes(t('zh-CN', 'settings.error.save')),
+    'an unread settings reading is never reported as an unsaved one',
+  );
+  assert.match(html, /role="alert"/, 'the failure is announced as an alert');
+});
+
+/** A failed `PATCH /api/settings` keeps its own copy; the two paths stay apart. */
+test('a failed settings write renders the save-failure copy', () => {
+  const html = renderToStaticMarkup(
+    createElement(App, { settings: FALLBACK_SETTINGS, saveFailed: true }),
+  );
+
+  assert.ok(
+    html.includes(t('zh-CN', 'settings.error.save')),
+    'the write failure keeps its own copy',
+  );
+  assert.ok(
+    !html.includes(t('zh-CN', 'settings.error.load')),
+    'a failed write is not reported as an unread settings reading',
+  );
+
+  const quiet = renderToStaticMarkup(
+    createElement(App, { settings: FALLBACK_SETTINGS }),
+  );
+  assert.doesNotMatch(quiet, /role="alert"/, 'a healthy fallback face carries no failure copy');
+});
+
+// ---------------------------------------------------------------------------
+// 前端 dev 与后端同源：一条 `/api` 代理规则
+// ---------------------------------------------------------------------------
+
+/**
+ * 没有这条代理时，5173 上的 `GET /api/workspace` 会落到 Vite 的 SPA fallback
+ * （`text/html`），`response.json()` 掉错，整页只剩兜底设置面。三面（REST /
+ * SSE / CopilotKit）共用一个前缀，所以这里断言的是「一条规则」而不是三条。
+ */
+test('the dev server sends every /api face to the backend through one rule', async () => {
+  const config = await import('../vite.config.ts');
+  const proxy = config.default.server?.proxy ?? {};
+  assert.deepEqual(Object.keys(proxy), [config.API_PREFIX], 'one prefix rule covers all three faces');
+  assert.equal(config.API_PREFIX, '/api');
+
+  const rule = proxy[config.API_PREFIX];
+  assert.equal(typeof rule === 'object' ? rule.target : rule, 'http://127.0.0.1:3000');
+  assert.ok(
+    typeof rule === 'object' && rule.rewrite === undefined,
+    'the path is forwarded unchanged; the backend routes are already /api/...',
+  );
+
+  assert.equal(config.apiOrigin({}), 'http://127.0.0.1:3000', 'the backend default');
+  assert.equal(
+    config.apiOrigin({ allibot_API_ORIGIN: 'http://127.0.0.1:3999' }),
+    'http://127.0.0.1:3999',
+    'allibot_API_ORIGIN overrides the default',
+  );
+  assert.equal(
+    config.apiOrigin({ allibot_API_ORIGIN: '   ' }),
+    'http://127.0.0.1:3000',
+    'a blank override counts as unset rather than as an origin',
+  );
 });

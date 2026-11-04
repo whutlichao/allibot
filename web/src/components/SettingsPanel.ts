@@ -38,6 +38,11 @@ function themeLabel(locale: Locale, theme: Theme): string {
 export interface SettingsPanelProps {
   settings: WorkspaceSettingsView;
   onChange?: (patch: Partial<WorkspaceSettingsView>) => void;
+  /**
+   * `GET /api/workspace` 读不到：读数没读到。它与写入失败是两条事实，
+   * 各用一条词条说明，不复用「设置未保存」。
+   */
+  loadFailed?: boolean;
   saveFailed?: boolean;
 }
 
@@ -51,7 +56,12 @@ export interface SettingsPanelProps {
  * 这里用 createElement 而不是 JSX：Node 的类型剥离不处理 JSX，
  * 组件级 SSR 契约测试需要直接 import 本文件。
  */
-export function SettingsPanel({ settings, onChange, saveFailed = false }: SettingsPanelProps) {
+export function SettingsPanel({
+  settings,
+  onChange,
+  loadFailed = false,
+  saveFailed = false,
+}: SettingsPanelProps) {
   const locale = settings.locale;
   const change = onChange ?? (() => undefined);
 
@@ -123,6 +133,13 @@ export function SettingsPanel({ settings, onChange, saveFailed = false }: Settin
         ),
       ),
     ),
+    loadFailed
+      ? createElement(
+          'p',
+          { className: 'settings-panel__error', role: 'alert' },
+          t(locale, 'settings.error.load'),
+        )
+      : null,
     saveFailed
       ? createElement(
           'p',
