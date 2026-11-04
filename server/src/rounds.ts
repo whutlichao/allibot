@@ -1197,11 +1197,11 @@ async function readAssignmentRoundInput(
 ): Promise<RoundInput> {
   const member = db
     .prepare(
-      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
+      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt, c.max_iterations
          FROM member m JOIN agent_config c ON c.member_id = m.id
         WHERE m.id = ? AND m.kind = 'agent' AND ${liveMemberClause('m')}`,
     )
-    .get(params.memberId) as RoundMember | undefined;
+    .get(params.memberId) as (RoundMember & { max_iterations: number }) | undefined;
   if (member === undefined) {
     throw new Error(`assignment member not found: ${params.memberId}`);
   }
@@ -1255,6 +1255,7 @@ async function readAssignmentRoundInput(
     plan: createPlanFace(db, params.team.targetId, member.id),
     workspace,
     mcp,
+    maxIterations: member.max_iterations,
     team: {
       leader_member_id:
         params.team.leaderMemberId.length === 0 ? null : params.team.leaderMemberId,
@@ -1337,11 +1338,11 @@ export async function readSopRoundInput(
 ): Promise<RoundInput> {
   const member = db
     .prepare(
-      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
+      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt, c.max_iterations
          FROM member m JOIN agent_config c ON c.member_id = m.id
         WHERE m.id = ? AND m.kind = 'agent' AND ${liveMemberClause('m')}`,
     )
-    .get(params.memberId) as RoundMember | undefined;
+    .get(params.memberId) as (RoundMember & { max_iterations: number }) | undefined;
   if (member === undefined) {
     throw new Error(`SOP round member not found: ${params.memberId}`);
   }
@@ -1415,6 +1416,7 @@ export async function readSopRoundInput(
     plan: null,
     workspace,
     mcp,
+    maxIterations: member.max_iterations,
     replyId: params.replyId,
     sop: {
       run_id: params.runId,
@@ -1674,11 +1676,11 @@ async function readRoundInput(
 ): Promise<RoundInput> {
   const member = db
     .prepare(
-      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
+      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt, c.max_iterations
          FROM member m JOIN agent_config c ON c.member_id = m.id
         WHERE m.id = ? AND m.kind = 'agent' AND ${liveMemberClause('m')}`,
     )
-    .get(wake.memberId) as RoundMember | undefined;
+    .get(wake.memberId) as (RoundMember & { max_iterations: number }) | undefined;
   if (member === undefined) {
     throw new Error(`round member not found: ${wake.memberId}`);
   }
@@ -1773,6 +1775,7 @@ async function readRoundInput(
     plan,
     workspace,
     mcp,
+    maxIterations: member.max_iterations,
     replyId: context.replyId,
     sop: null,
     baseSeq: wake.fromSeq,

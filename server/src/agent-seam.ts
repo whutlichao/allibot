@@ -515,6 +515,13 @@ export interface RoundInput {
    * assignee. Plan tools arrive with #40.
    */
   tools: readonly string[];
+  /**
+   * 迭代上限 (Iteration Cap): the cap on model ↔ tool round trips inside this
+   * one round, read from `agent_config.max_iterations` (default 10). It bounds
+   * the round's loop, not the number of rounds — the generation and
+   * `target_budget` already bound those.
+   */
+  maxIterations: number;
   /** The team reading of this round; null on an autonomous / DM round. */
   team: RoundTeamContext | null;
   /**

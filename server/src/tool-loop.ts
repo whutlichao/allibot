@@ -32,11 +32,13 @@ export interface ToolCall {
 
 /**
  * One assistant turn as the conversation adapter read it: either the text that
- * ends the round, or the tool calls the round has to run first.
+ * ends the round, or the tool calls the round has to run first. A turn that asks
+ * for tools still carries the text it said alongside them: it is not an answer,
+ * but it is the partial conclusion a round that hits the iteration cap lands.
  */
 export type AssistantTurn =
   | { kind: 'text'; text: string }
-  | { kind: 'calls'; calls: readonly ToolCall[] };
+  | { kind: 'calls'; calls: readonly ToolCall[]; text: string };
 
 /** One tool call's answer, in the provider's own result shape's terms. */
 export interface ToolCallResult {
@@ -68,8 +70,18 @@ export type ToolExecutor = (call: ToolCall) => Promise<ToolCallResult>;
 
 /** What the loop concluded: the round's one candidate reply. */
 export interface ToolLoopOutcome {
-  /** The final turn's text; empty when the model stopped without saying anything. */
+  /**
+   * The final turn's text; empty when the model stopped without saying anything.
+   * A round that hits the iteration cap lands the text of the turn that asked
+   * for the batch there was no budget left to run — its partial conclusion.
+   */
   text: string;
+  /**
+   * `true` when the cap stopped the loop: the model asked for one more tool
+   * batch than the round's `maxIterations` allowed, and that batch was **not**
+   * executed.
+   */
+  exhausted: boolean;
 }
 /**
  * The round's tool executor: the batch's tool specs the round actually offers,
@@ -96,25 +108,36 @@ export function createRoundToolExecutor(input: RoundInput): ToolExecutor {
 }
 
 /**
- * Run the round's model ↔ tool round trips. The only exit is the model's own
- * stop: it answers without requesting a tool. A provider failure (network,
- * timeout, unparseable response) throws out of `send` and is the round adapter's
- * existing failure path; no tool failure reaches here as an exception.
+ * Run the round's model ↔ tool round trips, bounded by the round's iteration
+ * cap (迭代上限, D8). The loop stops either because the model answered without
+ * requesting a tool, or because the budget ran out; a provider failure
+ * (network, timeout, unparseable response) throws out of `send` and is the
+ * round adapter's existing failure path, while no tool failure reaches here as
+ * an exception.
  *
- * This loop deliberately carries no round-trip bound of its own (#60 adds
- * `max_iterations` as a condition inside it), and no shared counter leaves it
- * single-shot by construction.
+ * The cap counts 一次往返 — one batch: the model asks for tools and this round
+ * runs that batch. `maxIterations = 1` therefore runs exactly one batch, `= 2`
+ * runs two. The budget is only spent by a batch that actually runs, so the
+ * model is told the budget is out exactly when it asks for a batch with none
+ * left: that batch is **not** executed and its turn's text becomes the round's
+ * partial conclusion. A round whose model never asks for a tool never touches
+ * the cap.
  */
 export async function runToolLoop(
   conversation: ToolConversation,
   execute: ToolExecutor,
-  options: { timeoutMs: number },
-): Promise<string> {
+  options: { timeoutMs: number; maxIterations: number },
+): Promise<ToolLoopOutcome> {
+  let batches = 0;
   for (;;) {
     const turn = await conversation.send(options.timeoutMs);
     if (turn.kind === 'text') {
-      return turn.text;
+      return { text: turn.text, exhausted: false };
     }
+    if (batches >= options.maxIterations) {
+      return { text: turn.text, exhausted: true };
+    }
+    batches += 1;
     const results: ToolCallResult[] = [];
     for (const call of turn.calls) {
       results.push(await execute(call));

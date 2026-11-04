@@ -127,13 +127,19 @@ function readTurn(payload: unknown): {
       input: block['input'] ?? {},
     }));
   if (calls.length > 0) {
-    // The narration of a turn that asked for tools is not the round's answer.
-    return { turn: { kind: 'calls', calls }, content: blocks };
+    // The narration of a turn that asked for tools is not the round's answer; it
+    // travels with the turn because a round that hits the iteration cap lands it
+    // as the partial conclusion (D7 / D8).
+    return { turn: { kind: 'calls', calls, text: readText(blocks) }, content: blocks };
   }
-  const text = blocks
+  return { turn: { kind: 'text', text: readText(blocks) }, content: blocks };
+}
+
+/** The assistant text blocks of one response, joined in block order. */
+function readText(blocks: readonly Record<string, unknown>[]): string {
+  return blocks
     .map((block) => (block['type'] === 'text' && typeof block['text'] === 'string' ? block['text'] : ''))
     .join('');
-  return { turn: { kind: 'text', text }, content: blocks };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
