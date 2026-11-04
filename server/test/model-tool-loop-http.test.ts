@@ -1205,6 +1205,97 @@ for (const provider of PROVIDER_ROWS) {
     }
   });
 
+  test(`[${provider.label}] a grep hit list that is exactly the cap is not reported as capped`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-grep-exact-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      assert.ok(round.project !== null);
+      const lines = Array.from({ length: 200 }, (_unused, index) => `NEEDLE-${index + 1}`);
+      writeFileSync(path.join(round.project, 'notes.txt'), `${lines.join('\n')}\n`);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-grep', name: 'Grep', input: { pattern: 'NEEDLE' } }]),
+        provider.text('两百条'),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 搜 NEEDLE');
+
+      const content = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!))[0]?.content ?? '';
+      assert.equal(
+        content.split('\n').filter((line) => /^\S+:\d+: /.test(line)).length,
+        200,
+        `every one of the 200 hits is listed: ${content}`,
+      );
+      assert.ok(
+        !content.includes(ZH_CN['tool.grep.capped.matches'].text.slice(0, 6)),
+        `a full but complete hit list carries no cap fact: ${content}`,
+      );
+      assert.ok(!content.includes('还有更多匹配'), `no cap wording: ${content}`);
+      assert.equal(latestOutcome(fixture).status, 'replied');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a grep hit list over the cap says more matches exist`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-grep-capped-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      assert.ok(round.project !== null);
+      const lines = Array.from({ length: 201 }, (_unused, index) => `NEEDLE-${index + 1}`);
+      writeFileSync(path.join(round.project, 'notes.txt'), `${lines.join('\n')}\n`);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-grep', name: 'Grep', input: { pattern: 'NEEDLE' } }]),
+        provider.text('只有前两百条'),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 搜 NEEDLE');
+
+      const content = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!))[0]?.content ?? '';
+      assert.equal(
+        content.split('\n').filter((line) => /^\S+:\d+: /.test(line)).length,
+        200,
+        `the list stops at the cap: ${content}`,
+      );
+      assert.ok(
+        content.includes(
+          ZH_CN['tool.grep.capped.matches'].text.replace('{limit}', '200'),
+        ),
+        `the model is told more matches exist: ${content}`,
+      );
+      assert.ok(!content.includes('还有文件未扫描'), `the other reason is not claimed: ${content}`);
+      assert.equal(latestOutcome(fixture).status, 'replied');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a read result over the re-feed cap is cut and says so`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-refeed-cap-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      assert.ok(round.project !== null);
+      writeFileSync(
+        path.join(round.project, 'big.txt'),
+        `HEAD-OF-FILE\n${'x'.repeat(30000)}\nEND-OF-FILE\n`,
+      );
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-read', name: 'Read', input: { path: 'big.txt' } }]),
+        provider.text('文件很长'),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 读 big.txt');
+
+      const content = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!))[0]?.content ?? '';
+      assert.ok(content.startsWith('[Read] ok'), `the result keeps its state line: ${content.slice(0, 40)}`);
+      assert.ok(content.includes('已截断'), `the cut is explicit: ${content.slice(-160)}`);
+      assert.ok(content.includes('已给 20000 字'), `the kept size is named: ${content.slice(-160)}`);
+      assert.ok(!content.includes('END-OF-FILE'), 'the tail past the cap never reaches the model');
+      assert.equal(latestOutcome(fixture).status, 'replied');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   test(`[${provider.label}] a round with no Plan face is handed no Plan tool`, async () => {
     const fixture = await startFixture(`allibot-tool-loop-noplan-${provider.label}-`, provider);
     try {
