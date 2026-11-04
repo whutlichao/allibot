@@ -265,19 +265,49 @@ const OPENAI: ProviderRow = {
 /** Both rows run the same cases; this list is the matrix's only source. */
 const PROVIDER_ROWS: readonly ProviderRow[] = [ANTHROPIC, OPENAI];
 
-interface Fixture {
+/** The minimal shape every helper posts to: a started backend. */
+interface HasBase {
+  base: string;
+}
+
+/** One task target whose Plan run a seeding round already filled. */
+interface SeededPlan {
+  taskTargetId: string;
+  /** The seeded run's item ids in append order. */
+  taskIds: string[];
+}
+
+/** A backend a scenario seeds state on before the recorded server starts. */
+interface SetupPhase extends HasBase {
+  tmp: string;
+  dataDir: string;
+  home: string;
+}
+
+interface Fixture extends HasBase {
   tmp: string;
   dataDir: string;
   home: string;
   endpoint: RecordingEndpoint;
   running: RunningServer;
-  base: string;
+  /** The seeded Plan run a plan scenario reads; `null` on every other scenario. */
+  plan: SeededPlan | null;
   stop: () => Promise<void>;
 }
 
+/**
+ * Start one fixture. `seed`, when given, runs against a scripted double on the
+ * same data directory and is stopped before the recording endpoint's server
+ * starts: a scenario that needs state the model cannot create itself (the Plan
+ * run's items; #63 brings the Plan write tools) seeds it through the ordinary
+ * HTTP face first. `options` adds the server's own arguments and environment
+ * overrides, which is how a case drives a shorter approval wait or a different
+ * provider endpoint.
+ */
 async function startFixture(
   prefix: string,
   provider: ProviderRow,
+  seed?: (setup: SetupPhase) => Promise<SeededPlan>,
   options: { args?: readonly string[]; env?: NodeJS.ProcessEnv } = {},
 ): Promise<Fixture> {
   const tmp = mkdtempSync(path.join(tmpdir(), prefix));
@@ -286,6 +316,7 @@ async function startFixture(
   mkdirSync(home, { recursive: true });
   const migration = runCli(['--migrate', '--data-dir', dataDir]);
   assert.equal(migration.exitCode, 0, `migrate should exit 0; output: ${migration.output}`);
+  const plan = seed === undefined ? null : await runSeed({ tmp, dataDir, home }, seed);
   const endpoint = await startRecordingEndpoint();
   const running = await startServer(dataDir, {
     args: ['--provider', 'model', ...(options.args ?? [])],
@@ -297,6 +328,7 @@ async function startFixture(
     home,
     endpoint,
     running,
+    plan,
     base: `http://127.0.0.1:${running.port}`,
     stop: async () => {
       await running.stop();
@@ -306,26 +338,51 @@ async function startFixture(
   };
 }
 
+/** Run one seeding phase on the scripted `plan` double, then stop it. */
+async function runSeed(
+  context: Omit<SetupPhase, 'base'>,
+  seed: (setup: SetupPhase) => Promise<SeededPlan>,
+): Promise<SeededPlan> {
+  const running = await startServer(context.dataDir, { args: ['--scripted-provider', 'plan'] });
+  try {
+    return await seed({ ...context, base: `http://127.0.0.1:${running.port}` });
+  } finally {
+    await running.stop();
+  }
+}
+
 async function readJson(response: Response): Promise<Record<string, unknown>> {
   const body: unknown = await response.json();
   assert.ok(typeof body === 'object' && body !== null, 'response body should be a JSON object');
   return body as Record<string, unknown>;
 }
 
-async function postJson(fixture: Fixture, route: string, body: unknown): Promise<Response> {
-  return await fetch(`${fixture.base}${route}`, {
+async function postJson(server: HasBase, route: string, body: unknown): Promise<Response> {
+  return await fetch(`${server.base}${route}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
 }
 
-async function patchJson(fixture: Fixture, route: string, body: unknown): Promise<Response> {
-  return await fetch(`${fixture.base}${route}`, {
+async function patchJson(server: HasBase, route: string, body: unknown): Promise<Response> {
+  return await fetch(`${server.base}${route}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+async function getJson(server: HasBase, route: string): Promise<Record<string, unknown>> {
+  const response = await fetch(`${server.base}${route}`);
+  assert.equal(response.status, 200, await response.clone().text());
+  return await readJson(response);
+}
+
+/** The one-time remote-data-flow consent the model adapter needs before it calls. */
+async function confirmRemoteDataFlow(server: HasBase, provider: ProviderRow): Promise<void> {
+  const confirmed = await postJson(server, `/api/remote-data-flow/${provider.provider}/consent`, {});
+  assert.equal(confirmed.status, 200, await confirmed.clone().text());
 }
 
 /**
@@ -362,8 +419,7 @@ async function openRound(
   assert.equal(created.status, 201, await created.clone().text());
   const agentId = (await readJson(created))['id'] as string;
 
-  const confirmed = await postJson(fixture, `/api/remote-data-flow/${provider.provider}/consent`, {});
-  assert.equal(confirmed.status, 200, await confirmed.clone().text());
+  await confirmRemoteDataFlow(fixture, provider);
 
   const channel = await postJson(fixture, '/api/channels', {
     name: '工具循环频道',
@@ -390,13 +446,88 @@ async function openRound(
   return { agentId, channelId, project };
 }
 
-async function sendMessage(fixture: Fixture, targetId: string, body: string): Promise<void> {
-  const response = await postJson(fixture, `/api/targets/${targetId}/messages`, { body });
+/**
+ * Seed one task target whose Plan run already holds items. The task is created
+ * before the Agent joins the channel so no claim round fires, then the member
+ * is assigned and the seeding round runs on the scripted `plan` double: it is
+ * the only face that creates Plan items today (#63 brings the write tools).
+ * The item ids come back through `GET /api/targets/{id}/plans`, the same read
+ * model the UI uses.
+ */
+async function seedPlanRound(
+  setup: SetupPhase,
+  provider: ProviderRow,
+  options: { withRoot: boolean },
+): Promise<SeededPlan> {
+  const channel = await postJson(setup, '/api/channels', {
+    name: '计划工具频道',
+    description: '',
+    mode: 'autonomous',
+    response_budget_limit: 10,
+  });
+  assert.equal(channel.status, 201, await channel.clone().text());
+  const channelId = (await readJson(channel))['id'] as string;
+
+  const task = await postJson(setup, '/api/tasks', { channel_id: channelId, title: '计划工具任务' });
+  assert.equal(task.status, 201, await task.clone().text());
+  const taskView = await readJson(task);
+  const taskId = taskView['id'] as string;
+  const taskTargetId = taskView['target_id'] as string;
+
+  const created = await postJson(setup, '/api/agents', {
+    display_name: '读计划的成员',
+    model: provider.model,
+  });
+  assert.equal(created.status, 201, await created.clone().text());
+  const agentId = (await readJson(created))['id'] as string;
+  const joined = await postJson(setup, `/api/channels/${channelId}/members`, {
+    member_id: agentId,
+  });
+  assert.equal(joined.status, 200, await joined.clone().text());
+  const assigned = await patchJson(setup, `/api/tasks/${taskId}`, {
+    assignee_member_id: agentId,
+  });
+  assert.equal(assigned.status, 200, await assigned.clone().text());
+
+  if (options.withRoot) {
+    const project = path.join(setup.tmp, 'plan-project');
+    mkdirSync(path.join(project, 'sub'), { recursive: true });
+    writeFileSync(path.join(project, 'notes.txt'), 'NEEDLE-ONE\n');
+    writeFileSync(path.join(project, 'sub', 'other.txt'), 'NEEDLE-TWO\n');
+    const patched = await patchJson(setup, `/api/channels/${channelId}`, {
+      workspace_root: project,
+    });
+    assert.equal(patched.status, 200, await patched.clone().text());
+  }
+
+  await sendMessage(setup, taskTargetId, '@读计划的成员 把你的计划列一下');
+  const taskIds = (await planItems(setup, taskTargetId)).map((item) => item.id);
+  assert.equal(taskIds.length, 2, 'the seeding round fills the run with two items');
+  return { taskTargetId, taskIds };
+}
+
+interface PlanItemShape {
+  id: string;
+  title: string;
+  status: string;
+  position: number;
+}
+
+/** The current Plan run's items, read through the ordinary read model. */
+async function planItems(server: HasBase, targetId: string): Promise<PlanItemShape[]> {
+  const body = await getJson(server, `/api/targets/${targetId}/plans`);
+  const plans = body['plans'] as Record<string, unknown>[];
+  const tasks = (plans[0]?.['tasks'] ?? []) as PlanItemShape[];
+  return tasks;
+}
+
+async function sendMessage(server: HasBase, targetId: string, body: string): Promise<void> {
+  const response = await postJson(server, `/api/targets/${targetId}/messages`, { body });
   assert.equal(response.status, 201, await response.clone().text());
 }
 
-async function messages(fixture: Fixture, targetId: string): Promise<Record<string, unknown>[]> {
-  const response = await fetch(`${fixture.base}/api/targets/${targetId}/messages?limit=50`);
+async function messages(server: HasBase, targetId: string): Promise<Record<string, unknown>[]> {
+  const response = await fetch(`${server.base}/api/targets/${targetId}/messages?limit=50`);
   assert.equal(response.status, 200, await response.clone().text());
   return (await readJson(response))['messages'] as Record<string, unknown>[];
 }
@@ -447,6 +578,13 @@ async function patchMaxIterations(fixture: Fixture, agentId: string, value: numb
   assert.equal(response.status, 200, await response.clone().text());
   const body = await readJson(response);
   assert.equal(body['max_iterations'], value, 'the Agent keeps the configured cap');
+}
+
+/** The round just finished: a seeded scenario ran a round of its own first. */
+function latestOutcome(fixture: Fixture): OutcomeRow {
+  const outcomes = roundOutcomes(fixture);
+  assert.ok(outcomes.length > 0, 'the wake ran a round');
+  return outcomes[outcomes.length - 1]!;
 }
 
 function requestPayload(request: { body: string }): Record<string, unknown> {
@@ -652,8 +790,8 @@ for (const provider of PROVIDER_ROWS) {
       const first = provider.toolDefinitions(requestPayload(fixture.endpoint.requests[0]!));
       assert.deepEqual(
         first.map((definition) => definition.name),
-        ['Read'],
-        'the request carries exactly the round tool this batch offers',
+        ['Read', 'Glob', 'Grep'],
+        "the request carries exactly the batch's read tools this round offers",
       );
       const schema = first[0]?.schema ?? {};
       assert.deepEqual(schema['required'], ['path'], 'the schema names the one required argument');
@@ -1116,6 +1254,70 @@ for (const provider of PROVIDER_ROWS) {
     }
   });
 
+  test(`[${provider.label}] a round globs the project root and receives one path per line`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-glob-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      assert.ok(round.project !== null);
+      mkdirSync(path.join(round.project, 'sub'), { recursive: true });
+      writeFileSync(path.join(round.project, 'sub', 'other.txt'), 'OTHER-BODY\n');
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([
+          { id: 'call-glob', name: 'Glob', input: { pattern: '**/*.txt' } },
+          { id: 'call-escape', name: 'Glob', input: { pattern: '*', path: '..' } },
+        ]),
+        provider.text('根内有两个 txt，越界那条不算'),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 列出根下的 txt');
+
+      const definitions = provider.toolDefinitions(requestPayload(fixture.endpoint.requests[0]!));
+      const glob = definitions.find((definition) => definition.name === 'Glob');
+      assert.ok(glob !== undefined, 'the round is handed the Glob tool');
+      assert.deepEqual(glob.schema['required'], ['pattern'], 'only the pattern is required');
+      assert.deepEqual(
+        Object.keys(glob.schema['properties'] as Record<string, unknown>).sort(),
+        ['path', 'pattern'],
+        "the schema names exactly the face's two arguments",
+      );
+
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.deepEqual(
+        results.map((result) => [result.id, result.isError]),
+        [
+          ['call-glob', false],
+          ['call-escape', true],
+        ],
+        'a hit list is a result and a base outside the roots is a tool error',
+      );
+      assert.deepEqual(
+        (results[0]?.content ?? '')
+          .split('\n')
+          .filter((line) => /^\S+\.txt$/.test(line))
+          .sort(),
+        ['notes.txt', 'sub/other.txt'],
+        `the result lists one path per line: ${results[0]?.content ?? ''}`,
+      );
+      assert.ok(
+        (results[1]?.content ?? '').includes('outside-root'),
+        `a path outside the readable roots keeps the file face's stable code: ${
+          results[1]?.content ?? ''
+        }`,
+      );
+      assert.deepEqual(
+        (await messages(fixture, round.channelId)).map((message) => [message['kind'], message['body']]),
+        [
+          ['human', '@读文件的成员 列出根下的 txt'],
+          ['agent', '根内有两个 txt，越界那条不算'],
+        ],
+        'a Glob tool error is a result, not a round failure',
+      );
+      assert.equal(latestOutcome(fixture).status, 'replied');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   test(`[${provider.label}] a non-2xx answer fails the round and invents no tool result`, async () => {
     const fixture = await startFixture(`allibot-tool-loop-status-${provider.label}-`, provider);
     try {
@@ -1216,9 +1418,12 @@ for (const provider of PROVIDER_ROWS) {
   });
 
   test(`[${provider.label}] an approval that times out fails the round and is never a tool result`, async () => {
-    const fixture = await startFixture(`allibot-tool-loop-approval-timeout-${provider.label}-`, provider, {
-      args: ['--approval-timeout-ms', '200'],
-    });
+    const fixture = await startFixture(
+      `allibot-tool-loop-approval-timeout-${provider.label}-`,
+      provider,
+      undefined,
+      { args: ['--approval-timeout-ms', '200'] },
+    );
     try {
       const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
       await putReadAskRule(fixture, round.channelId, 'notes.txt');
@@ -1249,7 +1454,170 @@ for (const provider of PROVIDER_ROWS) {
         outcome.reason.includes('审批等待超时'),
         `the existing approval-timeout copy is the reason: ${outcome.reason}`,
       );
+      assert.equal(
+        outcome.reason.includes('模型调用失败'),
+        false,
+        `an approval timeout is not a model-call failure: ${outcome.reason}`,
+      );
       assert.equal(outcome.finished_reason, ZH_CN['round.finished.error'].text);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a round greps the project root and receives path:line: text`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-grep-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      assert.ok(round.project !== null);
+      mkdirSync(path.join(round.project, 'sub'), { recursive: true });
+      writeFileSync(path.join(round.project, 'sub', 'other.txt'), 'FIRST\nSECOND-NEEDLE-TWO\n');
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-grep', name: 'Grep', input: { pattern: 'NEEDLE' } }]),
+        provider.text('两行命中'),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 搜 NEEDLE');
+
+      const definitions = provider.toolDefinitions(requestPayload(fixture.endpoint.requests[0]!));
+      const grep = definitions.find((definition) => definition.name === 'Grep');
+      assert.ok(grep !== undefined, 'the round is handed the Grep tool');
+      assert.deepEqual(grep.schema['required'], ['pattern'], 'only the pattern is required');
+
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.equal(results[0]?.isError, false, 'a grep hit list is a successful result');
+      assert.deepEqual(
+        (results[0]?.content ?? '')
+          .split('\n')
+          .filter((line) => /^\S+:\d+: /.test(line)),
+        ['notes.txt:1: NEEDLE-ONE', 'sub/other.txt:2: SECOND-NEEDLE-TWO'],
+        `every hit is one path:line: text line: ${results[0]?.content ?? ''}`,
+      );
+      assert.equal(latestOutcome(fixture).status, 'replied');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a round with no Plan face is handed no Plan tool`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-noplan-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      queueReplies(fixture.endpoint, [provider.text('这个频道没有计划面')]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 列出你的计划');
+
+      const names = provider
+        .toolDefinitions(requestPayload(fixture.endpoint.requests[0]!))
+        .map((definition) => definition.name);
+      assert.deepEqual(
+        names,
+        ['Read', 'Glob', 'Grep'],
+        'an autonomous channel round carries the file tools only',
+      );
+      assert.deepEqual(
+        names.filter((name) => name.startsWith('Task')),
+        [],
+        'TaskList and TaskGet are absent from the request, not merely refused',
+      );
+      assert.equal(latestOutcome(fixture).status, 'replied');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a task round lists the items of its own Plan run`, async () => {
+    const fixture = await startFixture(
+      `allibot-tool-loop-tasklist-${provider.label}-`,
+      provider,
+      async (setup) => await seedPlanRound(setup, provider, { withRoot: false }),
+    );
+    try {
+      const plan = fixture.plan;
+      assert.ok(plan !== null);
+      await confirmRemoteDataFlow(fixture, provider);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-list', name: 'TaskList', input: {} }]),
+        provider.text('计划共两条'),
+      ]);
+
+      await sendMessage(fixture, plan.taskTargetId, '@读计划的成员 现在计划是什么');
+
+      const definitions = provider.toolDefinitions(requestPayload(fixture.endpoint.requests[0]!));
+      assert.deepEqual(
+        definitions.map((definition) => definition.name),
+        ['TaskList', 'TaskGet'],
+        'a Plan round without a project root carries exactly the read-only Plan tools',
+      );
+      const list = definitions.find((definition) => definition.name === 'TaskList');
+      assert.deepEqual(list?.schema['properties'], {}, 'TaskList takes no argument');
+      assert.deepEqual(list?.schema['required'], []);
+
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.equal(results[0]?.isError, false, 'reading the run is a successful result');
+      const content = results[0]?.content ?? '';
+      assert.ok(
+        content.includes(`- [in_progress] PLAN-ITEM-ONE-UPDATED (${plan.taskIds[0]})`),
+        `the list states status, title and id: ${content}`,
+      );
+      assert.ok(
+        content.includes(`- [pending] PLAN-ITEM-TWO (${plan.taskIds[1]})`),
+        `every item of the run is listed: ${content}`,
+      );
+      assert.equal(latestOutcome(fixture).status, 'replied');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] TaskGet answers one item and reports a missing id as a result`, async () => {
+    const fixture = await startFixture(
+      `allibot-tool-loop-taskget-${provider.label}-`,
+      provider,
+      async (setup) => await seedPlanRound(setup, provider, { withRoot: false }),
+    );
+    try {
+      const plan = fixture.plan;
+      assert.ok(plan !== null);
+      await confirmRemoteDataFlow(fixture, provider);
+      const existingId = plan.taskIds[0] ?? '';
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([
+          { id: 'call-get', name: 'TaskGet', input: { id: existingId } },
+          { id: 'call-missing', name: 'TaskGet', input: { id: 'no-such-item' } },
+        ]),
+        provider.text('一条在，一条不在'),
+      ]);
+
+      await sendMessage(fixture, plan.taskTargetId, '@读计划的成员 第一条是什么');
+
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.deepEqual(
+        results.map((result) => [result.id, result.isError]),
+        [
+          ['call-get', false],
+          ['call-missing', true],
+        ],
+        'a missing item is a tool error result, not a round failure',
+      );
+      const found = results[0]?.content ?? '';
+      assert.ok(found.includes(`id: ${existingId}`), `the item is named by id: ${found}`);
+      assert.ok(
+        found.includes('title: PLAN-ITEM-ONE-UPDATED'),
+        `the item states its title: ${found}`,
+      );
+      assert.ok(found.includes('status: in_progress'), `the item states its status: ${found}`);
+      assert.ok(
+        (results[1]?.content ?? '').includes('not-found'),
+        `the missing id keeps a stable code: ${results[1]?.content ?? ''}`,
+      );
+      const landed = await messages(fixture, plan.taskTargetId);
+      assert.equal(
+        landed[landed.length - 1]?.['body'],
+        '一条在，一条不在',
+        'the tool error still lands the round answer',
+      );
+      assert.equal(latestOutcome(fixture).status, 'replied');
     } finally {
       await fixture.stop();
     }
@@ -1262,6 +1630,7 @@ for (const provider of PROVIDER_ROWS) {
     const fixture = await startFixture(
       `allibot-tool-loop-slow-provider-${provider.label}-`,
       provider,
+      undefined,
       { env: provider.env(hanging.baseUrl) },
     );
     try {
@@ -1330,6 +1699,71 @@ for (const provider of PROVIDER_ROWS) {
       );
       assertNoCredential(outcome.reason, 'the round reason');
       events.close();
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] malformed arguments never reach any face of the batch`, async () => {
+    const fixture = await startFixture(
+      `allibot-tool-loop-shape-${provider.label}-`,
+      provider,
+      async (setup) => await seedPlanRound(setup, provider, { withRoot: true }),
+    );
+    try {
+      const plan = fixture.plan;
+      assert.ok(plan !== null);
+      await confirmRemoteDataFlow(fixture, provider);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([
+          { id: 'call-missing', name: 'Grep', input: {} },
+          { id: 'call-typed', name: 'Glob', input: { pattern: 42 } },
+          { id: 'call-extra', name: 'TaskList', input: { limit: 1 } },
+          { id: 'call-no-id', name: 'TaskGet', input: {} },
+        ]),
+        provider.text('四个参数都不合形状，我按 schema 重来'),
+      ]);
+
+      await sendMessage(fixture, plan.taskTargetId, '@读计划的成员 用这四个工具');
+
+      assert.deepEqual(
+        provider
+          .toolDefinitions(requestPayload(fixture.endpoint.requests[0]!))
+          .map((definition) => definition.name),
+        ['Read', 'Glob', 'Grep', 'TaskList', 'TaskGet'],
+        'a task round with a project root is handed the whole batch',
+      );
+
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.deepEqual(
+        results.map((result) => [result.id, result.isError]),
+        [
+          ['call-missing', true],
+          ['call-typed', true],
+          ['call-extra', true],
+          ['call-no-id', true],
+        ],
+        'a missing field, a wrong type and an extra field are all tool errors',
+      );
+      for (const result of results) {
+        assert.ok(
+          result.content.includes('invalid-arguments'),
+          `the shape failure reports its own stable code: ${result.content}`,
+        );
+        for (const forbidden of ['PLAN-ITEM', 'NEEDLE-ONE', ...plan.taskIds]) {
+          assert.equal(
+            result.content.includes(forbidden),
+            false,
+            `a malformed call never reaches a face: ${result.content}`,
+          );
+        }
+      }
+      assert.deepEqual(
+        (await planItems(fixture, plan.taskTargetId)).map((item) => item.id),
+        plan.taskIds,
+        'no refused call changed the run',
+      );
+      assert.equal(latestOutcome(fixture).status, 'replied');
     } finally {
       await fixture.stop();
     }
