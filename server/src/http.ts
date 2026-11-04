@@ -379,7 +379,10 @@ const ROUTES: readonly Route[] = [
     method: 'GET',
     pattern: new RegExp(`^/api/targets/${TARGET_ID}/plans$`),
     handle: async (request, response, { db }, ...params) => {
-      const query = parsePlanQuery(new URL(request.url ?? '/', `http://${HOST}`).searchParams);
+      const query = parsePlanQuery(
+        db,
+        new URL(request.url ?? '/', `http://${HOST}`).searchParams,
+      );
       sendJson(response, 200, {
         plans: listPlans(db, decodeId(params[0]), query),
       });

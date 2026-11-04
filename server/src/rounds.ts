@@ -1549,7 +1549,7 @@ async function readRoundWorkspace(
     });
     // The MCP env_names merge point (#46 / D6.1): the names are the union of
     // the enabled servers' declarations; values are read from the process env.
-    const envNames = readDeclaredEnvNames(memberId);
+    const envNames = readDeclaredEnvNames(db, memberId);
     return {
       workspace: {
         root: projectRoot,
@@ -1618,7 +1618,7 @@ async function readRoundWorkspace(
         // The same per-round source the Docker path uses (D5.4 / D6.1): the
         // member's enabled MCP servers' declared names; values are read from
         // the process environment at spawn time.
-        envNames: readDeclaredEnvNames(memberId),
+        envNames: readDeclaredEnvNames(db, memberId),
         gate,
       }),
     },

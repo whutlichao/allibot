@@ -133,3 +133,33 @@ test('t renders a key and fails loudly on a missing or extra parameter', () => {
     /has no parameter: \{url\}/,
   );
 });
+
+/**
+ * The backend modules that render user-visible diagnostics. A Chinese literal
+ * in the code is copy that bypassed the catalog and therefore cannot follow the
+ * stored language preference; keep the literal in `zh-CN.ts` instead.
+ */
+const BACKEND_COPY_FILES = [
+  'server/src/mcp-file.ts',
+  'server/src/mcp-runtime.ts',
+  'server/src/mcp-export.ts',
+  'server/src/skill-migrate.ts',
+  'server/src/plans.ts',
+  'server/src/rounds.ts',
+] as const;
+
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
+test('backend diagnostics render from the catalog instead of hard-coded copy', async () => {
+  for (const relative of BACKEND_COPY_FILES) {
+    const source = stripComments(await readFile(path.join(REPO_ROOT, relative), 'utf8'));
+    const match = /[一-鿿]/u.exec(source);
+    assert.equal(
+      match,
+      null,
+      `${relative} hard-codes Chinese copy near: ${source.slice(Math.max(0, match?.index ?? 0), (match?.index ?? 0) + 80)}`,
+    );
+  }
+});

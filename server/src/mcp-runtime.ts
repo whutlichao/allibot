@@ -13,6 +13,7 @@ import {
   newMcpToolCallId,
   type McpClient,
 } from './mcp-client.js';
+import { tFromDb } from './copy.js';
 import { hasMcpConsent, mcpFilePath, readMcpFile } from './mcp-file.js';
 import {
   containerToolEnvironment,
@@ -79,7 +80,7 @@ interface ConnectedServer {
 export async function buildRoundMcp(
   options: BuildRoundMcpOptions,
 ): Promise<RoundMcpContext | null> {
-  const file = readMcpFile(mcpFilePath(options.memberId, options.env));
+  const file = readMcpFile(mcpFilePath(options.memberId, options.env), options.db);
   if (!file.present && file.diagnostic === null) {
     // 文件缺失 = 本轮不装配 MCP，不报错.
     return null;
@@ -105,7 +106,11 @@ export async function buildRoundMcp(
     options.targetId,
   );
   if (permission === null) {
-    return diagnosticOnlyContext(`MCP 装配失败：找不到 ${options.targetId} 的权限上下文`);
+    return diagnosticOnlyContext(
+      tFromDb(options.db, 'mcp.runtime.permissionContextMissing', {
+        target_id: options.targetId,
+      }),
+    );
   }
   const gate = createToolGate({
     db: options.db,
@@ -125,7 +130,10 @@ export async function buildRoundMcp(
   for (const entry of enabled) {
     if (entry.transport !== 'stdio' && !hasMcpConsent(options.db, entry.name)) {
       diagnostics.push(
-        `MCP 服务器 ${entry.name}（${entry.transport}）未确认远端数据流，未连接`,
+        tFromDb(options.db, 'mcp.runtime.remoteUnconfirmed', {
+          name: entry.name,
+          transport: entry.transport,
+        }),
       );
       continue;
     }
@@ -133,7 +141,12 @@ export async function buildRoundMcp(
     try {
       client = createClient(entry, hostRoot, options);
     } catch (error) {
-      diagnostics.push(`MCP 服务器 ${entry.name} 装配失败：${messageOf(error)}`);
+      diagnostics.push(
+        tFromDb(options.db, 'mcp.runtime.assembleFailed', {
+          name: entry.name,
+          detail: messageOf(error),
+        }),
+      );
       continue;
     }
     try {
@@ -143,7 +156,10 @@ export async function buildRoundMcp(
       servers.push({ name: entry.name, transport: entry.transport, tools });
     } catch (error) {
       diagnostics.push(
-        `MCP 服务器 ${entry.name} 连接失败：${shortDiagnostic(messageOf(error))}`,
+        tFromDb(options.db, 'mcp.runtime.connectFailed', {
+          name: entry.name,
+          detail: shortDiagnostic(messageOf(error)),
+        }),
       );
       await client.close().catch(() => undefined);
     }
@@ -159,7 +175,7 @@ export async function buildRoundMcp(
         return {
           ok: false,
           error: 'unknown-server',
-          message: `MCP 服务器未装配：${serverName}`,
+          message: tFromDb(options.db, 'mcp.runtime.serverMissing', { name: serverName }),
         };
       }
       const request = {
@@ -261,10 +277,11 @@ function createClient(
  * and file-tool processes get exactly these names on top of the allowlist.
  */
 export function readDeclaredEnvNames(
+  db: Database.Database,
   memberId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  const file = readMcpFile(mcpFilePath(memberId, env));
+  const file = readMcpFile(mcpFilePath(memberId, env), db);
   if (!file.present || file.diagnostic !== null) {
     return [];
   }

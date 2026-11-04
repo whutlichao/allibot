@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, realpathSync, statSync, writeFileSy
 import { cpSync } from 'node:fs';
 import path from 'node:path';
 import { createDataDirBackup } from './backup.js';
+import { tFromDb } from './copy.js';
 import {
   agentSkillsRoot,
   isInsideOrEqual,
@@ -83,25 +84,25 @@ export function runSkillMigration(
   if (options.apply !== options.yes) {
     return {
       exitCode: 2,
-      lines: ['migrate-skills：--apply 与 --yes 必须同时给出；未写入任何文件。'],
+      lines: [tFromDb(db, 'skill.migrate.applyYes')],
     };
   }
 
   const plan = buildPlan(db, env);
-  const lines = renderPlan(plan, dataDir, env);
+  const lines = renderPlan(plan, dataDir, env, db);
 
   if (plan.entries.some((entry) => entry.status === 'refuse')) {
     return {
       exitCode: 1,
       lines: [
         ...lines,
-        '拒绝执行：存在目标同名但内容不同或无法读取的条目。请先手动裁定；本命令不覆盖、不提供 --force；本次未写入任何文件。',
+        tFromDb(db, 'skill.migrate.refused'),
       ],
     };
   }
 
   if (!options.apply || !options.yes) {
-    lines.push('预演结束：未写入任何文件、未改动数据库、未创建备份或迁移清单。');
+    lines.push(tFromDb(db, 'skill.migrate.dryRunEnd'));
     return { exitCode: 0, lines };
   }
 
@@ -109,9 +110,11 @@ export function runSkillMigration(
     (entry) => entry.status === 'copy' || entry.status === 'row',
   );
   if (actionable.length === 0) {
-    lines.push('技能迁移：没有需要写入的条目（全部已就位或没有成员级字节）；未写入任何文件。');
+    lines.push(tFromDb(db, 'skill.migrate.nothingToDo'));
     lines.push(
-      `处理条目： 0 条（已复制 0 / 只补行 0 / 跳过 ${plan.entries.filter((entry) => entry.status === 'skip').length}）`,
+      tFromDb(db, 'skill.migrate.processedZero', {
+        skipped: plan.entries.filter((entry) => entry.status === 'skip').length,
+      }),
     );
     return { exitCode: 0, lines };
   }
@@ -150,7 +153,7 @@ export function runSkillMigration(
           channel_id: partition.channelId,
           path: partition.path,
           skills: partition.skills,
-          notice: '频道级已弃用，请按成员安装',
+          notice: tFromDb(db, 'skill.migrate.channelDeprecated'),
         })),
         unknown_partitions: plan.unknownPartitions,
       },
@@ -176,20 +179,34 @@ export function runSkillMigration(
     recordSkillRow(db, entry.memberId, entry.name, entry.contentHash, 'directory');
   }
 
-  lines.push('技能迁移完成');
-  lines.push(`  数据目录备份： ${backupPath}`);
-  lines.push(`  迁移清单： ${manifestPath}`);
+  lines.push(tFromDb(db, 'skill.migrate.done'));
+  lines.push(tFromDb(db, 'skill.migrate.backupLine', { path: backupPath }));
+  lines.push(tFromDb(db, 'skill.migrate.manifestLine', { path: manifestPath }));
   lines.push(
-    `处理条目： ${actionable.length} 条（已复制 ${copied} / 只补行 ${rowsOnly} / 跳过 ${plan.entries.filter((entry) => entry.status === 'skip').length}）`,
+    tFromDb(db, 'skill.migrate.processed', {
+      processed: actionable.length,
+      copied,
+      rows_only: rowsOnly,
+      skipped: plan.entries.filter((entry) => entry.status === 'skip').length,
+    }),
   );
   for (const entry of actionable) {
     lines.push(
-      `  ${entry.status === 'copy' ? '复制' : '只补行'} ${entry.source} → ${entry.target}` +
-        `（${entry.fileCount} 个文件 / ${entry.bytes} 字节；hash ${entry.contentHash}）`,
+      tFromDb(db, 'skill.migrate.entryLine', {
+        action:
+          entry.status === 'copy'
+            ? tFromDb(db, 'skill.migrate.copy')
+            : tFromDb(db, 'skill.migrate.rowOnly'),
+        source: entry.source,
+        target: entry.target,
+        files: entry.fileCount,
+        bytes: entry.bytes,
+        hash: entry.contentHash,
+      }),
     );
   }
   if (removable.length > 0) {
-    lines.push('可手工删除的源路径（确认后；本命令不删除任何源文件）：');
+    lines.push(tFromDb(db, 'skill.migrate.removable'));
     for (const source of removable) {
       lines.push(`  ${source}`);
     }
@@ -269,8 +286,8 @@ function buildPlan(db: Database.Database, env: NodeJS.ProcessEnv): MigrationPlan
           partition,
           path: partitionPath,
           reason: PARTITION_PATTERN.test(partition)
-            ? '未匹配现行成员或频道'
-            : '分区名不是安全 slug',
+            ? tFromDb(db, 'skill.migrate.unknownPartitionMember')
+            : tFromDb(db, 'skill.migrate.unsafePartition'),
         });
         continue;
       }
@@ -328,7 +345,7 @@ function addEntry(
       bytes: 0,
       status: 'refuse',
       targetPresent: false,
-      reason: '技能名不是安全 slug，拒绝迁移',
+      reason: tFromDb(db, 'skill.migrate.unsafeName'),
     });
     return;
   }
@@ -353,7 +370,7 @@ function addEntry(
   if (existing !== undefined) {
     if (existing.contentHash !== stats.contentHash) {
       existing.status = 'refuse';
-      existing.reason = '同一成员的同名旧技能在多个频道根内容不同，需人工裁定';
+      existing.reason = tFromDb(db, 'skill.migrate.multiRootConflict');
     }
     return;
   }
@@ -369,14 +386,16 @@ function addEntry(
       if (current.contentHash === stats.contentHash) {
         targetPresent = true;
       } else {
-        targetProblem = '目标已存在但内容不同，需人工裁定后再迁移（本命令不覆盖）';
+        targetProblem = tFromDb(db, 'skill.migrate.targetDiffers');
       }
     } catch (error) {
-      targetProblem = `目标已存在但不可读取：${error instanceof Error ? error.message : String(error)}`;
+      targetProblem = tFromDb(db, 'skill.migrate.targetUnreadable', {
+        detail: error instanceof Error ? error.message : String(error),
+      });
     }
   }
   if (row !== undefined && row.content_hash !== stats.contentHash) {
-    targetProblem = '库行已存在且 hash 不同，需人工裁定';
+    targetProblem = tFromDb(db, 'skill.migrate.rowHashDiffers');
   }
   if (targetProblem !== null) {
     entries.set(key, {
@@ -398,16 +417,16 @@ function addEntry(
   let reason: string;
   if (targetPresent && row !== undefined) {
     status = 'skip';
-    reason = '目标字节与库行均已就位，跳过';
+    reason = tFromDb(db, 'skill.migrate.skippedPresent');
   } else if (targetPresent) {
     status = 'row';
-    reason = '目标字节已存在且内容相同，只补写 Agent 级库行';
+    reason = tFromDb(db, 'skill.migrate.rowOnlyPresent');
   } else if (row !== undefined) {
     status = 'copy';
-    reason = '库行已存在但目标字节缺失，补齐成员家目录副本';
+    reason = tFromDb(db, 'skill.migrate.rowMissingBytes');
   } else {
     status = 'copy';
-    reason = '目标不存在，将复制字节并新建 Agent 级库行';
+    reason = tFromDb(db, 'skill.migrate.copyNew');
   }
   entries.set(key, {
     memberId,
@@ -438,28 +457,43 @@ function renderPlan(
   plan: MigrationPlan,
   dataDir: string,
   env: NodeJS.ProcessEnv,
+  db: Database.Database,
 ): string[] {
   const counts = { copy: 0, row: 0, skip: 0, refuse: 0 };
   for (const entry of plan.entries) {
     counts[entry.status] += 1;
   }
-  const lines: string[] = ['技能迁移计划（migrate-skills，只读扫描）'];
-  lines.push(`数据目录： ${dataDir}`);
-  lines.push(`全局层根： ${workspaceHomeRoot(env)}`);
+  const lines: string[] = [tFromDb(db, 'skill.migrate.planTitle')];
+  lines.push(tFromDb(db, 'skill.migrate.dataDirLine', { path: dataDir }));
+  lines.push(tFromDb(db, 'skill.migrate.globalLayerLine', { path: workspaceHomeRoot(env) }));
   if (plan.entries.length === 0 && plan.channelPartitions.length === 0) {
-    lines.push('没有发现旧项目层技能字节；空操作（未写入任何文件、未改动数据库）。');
+    lines.push(tFromDb(db, 'skill.migrate.empty'));
   } else {
     lines.push(
-      `成员级技能： ${plan.entries.length} 条（新建 ${counts.copy} / 只补行 ${counts.row} / 跳过 ${counts.skip} / 拒绝 ${counts.refuse}）`,
+      tFromDb(db, 'skill.migrate.memberEntries', {
+        total: plan.entries.length,
+        copy: counts.copy,
+        row: counts.row,
+        skip: counts.skip,
+        refuse: counts.refuse,
+      }),
     );
     for (const entry of plan.entries) {
       lines.push(
-        `  ${statusLabel(entry.status)} ${entry.source} → ${entry.target}` +
+        tFromDb(db, 'skill.migrate.entryHead', {
+          action: statusLabel(db, entry.status),
+          source: entry.source,
+          target: entry.target,
+        }) +
           (entry.contentHash.length > 0
-            ? `（${entry.fileCount} 个文件 / ${entry.bytes} 字节；hash ${entry.contentHash}）`
+            ? tFromDb(db, 'skill.migrate.entryDetail', {
+                files: entry.fileCount,
+                bytes: entry.bytes,
+                hash: entry.contentHash,
+              })
             : ''),
       );
-      lines.push(`    原因：${entry.reason}`);
+      lines.push(tFromDb(db, 'skill.migrate.reasonLine', { reason: entry.reason }));
     }
     if (plan.channelPartitions.length > 0) {
       const skillCount = plan.channelPartitions.reduce(
@@ -467,17 +501,29 @@ function renderPlan(
         0,
       );
       lines.push(
-        `频道级技能（不迁移）： ${plan.channelPartitions.length} 个分区 / ${skillCount} 个技能 —— 频道级已弃用，请按成员安装`,
+        tFromDb(db, 'skill.migrate.channelSection', {
+          partitions: plan.channelPartitions.length,
+          skills: skillCount,
+        }),
       );
       for (const partition of plan.channelPartitions) {
         lines.push(
-          `  频道 ${partition.channelId}：${partition.path}（${partition.skills.length} 个技能：${partition.skills.join(', ')}）`,
+          tFromDb(db, 'skill.migrate.channelLine', {
+            channel_id: partition.channelId,
+            path: partition.path,
+            count: partition.skills.length,
+            skills: partition.skills.join(', '),
+          }),
         );
-        lines.push('    频道级已弃用，请按成员安装');
+        lines.push(tFromDb(db, 'skill.migrate.channelNotice'));
       }
     }
     if (plan.unknownPartitions.length > 0) {
-      lines.push(`未匹配分区（不迁移）： ${plan.unknownPartitions.length} 个`);
+      lines.push(
+        tFromDb(db, 'skill.migrate.unknownSection', {
+          count: plan.unknownPartitions.length,
+        }),
+      );
       for (const partition of plan.unknownPartitions) {
         lines.push(`  ${partition.partition}：${partition.path}（${partition.reason}）`);
       }
@@ -486,15 +532,15 @@ function renderPlan(
   return lines;
 }
 
-function statusLabel(status: EntryStatus): string {
+function statusLabel(db: Database.Database, status: EntryStatus): string {
   switch (status) {
     case 'copy':
-      return '新建';
+      return tFromDb(db, 'skill.migrate.new');
     case 'row':
-      return '只补行';
+      return tFromDb(db, 'skill.migrate.rowOnly');
     case 'skip':
-      return '跳过';
+      return tFromDb(db, 'skill.migrate.skip');
     case 'refuse':
-      return '拒绝';
+      return tFromDb(db, 'skill.migrate.refuse');
   }
 }
