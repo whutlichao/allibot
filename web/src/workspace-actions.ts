@@ -1,5 +1,8 @@
 import type {
   AgentMcpView,
+  AgentSkillCandidatesView,
+  AgentSkillDetailView,
+  AgentSkillsView,
   AgentView,
   ApprovalDecisionInput,
   ApprovalView,
@@ -10,6 +13,9 @@ import type {
   PermissionRuleView,
   SopDefinitionCreate,
   SopDefinitionView,
+  SkillImportAllView,
+  SkillInstallView,
+  SkillView,
   SopRunView,
   TargetMemberView,
   WorkspaceBackend,
@@ -119,6 +125,92 @@ export async function saveAgentMcp(
     body: JSON.stringify(body),
   });
   return readJson<AgentMcpView>(response, `PUT agent ${agentId} mcp`);
+}
+
+// ---------------------------------------------------------------------------
+// Skill 管理面 (#48 / D2.3 / D6.3): the host's reads and writes. The skills
+// panel only renders; these functions are called by main.tsx on an explicit
+// action. Every name is URL-encoded because it is part of the path.
+// ---------------------------------------------------------------------------
+
+function skillUrl(agentId: string, name?: string): string {
+  const base = `/api/agents/${encodeURIComponent(agentId)}/skills`;
+  return name === undefined ? base : `${base}/${encodeURIComponent(name)}`;
+}
+
+export async function readAgentSkills(
+  fetchImpl: typeof fetch,
+  agentId: string,
+): Promise<AgentSkillsView> {
+  const response = await fetchImpl(skillUrl(agentId));
+  return readJson<AgentSkillsView>(response, `GET agent ${agentId} skills`);
+}
+
+export async function readAgentSkill(
+  fetchImpl: typeof fetch,
+  agentId: string,
+  name: string,
+): Promise<AgentSkillDetailView> {
+  const response = await fetchImpl(skillUrl(agentId, name));
+  return readJson<AgentSkillDetailView>(response, `GET agent ${agentId} skill ${name}`);
+}
+
+export async function readSkillCandidates(
+  fetchImpl: typeof fetch,
+  agentId: string,
+): Promise<AgentSkillCandidatesView> {
+  const response = await fetchImpl(
+    `/api/agents/${encodeURIComponent(agentId)}/skill-candidates`,
+  );
+  return readJson<AgentSkillCandidatesView>(response, `GET agent ${agentId} skill candidates`);
+}
+
+/** Install one `~/.agents/skills/<name>/` candidate through the single-entry path. */
+export async function installAgentSkill(
+  fetchImpl: typeof fetch,
+  agentId: string,
+  name: string,
+): Promise<SkillInstallView> {
+  const response = await fetchImpl(skillUrl(agentId), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ source: 'agents-skills', name }),
+  });
+  return readJson<SkillInstallView>(response, `POST agent ${agentId} skill ${name}`);
+}
+
+export async function importAllAgentSkills(
+  fetchImpl: typeof fetch,
+  agentId: string,
+): Promise<SkillImportAllView> {
+  const response = await fetchImpl(`${skillUrl(agentId)}/import-all`, { method: 'POST' });
+  return readJson<SkillImportAllView>(response, `POST agent ${agentId} skills import-all`);
+}
+
+export async function setAgentSkillEnabled(
+  fetchImpl: typeof fetch,
+  agentId: string,
+  name: string,
+  enabled: boolean,
+): Promise<SkillView> {
+  const response = await fetchImpl(skillUrl(agentId, name), {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  const body = await readJson<{ skill: SkillView }>(response, `PATCH agent ${agentId} skill ${name}`);
+  return body.skill;
+}
+
+export async function deleteAgentSkill(
+  fetchImpl: typeof fetch,
+  agentId: string,
+  name: string,
+): Promise<void> {
+  const response = await fetchImpl(skillUrl(agentId, name), { method: 'DELETE' });
+  if (!response.ok) {
+    throw new Error(`DELETE agent ${agentId} skill ${name} failed with ${response.status}`);
+  }
 }
 
 export async function deleteAgent(

@@ -27,6 +27,7 @@
     "test:approvals": "node --import ./test/support/register-css.mjs --test test/approvals.test.ts",
     "test:local-shell": "node --import ./test/support/register-css.mjs --test test/local-shell.test.ts",
     "test:mcp-tab": "node --import ./test/support/register-css.mjs --test test/mcp-tab.test.ts",
+    "test:agent-skills": "node --import ./test/support/register-css.mjs --test test/agent-skills.test.ts",
     "test:workspace-backend": "node --import ./test/support/register-css.mjs --test test/workspace-backend.test.ts"
   },
   "dependencies": {

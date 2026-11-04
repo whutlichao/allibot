@@ -1250,7 +1250,8 @@ test('M2 ships no container egress policy: no docker_egress field, route or netw
       docker_egress: 'none',
     });
     assert.equal(patched.status, 400);
-    assert.equal((await readJson(patched))['error']?.['code'] ?? 'unknown', 'validation_failed');
+    const errorBody = (await readJson(patched))['error'] as Record<string, unknown> | undefined;
+    assert.equal(errorBody?.['code'] ?? 'unknown', 'validation_failed');
     const workspace = await readJson(await fetch(`${fixture.base}/api/workspace`));
     assert.equal('docker_egress' in workspace, false);
     const route = await fetch(`${fixture.base}/api/docker-egress`);

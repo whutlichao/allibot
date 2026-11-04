@@ -238,6 +238,89 @@ export interface AgentMcpView {
 }
 
 /**
+ * Skill 安装来源 (D6.3): a local directory, an uploaded zip, or an import from
+ * the external CLI's `~/.agents/skills/` landing directory. All three go
+ * through the same installer and store the same metadata shape.
+ */
+export const SKILL_SOURCES = ['directory', 'zip', 'agents-skills'] as const;
+export type SkillSource = (typeof SKILL_SOURCES)[number];
+
+/**
+ * One installed Agent-level skill (v21 `skill` row). Bytes never live in the
+ * database: they are at `~/.allibot/agents/<member_id>/skills/<name>/`.
+ * `content_hash` is the lowercase SHA-256 of the normalized file manifest.
+ */
+export interface SkillView {
+  id: string;
+  member_id: string;
+  name: string;
+  content_hash: string;
+  enabled: boolean;
+  source: SkillSource;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `GET /api/agents/{id}/skills` — the member's installed skills, by name. */
+export interface AgentSkillsView {
+  agent_id: string;
+  /** The derived Agent home the bytes live under (D5.2). */
+  home_path: string;
+  skills: SkillView[];
+}
+
+/** `GET /api/agents/{id}/skills/{name}` — metadata plus the SKILL.md text. */
+export interface AgentSkillDetailView {
+  agent_id: string;
+  skill: SkillView;
+  /** The exact SKILL.md UTF-8 text, for the config-text presentation. */
+  markdown: string;
+}
+
+/** One `~/.agents/skills/<name>/` entry as the read-only candidate scan sees it. */
+export interface SkillCandidateView {
+  name: string;
+  path: string;
+  importable: boolean;
+  /** The member already has a row with this name (enabled or disabled). */
+  installed: boolean;
+  /** Readable reason when `importable` is false; null otherwise. */
+  reason: string | null;
+}
+
+/** `GET /api/agents/{id}/skill-candidates` — the candidate landing directory. */
+export interface AgentSkillCandidatesView {
+  agent_id: string;
+  source: string;
+  /** False when `~/.agents/skills/` is absent; the app never creates it. */
+  available: boolean;
+  candidates: SkillCandidateView[];
+}
+
+/** One item of `POST /api/agents/{id}/skills/import-all`. */
+export interface SkillImportItemView {
+  name: string;
+  status: 'imported' | 'skipped' | 'failed';
+  reason: string | null;
+  skill: SkillView | null;
+}
+
+/** `POST /api/agents/{id}/skills/import-all` — one failure never blocks the rest. */
+export interface SkillImportAllView {
+  agent_id: string;
+  results: SkillImportItemView[];
+  imported: number;
+  skipped: number;
+  failed: number;
+}
+
+/** A successful install: first create vs same-hash replay (D2.4). */
+export interface SkillInstallView {
+  skill: SkillView;
+  created: boolean;
+}
+
+/**
  * The two channel topologies. `team` is an explicit opt-in (D3.1): a DM has no
  * mode field and is always autonomous.
  */

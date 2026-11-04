@@ -286,6 +286,8 @@ export interface RoundPromptSections {
   rulesBase: string | null;
   systemPrompt: string;
   projectSupplement: string | null;
+  /* The assembled skills section (D5.2 / D6.3); null when none are assembled. */
+  skills: string | null;
   identity: string;
   targetDiscipline: string;
   /* Every mandatory-answer sentence this round carries, in append order. */

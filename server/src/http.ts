@@ -87,6 +87,17 @@ import {
   startSopRun,
 } from './sops.js';
 import { scheduleSopRun } from './sop-executor.js';
+import {
+  deleteSkill,
+  importAllSkillCandidates,
+  installSkillFromRequest,
+  installSkillFromZip,
+  listSkills,
+  MAX_SKILL_ZIP_BYTES,
+  readSkillMarkdown,
+  scanSkillCandidates,
+  setSkillEnabled,
+} from './skills.js';
 import { listTeamRuns, parseTeamRunQuery, prepareTeamChangeWake } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
 import { readWorkspace } from './workspace.js';
@@ -206,6 +217,7 @@ const TASK_ID = '([^/]+)';
 const REMINDER_ID = '([^/]+)';
 const SOP_ID = '([^/]+)';
 const SOP_RUN_ID = '([^/]+)';
+const SKILL_NAME = '([^/]+)';
 
 const ROUTES: readonly Route[] = [
   {
@@ -733,6 +745,132 @@ const ROUTES: readonly Route[] = [
       );
       const channelId = rawChannelId === null || rawChannelId.length === 0 ? null : rawChannelId;
       sendJson(response, 200, readAgentRules(db, id, channelId, env));
+    },
+  },
+  {
+    // Skill 管理面 (#48 / D2.3 / D6.3): the rows are metadata; the bytes live
+    // in the member home. Listing is alphabetical and reads the v21 table only.
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      sendJson(response, 200, {
+        agent_id: id,
+        home_path: agent.home_path,
+        skills: listSkills(db, id),
+      });
+    },
+  },
+  {
+    // One install entry for the directory / agents-skills JSON sources; a
+    // first install is 201, the same bytes replay 200, a different hash 409.
+    method: 'POST',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills$`),
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      const installed = installSkillFromRequest(db, id, await readJsonBody(request), env);
+      sendJson(response, installed.created ? 201 : 200, installed);
+    },
+  },
+  {
+    // The read-only landing-directory scan (D2.3 / D6.3). A missing
+    // `~/.agents/skills/` is available:false, not an error.
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skill-candidates$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      sendJson(response, 200, scanSkillCandidates(db, id, env));
+    },
+  },
+  {
+    // Import every importable, not-installed candidate; each item carries its
+    // own result and a failure never blocks the remaining items (D2.3).
+    method: 'POST',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/import-all$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      sendJson(response, 200, importAllSkillCandidates(db, id, env));
+    },
+  },
+  {
+    // The raw zip upload (D2.3). The query carries the target skill name; the
+    // body is the archive itself, with the 5 MiB ceiling enforced while reading.
+    method: 'POST',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/upload$`),
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      const name = new URL(request.url ?? '/', `http://${HOST}`).searchParams.get('name');
+      if (name === null || name.length === 0) {
+        throw ApiFailure.validation('upload requires a name query parameter', { field: 'name' });
+      }
+      const body = await readBody(request, MAX_SKILL_ZIP_BYTES, 'zip');
+      const installed = installSkillFromZip(db, id, body, name, env);
+      sendJson(response, installed.created ? 201 : 200, installed);
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/${SKILL_NAME}$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      const name = decodeId(params[1]).normalize('NFC');
+      const reading = readSkillMarkdown(db, id, name, env);
+      sendJson(response, 200, { agent_id: id, skill: reading.skill, markdown: reading.markdown });
+    },
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/${SKILL_NAME}$`),
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      const name = decodeId(params[1]).normalize('NFC');
+      sendJson(response, 200, {
+        skill: setSkillEnabled(db, id, name, await readJsonBody(request)),
+      });
+    },
+  },
+  {
+    // Deleting is idempotent: the row and bytes are removed once, and a repeat
+    // is still 204 because the resource is already gone (D2.4).
+    method: 'DELETE',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/${SKILL_NAME}$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgent(db, id, env, orchestration.inFlight);
+      if (agent === null) {
+        throw ApiFailure.notFound(`agent not found: ${id}`);
+      }
+      deleteSkill(db, id, decodeId(params[1]).normalize('NFC'), env);
+      response.writeHead(204);
+      response.end();
     },
   },
   {

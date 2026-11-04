@@ -34,6 +34,7 @@ import {
   publishUnreadChanged,
 } from './events.js';
 import { readRoundRuleSections } from './agent-home.js';
+import { skillPromptSection } from './skills.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
 import { buildRoundMcp, closeRoundMcp, readDeclaredEnvNames } from './mcp-runtime.js';
 import {
@@ -1830,10 +1831,11 @@ function readTargetProjectRoot(db: Database.Database, targetId: string): string 
 /**
  * The system prompt a round is handed. It states its own composition (D3.7 /
  * D5.2) as `RoundPromptSections`: the global rules base → the stored
- * `agent_config.system_prompt` → the project supplement, then the display-name
- * identity sentence, the target's response discipline, the mandatory-answer
- * sentences, the leader duties on a leader round, the assignment paragraph on
- * a TeamAssign sub-round, and finally the recalled-memory section.
+ * `agent_config.system_prompt` → the project supplement → the assembled skills,
+ * then the display-name identity sentence, the target's response discipline,
+ * the mandatory-answer sentences, the leader duties on a leader round, the
+ * assignment paragraph on a TeamAssign sub-round, and finally the recalled-memory
+ * section.
  *
  * The global base (the member home's `AGENTS.md`) and the project supplement
  * (`<workspace_root>/.allibot/agents/<member_id>/AGENTS.md`) are read by the
@@ -1896,6 +1898,7 @@ function composeSystemPrompt(
     rulesBase: rules.rulesBase,
     systemPrompt: member.system_prompt.trim(),
     projectSupplement: rules.projectSupplement,
+    skills: skillPromptSection(db, member.id),
     identity: tFromDb(db, 'prompt.identity', { name: member.display_name }),
     targetDiscipline,
     mandatory,
@@ -1930,6 +1933,7 @@ function composeSystemPrompt(
     sections.rulesBase,
     sections.systemPrompt.length > 0 ? sections.systemPrompt : null,
     sections.projectSupplement,
+    sections.skills,
     sections.identity,
     sections.targetDiscipline,
     ...sections.mandatory,

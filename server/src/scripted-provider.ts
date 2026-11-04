@@ -299,6 +299,7 @@ function teamReport(input: RoundInput, options: ScriptedProviderOptions): string
       system: prompt.systemPrompt.length > 0 ? prompt.systemPrompt : null,
       project: prompt.projectSupplement,
     })}` +
+    `\n[skills] ${prompt.skills === null ? 'absent' : 'present'}` +
     `\n[leader] duties:${prompt.leaderDuties === null ? 'absent' : 'present'}` +
     `\n[tools] ${input.tools.length === 0 ? '-' : input.tools.join(',')}`
   );

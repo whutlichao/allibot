@@ -21,6 +21,7 @@ import { HOST, startHttpServer, type OrchestrationRuntime } from './http.js';
 import { acquireDataDirLock } from './lock.js';
 import { setShellEnvNames } from './local-shell.js';
 import { runMcpExport } from './mcp-export.js';
+import { runSkillMigration } from './skill-migrate.js';
 import { createModelProvider } from './model-provider.js';
 import { hasDockerConsent } from './providers.js';
 import { startReminderScheduler } from './reminders.js';
@@ -120,6 +121,33 @@ async function run(argv: readonly string[]): Promise<number> {
     const db = openDatabase(resolution.dataDir);
     try {
       const outcome = runMcpExport(db, process.env, {
+        apply: options.apply,
+        yes: options.yes,
+      });
+      for (const line of outcome.lines) {
+        console.log(line);
+      }
+      return outcome.exitCode;
+    } finally {
+      db.close();
+      await lock.release();
+    }
+  }
+
+  if (command === 'migrate-skills') {
+    if (!databaseExists(resolution.dataDir)) {
+      throw new Error(
+        t('zh-CN', 'cli.serve.databaseMissing', {
+          path: databasePath(resolution.dataDir),
+          data_dir: resolution.dataDir,
+        }),
+      );
+    }
+    assertServeableSchemaVersion(resolution.dataDir);
+    const lock = await acquireDataDirLock(resolution.dataDir);
+    const db = openDatabase(resolution.dataDir);
+    try {
+      const outcome = runSkillMigration(db, resolution.dataDir, process.env, {
         apply: options.apply,
         yes: options.yes,
       });

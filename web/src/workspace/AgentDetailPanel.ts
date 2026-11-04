@@ -23,6 +23,7 @@ import {
 } from './agent-detail.ts';
 import { ruleSectionStatus } from './agent-rules.ts';
 import { McpPanel } from './McpPanel.ts';
+import { SkillsPanel, type AgentSkillsFace } from './SkillsPanel.ts';
 import type { McpSaveBody } from './mcp-tab.ts';
 import { PermissionRulesEditor } from './PermissionRulesEditor.ts';
 import { agentPermissionModePatch, permissionModeOptions } from './permissions.ts';
@@ -74,14 +75,21 @@ export interface AgentDetailPanelProps {
   mcp?: AgentMcpView | null;
   /** The one mcp.json write shared by the structured form and raw textarea. */
   onMcpChange?: (body: McpSaveBody) => void | Promise<AgentMcpView | void>;
+  /** The skills tab face (#48 / D6.5): list, selected detail and the writes. */
+  skills?: AgentSkillsFace;
+}
+
+function emptySkillsFace(): AgentSkillsFace {
+  return { view: null, detail: null, candidates: null };
 }
 
 /**
  * Agent 详情页签（Agent Detail Tab）：同一详情面的三个分组，固定顺序
  * 基础信息和配置 → skills → mcp。页签是呈现层状态，不写 URL、不重新
  * 拉取整页；三个分组始终挂载，切换只改变哪一个可见，因此输入框里的
- * 未提交草稿不会丢。skills 仍是 T11 占位；mcp 上块是结构化条目表单，
- * 下块是同一份家目录 mcp.json 的原文文本域。
+ * 未提交草稿不会丢。skills 是左栏列表 + 右栏元数据 / SKILL.md 正文 /
+ * 删除的双栏面；mcp 上块是结构化条目表单，下块是同一份家目录 mcp.json
+ * 的原文文本域。
  *
  * 这里用 createElement 而不是 JSX：Node 的类型剥离不处理 JSX，
  * 组件级 SSR 契约测试需要直接 import 本文件。
@@ -100,6 +108,7 @@ export function AgentDetailPanel({
   onWorkspaceBackendChange,
   mcp = null,
   onMcpChange,
+  skills,
 }: AgentDetailPanelProps) {
   const [state, setState] = useState(() =>
     initialAgentDetailState(agent, initialTab, initialDraft),
@@ -524,25 +533,16 @@ export function AgentDetailPanel({
     );
   }
 
-  function placeholderPanel(tab: 'skills'): ReactNode {
+  function skillsPanel(): ReactNode {
     return createElement(
       'div',
       {
-        className: 'agent-detail__panel agent-detail__panel--placeholder',
+        className: 'agent-detail__panel',
         role: 'tabpanel',
-        'data-tab-panel': tab,
-        hidden: state.tab !== tab,
+        'data-tab-panel': 'skills',
+        hidden: state.tab !== 'skills',
       },
-      createElement(
-        'p',
-        { className: 'agent-detail__placeholder' },
-        t(locale, 'workspace.agentDetail.t11.placeholder'),
-      ),
-      createElement(
-        'p',
-        { className: 'agent-detail__placeholder-body' },
-        t(locale, 'workspace.agentDetail.t11.body'),
-      ),
+      createElement(SkillsPanel, { locale, face: skills ?? emptySkillsFace() }),
     );
   }
 
@@ -614,7 +614,7 @@ export function AgentDetailPanel({
             : null,
         ),
     basicPanel(),
-    placeholderPanel('skills'),
+    skillsPanel(),
     mcpPanel(),
   );
 }
