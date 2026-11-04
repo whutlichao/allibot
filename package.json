@@ -14,8 +14,9 @@
   "scripts": {
     "build": "npm run build --workspace shared && npm run build --workspace server && node scripts/write-root-cli.mjs && npm run build --workspace web",
     "typecheck": "npm run typecheck --workspace shared && npm run typecheck --workspace server && npm run typecheck --workspace web",
-    "test": "npm run build && npm run test --workspace server && npm run test:strings && npm run test:visual-contract && npm run test:workspace-shell && npm run test:task-board && npm run test:agent-detail && npm run test:agent-rules && npm run test:team-config && npm run test:team-runs && npm run test:team-assignments && npm run test:plan-panel && npm run test:sop-definitions && npm run test:sop-runs && npm run test:workspace-root && npm run test:approvals && npm run test:local-shell && npm run test:mcp-tab && npm run test:agent-skills && npm run test:workspace-backend && npm run test:web-render && npm run test:m2-e2e --workspace web",
+    "test": "npm run build && npm run test --workspace server && npm run test:strings && npm run test:dev-scripts && npm run test:visual-contract && npm run test:workspace-shell && npm run test:task-board && npm run test:agent-detail && npm run test:agent-rules && npm run test:team-config && npm run test:team-runs && npm run test:team-assignments && npm run test:plan-panel && npm run test:sop-definitions && npm run test:sop-runs && npm run test:workspace-root && npm run test:approvals && npm run test:local-shell && npm run test:mcp-tab && npm run test:agent-skills && npm run test:workspace-backend && npm run test:web-render && npm run test:m2-e2e --workspace web",
     "test:strings": "npm run build --workspace shared && npm run test:strings --workspace shared && npm run test:strings --workspace web",
+    "test:dev-scripts": "node --test web/test/dev-scripts.test.ts",
     "test:visual-contract": "npm run test:visual-contract --workspace web",
     "test:web-render": "npm run build --workspace shared && npm run test:web-render --workspace web",
     "test:workspace-shell": "npm run test:workspace-shell --workspace web",
@@ -39,6 +40,6 @@
     "test:m2-e2e": "npm run build && node --test server/test/m2-e2e.test.ts && npm run test:m2-e2e --workspace web && npm run test:strings",
     "migrate": "node dist/cli.js --migrate",
     "dev:server": "node dist/cli.js serve --port 3000",
-    "dev:web": "npm run dev --workspace web"
+    "dev:web": "npm run build --workspace shared && npm run dev --workspace web"
   }
 }

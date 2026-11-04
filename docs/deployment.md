@@ -11,14 +11,20 @@
 1. **构建**：`npm install && npm run build`。根 `build` 依次构建 `shared`、`server`、写根
    `dist/cli.js`，再构建 `web`。`dist/cli.js` 是编译产物，所以改了 `server/` 源码要重跑构建；
    只重建后端用 `npm run build --workspace shared && npm run build --workspace server && node scripts/write-root-cli.mjs`。
-   `npm run dev:web` 不依赖这一步（Vite 直接跑源码），只有后端需要它。
+   **前端 dev 也依赖 `shared` 的构建产物**：`web` 里的 `import { t } from '@allibot/shared'`
+   走 `shared/package.json` 的 `exports`，读的是 `shared/dist` 而不是 `shared/src`（Vite 只对
+   `web/src` 直读源码）。所以改了 `shared/src` 必须先重建 `shared`；`npm run dev:web` 已经把
+   这一步放进脚本，不必先跑整条 `npm run build`。
 2. **一次性迁移**：`npm run migrate`（即 `node dist/cli.js --migrate`）。数据目录默认
    `~/.allibot/data`，可用 `--data-dir <path>` 或 `allibot_DATA_DIR` 改。迁移不塞进 `serve`：
    迁移是一次性动作，起服务是每次动作；`serve` 在库缺失或 schema 落后时明确失败，不隐式迁移。
 3. **起后端**：`npm run dev:server`（即 `node dist/cli.js serve --port 3000`），只绑定
    `127.0.0.1:3000`。
-4. **起前端 dev**：`npm run dev:web`（即 `npm run dev --workspace web`），浏览器打开
-   `http://localhost:5173`。
+4. **起前端 dev**：`npm run dev:web`（即 `npm run build --workspace shared && npm run dev --workspace web`），
+   浏览器打开 `http://localhost:5173`。改完 `shared/src` 要**重启** dev，只刷新页面不够：
+   Vite 把 `@allibot/shared` 预打包在 `web/node_modules/.vite` 里，重启前一直是旧产物；
+   重启后仍不生效时删掉 `web/node_modules/.vite` 再起。产物过期表现为整页白屏而不是缺词条：
+   `shared/src/strings/index.ts` 的 `t()` 对不存在的键直接抛错，这是刻意不降级。
 
 ### 前端 dev 与后端同源靠一条 `/api` 代理
 
