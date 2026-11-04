@@ -5,7 +5,7 @@ import { DEFAULT_SSE_LIFETIME_MS } from './events.js';
 import { DEFAULT_REMINDER_TICK_MS } from './reminders.js';
 import { SCRIPTED_BEHAVIORS, type ScriptedBehavior } from './scripted-provider.js';
 
-export type CliCommand = 'serve' | 'migrate' | 'export-mcp';
+export type CliCommand = 'serve' | 'migrate' | 'export-mcp' | 'migrate-skills';
 
 /**
  * The member-face adapter the server runs. `model` is the production default:
@@ -143,7 +143,7 @@ const PROVIDER_MODES: readonly ProviderMode[] = ['scripted', 'model'];
 const DEFAULT_SCRIPTED_PROVIDER: ScriptedBehavior = 'ignore';
 const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
-  'usage: allibot <serve|--migrate|export-mcp> [--data-dir <path>] [--home-dir <path>] ' +
+  'usage: allibot <serve|--migrate|export-mcp|migrate-skills> [--data-dir <path>] [--home-dir <path>] ' +
   '[--port <port>] [--apply] [--yes] ' +
   '[--provider <scripted|model>] ' +
   '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|sop-executor|sop-verifier|sop-approval|workspace|permission|mcp-approval|mcp|team-approval|shell>] ' +
@@ -268,6 +268,9 @@ function resolveCommand(migrate: boolean, positional: string | undefined): CliCo
   }
   if (positional === 'export-mcp') {
     return 'export-mcp';
+  }
+  if (positional === 'migrate-skills') {
+    return 'migrate-skills';
   }
   if (positional === 'migrate-mcp') {
     throw new Error('migrate-mcp 已退役；请使用 export-mcp（默认 dry-run）。');
