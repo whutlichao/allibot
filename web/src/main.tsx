@@ -16,6 +16,7 @@ import {
   type TeamRunView,
   type WorkspaceSettingsView,
   type WorkspaceView,
+  type WorkspaceBackend,
 } from '@allibot/shared';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -252,7 +253,11 @@ async function joinChannelMemberAction(
 
 async function saveAgentAction(
   agentId: string,
-  patch: { system_prompt?: string; permission_mode?: PermissionMode | null },
+  patch: {
+    system_prompt?: string;
+    permission_mode?: PermissionMode | null;
+    workspace_backend?: WorkspaceBackend | null;
+  },
 ): Promise<void> {
   await saveAgentConfig(fetch, agentId, patch);
   await refreshWorkspace();
@@ -404,6 +409,11 @@ function render(saveFailed = false): void {
         onAgentPermissionModeChange={(agentId, mode) =>
           saveAgentAction(agentId, {
             permission_mode: mode === null ? null : (mode as PermissionMode),
+          })
+        }
+        onAgentWorkspaceBackendChange={(agentId, backend) =>
+          saveAgentAction(agentId, {
+            workspace_backend: backend === null ? null : (backend as WorkspaceBackend),
           })
         }
         onSettingsChange={(patch) => {

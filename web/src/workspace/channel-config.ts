@@ -118,6 +118,10 @@ export function workspaceStatusCopy(locale: Locale, status: WorkspaceStatusView)
       return t(locale, 'workspace.status.reason.workspaceRootMissing');
     case 'docker-unavailable':
       return t(locale, 'workspace.status.reason.dockerUnavailable');
+    case 'docker-image-missing':
+      return t(locale, 'workspace.status.reason.dockerImageMissing');
+    case 'docker-consent-missing':
+      return t(locale, 'workspace.status.reason.dockerConsentMissing');
     default:
       return t(locale, 'workspace.status.reason.workspaceRootMissing');
   }

@@ -8,6 +8,7 @@ import {
   type PermissionMode,
   type PermissionRuleInput,
   type PermissionRuleView,
+  type WorkspaceBackend,
 } from '@allibot/shared';
 import { createElement, useState, type ReactNode } from 'react';
 import type { AsyncAction, AsyncAction1 } from '../async-action.ts';
@@ -27,6 +28,11 @@ import { PermissionRulesEditor } from './PermissionRulesEditor.ts';
 import { agentPermissionModePatch, permissionModeOptions } from './permissions.ts';
 import { StatusPoint } from './StatusPoint.ts';
 import { offlineReasonLabel } from './status-label.ts';
+import {
+  agentBackendChangePatch,
+  workspaceBackendLabel,
+  workspaceBackendOptions,
+} from './workspace-backend.ts';
 
 function tabLabel(locale: Locale, tab: AgentDetailTab): string {
   switch (tab) {
@@ -62,6 +68,8 @@ export interface AgentDetailPanelProps {
   onPermissionRulesChange?: (rules: PermissionRuleInput[]) => void | Promise<void>;
   /** The raw Agent permission-mode override write (null = follow channel). */
   onPermissionModeChange?: (mode: PermissionMode | null) => void | Promise<void>;
+  /** The raw Agent workspace-backend override write (null = follow channel). */
+  onWorkspaceBackendChange?: (backend: WorkspaceBackend | null) => void | Promise<void>;
   /** The Agent-home mcp.json reading (#47); null while it is loading. */
   mcp?: AgentMcpView | null;
   /** The one mcp.json write shared by the structured form and raw textarea. */
@@ -89,6 +97,7 @@ export function AgentDetailPanel({
   permissionRules,
   onPermissionRulesChange,
   onPermissionModeChange,
+  onWorkspaceBackendChange,
   mcp = null,
   onMcpChange,
 }: AgentDetailPanelProps) {
@@ -248,6 +257,37 @@ export function AgentDetailPanel({
           agent.auto_claim === 1
             ? t(locale, 'workspace.agentDetail.yes')
             : t(locale, 'workspace.agentDetail.no'),
+        ),
+        fact(
+          'workspace-backend',
+          t(locale, 'channel.config.workspace.backend.label'),
+          onWorkspaceBackendChange === undefined
+            ? agent.workspace_backend === null
+              ? t(locale, 'workspace.agent.workspaceBackend.followChannel')
+              : workspaceBackendLabel(locale, agent.workspace_backend)
+            : createElement(
+                'select',
+                {
+                  className: 'agent-detail__select',
+                  'data-action': 'agent-workspace-backend',
+                  'data-workspace-backend': agent.workspace_backend ?? 'follow',
+                  value: agent.workspace_backend ?? 'follow',
+                  onChange: (event: { target: { value: string } }) => {
+                    const patch = agentBackendChangePatch(agent, event.target.value);
+                    if (patch !== null) {
+                      void onWorkspaceBackendChange(patch.workspace_backend);
+                    }
+                  },
+                },
+                createElement(
+                  'option',
+                  { value: 'follow' },
+                  t(locale, 'workspace.agent.workspaceBackend.followChannel'),
+                ),
+                ...workspaceBackendOptions(locale).map((option) =>
+                  createElement('option', { key: option.value, value: option.value }, option.label),
+                ),
+              ),
         ),
         fact(
           'permission',

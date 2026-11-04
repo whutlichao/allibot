@@ -12,6 +12,7 @@ import type {
   SopDefinitionView,
   SopRunView,
   TargetMemberView,
+  WorkspaceBackend,
 } from '@allibot/shared';
 import type { PermissionScope } from './workspace/permissions.ts';
 
@@ -86,6 +87,7 @@ export async function saveAgentConfig(
   patch: {
     system_prompt?: string;
     permission_mode?: PermissionMode | null;
+    workspace_backend?: WorkspaceBackend | null;
   },
 ): Promise<AgentView> {
   const response = await fetchImpl(`/api/agents/${encodeURIComponent(agentId)}`, {

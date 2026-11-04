@@ -157,6 +157,9 @@ function workspace(): WorkspaceView {
     tasks: [task()],
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
     status_points: { [AGENT_ID]: { status: 'online', offline_reason: null } },
+    workspace_runtime: {
+      docker: { available: false, image: 'node:22-bookworm-slim', reason: 'docker-unavailable' },
+    },
     pending_approvals: 0,
     unread_total: 0,
     unread_by_target: {

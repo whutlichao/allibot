@@ -206,6 +206,9 @@ function workspace(): WorkspaceView {
     unread_by_target: { [CHANNEL_ID]: 2, [DM_ID]: 1, [ARCHIVED_DM_ID]: 1 },
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
     status_points: { 'agent-1': { status: 'online', offline_reason: null } },
+    workspace_runtime: {
+      docker: { available: false, image: 'node:22-bookworm-slim', reason: 'docker-unavailable' },
+    },
   };
 }
 
@@ -276,6 +279,9 @@ test('an empty workspace yields no initial target', () => {
     unread_total: 0,
     unread_by_target: {},
     status_points: {},
+    workspace_runtime: {
+      docker: { available: false, image: 'node:22-bookworm-slim', reason: 'docker-unavailable' },
+    },
   };
 
   assert.equal(initialTargetId(empty), null);
