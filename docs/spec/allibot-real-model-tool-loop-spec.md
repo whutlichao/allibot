@@ -4,7 +4,7 @@
 
 M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面与状态机，但它们全部只能被**脚本化 provider** 驱动。真实模型 adapter 仍是 M1 的单轮文本补全：`server/src/model-provider.ts` 只发一次 system + user 的 chat completion，不传工具定义，也不读 `tool_use` / `tool_calls`。于是换到真实 provider 时，队长不会分派、Plan 四工具不可用、SOP verifier 交不出结构化判定、需要审批的工具调用根本不会被发起。M2 把这写成了已知限制（`docs/deployment.md` 的「真实模型 provider 的已知限制（M2 A1）」），由 #51 承接。
 
-这个缺口有三个具体后果。其一，M2 的验收 seam 只覆盖脚本化 provider，真实模型下"能跑"这件事从未被证明过——真机跑修完的 F1–F5 全是呈现与读模型问题，一条真实模型轮次都还没成功过（三轮全部因 consent / credential 失败）。其二，每次新增工具面（M3 的联网档就是下一批）都会重复同一个洞：工具存在、模型调不动。其三，`agent_config.max_iterations` 与词条 `round.finished.iterationLimit` 已经存在，`server/src/rounds.ts` 也已经按轮次算好了可用工具集，但**没有任何循环去执行它们**——配置与文案先到位、行为缺位的半成品，正是 M2 D2 明确要避免的形状。
+这个缺口有三个具体后果。其一，M2 的验收 seam 只覆盖脚本化 provider，真实模型下"能跑"这件事从未被证明过——真机跑修完的 F1–F5 全是呈现与读模型问题，一条真实模型轮次都还没成功过（三轮全部因 consent / credential 失败）。其二，每次新增工具面（M3 的联网档就是下一批）都会重复同一个洞：工具存在、模型调不动。其三，`agent_config.max_iterations` 与词条 `round.finished.iterationLimit` 已经存在，`server/src/rounds.ts` 也已经按轮次算好了可用工具集，但**没有任何循环去执行它们**——配置与文案先到位、行为缺位的半成品，正是 M1 规格 D1.6 说过的「建了表但没有写路径」在工具面上的同类形状（这里是「配置在、文案在、行为缺位」）。
 
 ## Solution
 
@@ -14,7 +14,7 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 写类（`Write` / `Edit`）、执行类（`Bash` / MCP）、编排类（`TeamAssign` / `transfer_task` / Plan 的写工具）与 SOP 的 `SopVerdict` 通道留给后续批次，但它们在本规格里**先定契约**（尤其是审批在循环里的语义与 `SopVerdict` 的通道），避免下一批重新吵一遍。
 
-循环的边界是三条纪律。其一，**只落最终文本**：工具调用之间的中间文本不落库，只有循环结束（模型不再请求工具）后的那段文本成为本轮的回复，与既有的「一轮 ↔ 至多一条 target 消息」一致。其二，**上限复用 `max_iterations`**（默认 10，人类面已可编辑）：撞上限即 `failed` + `finishedReason: 'iteration-limit'` + 零回复，`reason` 读既有词条「达到迭代上限」，与脚本化 `iteration-limit` 行为逐字一致。其三，**失败分层**：provider 网络错 / 超时 / 响应不可解析 → 轮次 `failed`；工具自身的失败（路径越界、文件不存在、审批拒绝）→ 作为一个工具结果回灌给模型，由模型改道，绝不当轮次失败。
+循环的边界是三条纪律。其一，**只落最终文本**：工具调用之间的中间文本不落库，只有循环结束（模型不再请求工具）后的那段文本成为本轮的回复，与既有的「一轮 ↔ 至多一条 target 消息」一致。其二，**上限复用 `max_iterations`**（默认 10，人类面已可编辑）：撞上限时本轮以 `replied` 收口，把已经在手的部分结论落成消息，`finished_reason` 读既有词条「达到迭代上限」——与脚本化 `iteration-limit` 逐字一致，消费游标照常推进，同一条消息不会被下一次唤醒重读。其三，**失败分层**：provider 网络错 / 超时 / 响应不可解析 → 轮次 `failed`；工具自身的失败（路径越界、文件不存在、审批拒绝）→ 作为一个工具结果回灌给模型，由模型改道，绝不当轮次失败。
 
 ## User Stories
 
@@ -30,12 +30,12 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 10. As an owner, I want a tool failure to reach the model as a readable result, so that "the file does not exist" is something the model can react to instead of a round-ending error.
 11. As an owner, I want provider network errors, timeouts and unparseable responses to close the round as failed with a readable reason, so that infrastructure problems never look like model decisions.
 12. As an owner, I want the loop bounded by `max_iterations`, so that the number the Agent detail page already shows is the number that actually bounds the round.
-13. As an owner, I want hitting the bound to close the round as failed with the finished reason iteration-limit and the existing copy, so that the scripted and real paths report bounds identically.
-14. As an owner, I want a bounded round to land no message at all, so that a model looping to its limit cannot masquerade as a finished answer.
+13. As an owner, I want hitting the bound to close the round as replied with the finished reason iteration-limit and the existing copy, so that the scripted and real paths report bounds identically.
+14. As an owner, I want a bounded round to land its partial conclusion and be marked iteration-limit, so that I see what the model had reached and the triggering message is consumed rather than re-read on the next wake.
 15. As an owner, I want intermediate narration between tool calls to stay out of the target, so that the thread keeps one reply per round.
 16. As an owner, I want only the text after the last tool call to become the reply, so that what lands reads as the conclusion rather than the transcript.
 17. As an owner, I want an empty final text after tool calls to close the round per the existing empty-completion rule, so that tool activity never substitutes for an answer.
-18. As an owner, I want very large tool results truncated with an explicit marker, so that one huge file cannot consume the context and the model knows it did not see everything.
+18. As an owner, I want oversized tool results capped at the feed-back layer with an explicit marker, so that one huge result cannot consume the context and the model knows it did not see everything.
 19. As an owner, I want the truncation notice to survive into the next model turn, so that the model can narrow its request instead of assuming completeness.
 20. As a model, I want each tool call's arguments validated before the face runs, so that a malformed call is a tool result I can fix rather than a crash.
 21. As an owner, I want two tool calls in one round to both run, so that a model may read two files before answering.
@@ -46,8 +46,9 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 26. As a maintainer, I want the tool definitions derived from one internal tool specification, so that a new tool is described once and serialized per provider.
 27. As a maintainer, I want the approval-wait decision recorded now, so that the next batch does not relitigate it: an `ask` blocks inside the loop, bounded by the existing 600-second batch timeout.
 28. As a maintainer, I want the SOP verifier's structured verdict to travel as a dedicated tool in a later batch, so that prose in `replies` never decides a verdict.
-29. As an owner, I want a model that never calls a tool to behave exactly as it does today, so that this batch is additive for every existing Agent.
-30. As an owner, I want the scripted provider path to keep every existing behaviour, so that all M1 / M2 tests pass unchanged.
+29. As a model, I want a capped Grep result to say it was capped, so that I do not read a truncated match list as a complete one.
+30. As an owner, I want a model that never calls a tool to behave exactly as it does today, so that this batch is additive for every existing Agent.
+31. As an owner, I want the scripted provider path to keep every existing behaviour, so that all M1 / M2 tests pass unchanged.
 
 ## Implementation Decisions
 
@@ -61,17 +62,17 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 **D5 工具结果整形与回灌。** 工具结果转成 provider 自己的 result 形状：Anthropic 用 `tool_result` 内容块（`is_error` 表达失败），OpenAI 兼容用 `role: "tool"` + `tool_call_id`。回灌内容对模型是**结构化摘要 + 必要正文**，不是原始 JSON 倾倒。失败结果的 `error` 稳定码原样保留（`outside-root` / `not-found` / `denied` 等），让模型能区分"路径越界"与"文件不存在"。
 
-**D6 结果大小上限。** 文件工具已有 `output_truncated` 事实；回灌再应用一个总量上限，截断处写明已截断（含行数 / 字节数提示），语言走词条。截断发生在**回灌**这一层，不改文件工具自身的返回，因此既有测试不变。总上限是常量（实现时定值），不进 schema，不做每 Agent 配置。
+**D6 结果大小上限（回灌层新增，文件工具侧不改）。** 文件工具本身**没有**「已截断」事实：`Read` 超过读取上限直接回 `io-error`（`file is too large to read`），`Grep` 命中数静默封顶（`MAX_GREP_MATCHES = 200`），而 `output_truncated` 只属于 `RoundShellResult`，与文件工具无关。因此本批在**回灌层**新增两件事：其一，把回灌给模型的内容压到总量上限，截断处写明「已截断」并给出已给 / 未给的规模提示（语言走词条）；其二，把 `Grep` 的 200 条封顶**显式写进回灌结果**，否则模型会把「只返回 200 条」读成「只匹配 200 条」。截断只作用于模型看到的那一份，不改文件工具自身的返回，也不改 `RoundFileToolResult`，因此既有测试不变。上限是常量，不进 schema，不做每 Agent 配置。
 
 **D7 只落最终文本。** 循环内的中间文本（模型在请求工具前说的话）不落库、不进 `replies` 之外的任何面。循环结束时把最后一段文本作为唯一一条 pending reply；为空则按既有「空补全」规则收口为失败。`replies` 的上限纪律（一轮至多落一条 target 消息）不变。
 
-**D8 上限与收口。** `agent_config.max_iterations`（默认 10）是本轮**模型↔工具往返次数**的上限，语义在 ADR 0009 中裁定为"轮内往返"，不是"轮次级"计数。撞上限：`verdict: 'failed'`、`finishedReason: 'iteration-limit'`、`replies: []`，`reason` 沿用词条 `round.finished.iterationLimit`（「达到迭代上限」）。这与脚本化 `iteration-limit` 行为逐字一致，因此两条路径可以用同一份断言。
+**D8 上限与收口。** `agent_config.max_iterations`（默认 10）是本轮**模型↔工具往返次数**的上限，语义在 ADR 0009 中裁定为「轮内往返」，不是「轮次级」计数。撞上限：`verdict: 'replied'`、把循环内已经产出的结论作为本轮唯一的 pending reply 落成消息、`finishedReason: 'iteration-limit'`。落库落在 `finished_reason` 列（由 `finishedReasonText` 渲染词条 `round.finished.iterationLimit` =「达到迭代上限」），**不是** `reason` 列——两列是两件事。这与脚本化 `iteration-limit` 逐字一致（`scripted-provider.ts` 展开 `replyResult` 后只补 `finishedReason`），因此两条路径共用同一份断言；因为状态是 `replied`，`advancesCursor` 照常推进，同一条触发消息不会被下一次唤醒重读。唯一的例外：撞上限时**还没有任何产出文本**，按 D7 的空文本规则收口 `failed`（空补全），不伪造一条空消息。
 
 **D9 失败分层。** provider 网络错误、超时（既有 60 秒单次调用超时）、响应不可解析、缺 consent / 缺凭证 → 轮次 `failed`，`reason` 可读且密钥掩码规则不变（`maskSecret` 继续在 reason 落库前生效）。工具失败、参数校验失败、审批拒绝 → 工具结果，轮次继续。区分判据是"错误来自 provider 链路还是来自工具面"。
 
-**D10 审批在循环里的语义（为后续批次先定）。** 需要审批的调用在循环内**阻塞等待**：`RoundPermissionFace.authorize` 的既有语义（await 到人类决定，或 600 秒批次超时）不变，模型在拿到 `denied` / 超时结果后继续循环；拒绝是结果，不是轮次失败。选择阻塞而非"暂停轮次、决定后重开"的理由写在 ADR 0009。第一批的只读工具不触达审批，本决策只是把后续批次的形状钉死。
+**D10 审批在循环里的语义（为后续批次先定）。** 需要审批的调用在循环内**阻塞等待** `RoundPermissionFace.authorize`。人类批准即继续执行；**拒绝**作为 `DENIED` 工具结果回灌，模型继续循环——拒绝是结果，不是轮次失败。**超时不回灌**：等满 600 秒批次后 `authorize` 抛 `ApprovalTimeoutError`，本轮按 ADR-0007 决定 6 收口 `failed`，可读 reason 走既有词条。循环不得把超时伪装成一个工具结果，否则一个没人看的轮次会一直续跑到上限。选择阻塞而非「暂停轮次、决定后重开」的理由写在 ADR 0009；本决策**沿用** 0007，不改它。第一批的只读工具不触达审批，本决策只是把后续批次的形状钉死。
 
-**D11 `SopVerdict` 的通道（为后续批次先定）。** verifier 轮的结构化判定走**专用工具**（一个只返回 `pass` / `fail` 的 `internal` 类工具），不靠解析 `replies` 的散文，也不用 OpenAI 的 `response_format` 与 Anthropic 的文本协议各写一套。本批不实现该工具；本决策只锁定通道，避免下一批在"两家不一致"和"解析散文"之间再选一次。
+**D11 `SopVerdict` 的通道（为后续批次先定）。** `RoundResult` 已经有结构化出口 `sopVerdict?: 'pass' | 'fail'`，本决策只锁定它的**取值来源**：一个专用工具（`internal` 类，只返回 `pass` / `fail`），由适配器把该工具调用映射到既有字段。不解析 `replies` 的散文，也不为两家 provider 各写一套结构化输出（OpenAI 的 `response_format` / Anthropic 的文本协议）。本批不实现该工具；本决策只锁定通道，避免下一批在「两家不一致」和「解析散文」之间再选一次。
 
 **D12 不新增可观测面。** AG-UI 契约不加 `TOOL_CALL_*` 事件，前端本批看不到工具调用；`RoundResult` 不新增字段。工具调用的可观测性留到明确需要时再开（届时是一次契约扩展，不是本规格的遗漏）。
 
@@ -87,14 +88,14 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 
 - 一轮内一次工具调用后给出回答：`round_outcome.status = replied`，target 里恰好一条新消息，正文是**最终文本**，中间文本不落库。
 - 一轮内两次工具调用：两次 face 都被执行，落消息仍只有一条。
-- 撞 `max_iterations`：`status = failed`、`finished_reason` 读「达到迭代上限」、零新消息、`reason` 可读。
+- 撞 `max_iterations`：`status = replied`、恰好多出一条消息且正文是部分结论、`finished_reason` 读「达到迭代上限」、该消息被消费（未读清零）；撞上限且无产出文本时则是 `failed`。
 - 工具失败（越界路径 / 不存在的文件）：轮次仍 `replied`，模型看到的工具结果是 `is_error` / 稳定错误码。
 - provider 链路失败（假 server 返回 500 / 返回不可解析 body / 超时）：轮次 `failed`，`reason` 带掩码后的短摘要。
 - 缺 consent / 缺凭证：零 socket 打开、轮次 `failed`、`reason` 点名环境变量（既有行为，回归）。
 - 没有可用工具面（无项目根、无 Plan face）：provider 收到**零工具定义**，行为与今天的单轮补全一致。
 - 两家 provider 用同一组用例各跑一遍：Anthropic `tool_use` 与 OpenAI `tool_calls` 的解析、回灌、终止都逐条对齐。
 
-**先例。** `server/test/agui-contract.test.ts`（AG-UI 事件顺序 + 注入 provider）、`server/test/mcp-runtime.test.ts`（假 TCP / HTTP 服务器 + 随机端口）、`server/test/approvals-http.test.ts`（固定时钟驱动 600 秒）是本批的形状先例。脚本化 provider 的既有用例一条都不改。
+**先例。** `server/test/agui-contract.test.ts`（AG-UI 事件顺序 + 注入 provider）、`server/test/mcp-runtime.test.ts`（假 TCP / HTTP 服务器 + 随机端口）、`server/test/permissions-http.test.ts` 与 `server/test/local-shell-http.test.ts`（`--fixed-clock` + `--approval-timeout-ms` 驱动 600 秒超时）是本批的形状先例。脚本化 provider 的既有用例一条都不改。
 
 ## Out of Scope
 
@@ -116,5 +117,7 @@ M2 交付了 team / Plan / SOP / 审批 / 工作区 / MCP / Skill 的 HTTP 面�
 **ADR。** 新增 `docs/adr/0009-model-tool-loop.md`：裁定循环位置与 `deferred`、上限的语义归属、工具名作为对外契约、审批阻塞等待、只落最终文本五件事。解析细节、结果回灌长度、批次划分是实现决策，写在本规格。
 
 **批次建议（供 to-tickets 用）。** 第二批：写类与执行类工具 + 审批在循环内的实跑；第三批：编排类工具（TeamAssign / transfer_task / Plan 写工具）；第四批：`SopVerdict` 与 SOP verifier 的真实模型路径。每批都必须在同一 seam 上留下外部行为断言。
+
+**词条缺口。** 本规格引入一个承重说法「轮内工具循环」（round-level tool loop），`GLOSSARY.md` 里没有这个词条。按 `docs/agents/domain.md` 的纪律，缺词要么是发明了项目不用的语言、要么是真缺口：这里是后者——它是 `RoundProvider` 接缝内部的新行为，不与任何已有词条同义（`工具闸门` 管的是判定顺序，`轮次` 管的是唤醒到收口，都不覆盖「一次调用内的多次 model↔tool 往返」）。本规格不新增 / 不改写 GLOSSARY 正文；若后续实现票需要公开这个说法，走一次 domain-modeling 补词条，而不是在代码里造同义词。
 
 **与 M2 A1 限制的关系。** 本规格实施完成后，`docs/deployment.md` 的「真实模型 provider 的已知限制（M2 A1）」一节必须改写：限制从"真实模型没有工具循环"变成"哪几类工具已进循环、哪几类仍是脚本化专用"。那条限制是部署事实，不能靠代码合入自动过期。
