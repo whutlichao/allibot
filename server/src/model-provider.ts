@@ -18,7 +18,7 @@ import {
   type ToolConversation,
   type ToolLoopOutcome,
 } from './tool-loop.js';
-import { roundToolSpecs } from './tool-specs.js';
+import { roundToolSpecs, type ToolCopy } from './tool-specs.js';
 
 /**
  * The real provider adapters (D4.1): both provider lines run the same
@@ -137,7 +137,7 @@ export function createModelProvider(
       }
       const { available } = availability;
       try {
-        const outcome = await callModel(doFetch, available, input, timeoutMs);
+        const outcome = await callModel(db, doFetch, available, input, timeoutMs);
         if (outcome.text.trim().length === 0) {
           // A round with no conclusion — including one that hit the cap before
           // producing anything — is the existing empty-completion failure.
@@ -187,6 +187,7 @@ function failureReason(db: Database.Database, message: string, secret: string): 
  * `max_iterations`; a round whose tool set is empty never reaches the bound.
  */
 async function callModel(
+  db: Database.Database,
   doFetch: typeof fetch,
   available: ProviderAvailability,
   input: RoundInput,
@@ -194,8 +195,12 @@ async function callModel(
 ): Promise<ToolLoopOutcome> {
   // The round's own availability calculation decides the tool set (D2); an
   // empty list means the request carries no tool definitions at all, and the
-  // round stays the single completion it always was.
+  // round stays the single completion it always was. Computed once: the
+  // conversation serializes this list and the executor runs against it.
   const tools = roundToolSpecs(input);
+  // The same one entry point every other backend string uses, so a tool result
+  // never renders its copy by a second route.
+  const copy: ToolCopy = (key, values) => tFromDb(db, key, values);
   const common = {
     fetch: doFetch,
     baseUrl: available.baseUrl,
@@ -209,7 +214,7 @@ async function callModel(
     available.provider === 'anthropic'
       ? createAnthropicConversation(common)
       : createOpenAiConversation(common);
-  return await runToolLoop(conversation, createRoundToolExecutor(input), {
+  return await runToolLoop(conversation, createRoundToolExecutor(input, tools, copy), {
     timeoutMs,
     maxIterations: input.maxIterations,
   });

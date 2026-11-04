@@ -1,5 +1,5 @@
-import { maskSecret } from './providers.js';
 import type { AssistantTurn, ToolCall, ToolCallResult, ToolConversation } from './tool-loop.js';
+import { isRecord, postJson } from './tool-conversation-http.js';
 import { toolInputSchema, type RoundToolSpec } from './tool-specs.js';
 
 /**
@@ -18,7 +18,8 @@ import { toolInputSchema, type RoundToolSpec } from './tool-specs.js';
  * completion it always was.
  *
  * The credential travels only in the request header; a provider error body is
- * masked before it becomes a readable reason.
+ * masked before it becomes a readable reason. Both belong to `postJson`, shared
+ * with the Anthropic line, so the timeout and the masking cannot drift apart.
  */
 
 /** One conversation message; the assistant half echoes the response message. */
@@ -47,48 +48,26 @@ export function createOpenAiConversation(options: OpenAiConversationOptions): To
 
   return {
     async send(timeoutMs: number): Promise<AssistantTurn> {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const response = await options.fetch(`${options.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: `Bearer ${options.credential}`,
-          },
-          body: JSON.stringify({
-            model: options.model,
-            messages,
-            ...(options.tools.length === 0
-              ? {}
-              : { tools: options.tools.map(toolDefinition) }),
-          }),
-          signal: controller.signal,
-        }).catch((error: unknown) => {
-          // The single call's own timeout is a provider-chain failure (D9):
-          // name it, so the round reason says "timed out" rather than the
-          // platform's bare abort wording.
-          if (controller.signal.aborted) {
-            throw new Error(`openai request timed out after ${timeoutMs}ms`);
-          }
-          throw error;
-        });
-        if (!response.ok) {
-          // Mask before truncating: a 500-character cut could otherwise leave an
-          // unmasked prefix of the credential in the reason.
-          const body = await response.text().catch(() => '');
-          const masked = maskSecret(body, options.credential);
-          throw new Error(
-            `openai responded ${response.status}${masked.length > 0 ? `: ${masked.slice(0, 500)}` : ''}`,
-          );
-        }
-        const payload: unknown = await response.json();
-        const turn = readTurn(payload);
-        assistantMessage = turn.message;
-        return turn.turn;
-      } finally {
-        clearTimeout(timer);
-      }
+      const payload = await postJson({
+        fetch: options.fetch,
+        baseUrl: options.baseUrl,
+        path: '/chat/completions',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${options.credential}`,
+        },
+        body: {
+          model: options.model,
+          messages,
+          ...(options.tools.length === 0 ? {} : { tools: options.tools.map(toolDefinition) }),
+        },
+        credential: options.credential,
+        timeoutMs,
+        provider: 'openai',
+      });
+      const turn = readTurn(payload);
+      assistantMessage = turn.message;
+      return turn.turn;
     },
     appendToolResults(results: readonly ToolCallResult[]): void {
       messages.push(assistantMessage);
@@ -169,8 +148,4 @@ function readCall(call: Record<string, unknown>): ToolCall {
     }
   }
   return { id: String(call['id']), name: String(fn['name']), input };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
