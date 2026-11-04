@@ -68,6 +68,14 @@ export function createAnthropicConversation(
               : { tools: options.tools.map(toolDefinition) }),
           }),
           signal: controller.signal,
+        }).catch((error: unknown) => {
+          // The single call's own timeout is a provider-chain failure (D9):
+          // name it, so the round reason says "timed out" rather than the
+          // platform's bare abort wording.
+          if (controller.signal.aborted) {
+            throw new Error(`anthropic request timed out after ${timeoutMs}ms`);
+          }
+          throw error;
         });
         if (!response.ok) {
           // Mask before truncating: a 500-character cut could otherwise leave an
