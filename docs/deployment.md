@@ -28,6 +28,20 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
   不可用：成员读数给出 `workspace_status` 原因，队长按 D3.8 记 `invalid-leader`，轮次零工具
   调用并失败，绝不回落到 local shell 或 local 文件工具。
 
+## 真实模型 provider 的已知限制（M2 A1）
+
+M2 的真实模型 adapter 仍是单轮文本补全：`server/src/model-provider.ts` 只发送一次
+system + user 的 chat completion，不传 tool definitions，也不解析 `tool_use` / `tool_calls`。
+因此：
+
+- `TeamAssign` / `transfer_task`、Plan 的四个工具、SOP verifier 的结构化 `sopVerdict`、以及
+  需要审批的工具调用，目前只有脚本化 provider（`--scripted-provider`）能驱动。
+- 接入真实模型并不等于 team / Plan / SOP / 工具审批可用；本版本不能这样宣传。
+- M2 的验收 seam 是后端 HTTP 面 + 脚本化 provider；真实模型工具循环由 follow-up
+  GitHub #51 承接，不在本版本内。
+
+这是部署时必须向使用者说明的限制，不是配置开关。
+
 ## 备份边界
 
 三种东西分开备份，不能互相替代：
