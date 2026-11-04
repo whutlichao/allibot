@@ -316,6 +316,30 @@ function roundOutcome(fixture: Fixture): OutcomeRow {
   return outcomes[0];
 }
 
+/**
+ * How far the member had consumed the target: the same row the round input reads
+ * as its cursor. An answered round advances it, which is what makes the trigger
+ * message unread-free for the next wake.
+ */
+function consumedSeq(fixture: Fixture, memberId: string, targetId: string): number {
+  const db = new Database(path.join(fixture.dataDir, 'allibot.db'), { readonly: true });
+  try {
+    const row = db
+      .prepare('SELECT last_read_seq FROM read_position WHERE member_id = ? AND target_id = ?')
+      .get(memberId, targetId) as { last_read_seq: number } | undefined;
+    return row?.last_read_seq ?? 0;
+  } finally {
+    db.close();
+  }
+}
+
+async function patchMaxIterations(fixture: Fixture, agentId: string, value: number): Promise<void> {
+  const response = await patchJson(fixture, `/api/agents/${agentId}`, { max_iterations: value });
+  assert.equal(response.status, 200, await response.clone().text());
+  const body = await readJson(response);
+  assert.equal(body['max_iterations'], value, 'the Agent keeps the configured cap');
+}
+
 function requestPayload(request: { body: string }): Record<string, unknown> {
   const payload: unknown = JSON.parse(request.body);
   assert.ok(typeof payload === 'object' && payload !== null, 'the request body is a JSON object');
@@ -589,6 +613,140 @@ for (const provider of PROVIDER_ROWS) {
       assert.ok(
         outcome.reason.includes('empty completion'),
         `the existing empty-completion rule closes the round: ${outcome.reason}`,
+      );
+      assert.equal(outcome.finished_reason, ZH_CN['round.finished.error'].text);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] the Agent's max_iterations bounds the round trips, and a later change applies to the next round`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-cap-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      await patchMaxIterations(fixture, round.agentId, 1);
+
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-1', name: 'Read', input: { path: 'notes.txt' } }], '第一批'),
+        provider.toolCalls([{ id: 'call-2', name: 'Read', input: { path: 'notes.txt' } }], '第二批'),
+        provider.text('这条永远不会被请求'),
+      ]);
+      await sendMessage(fixture, round.channelId, '@读文件的成员 读一下');
+
+      assert.equal(
+        fixture.endpoint.requests.length,
+        2,
+        'a cap of 1 executes one batch and stops when the model asks for another',
+      );
+      assert.equal(
+        provider.toolResults(requestPayload(fixture.endpoint.requests[1]!)).length,
+        1,
+        'exactly one tool batch was executed before the cap stopped the loop',
+      );
+      assert.equal(
+        roundOutcomes(fixture)[0]?.finished_reason,
+        ZH_CN['round.finished.iterationLimit'].text,
+        'the cap of 1 the Agent was patched to is the cap the round ran under',
+      );
+
+      // The same provider behaviour — asking for a tool every turn — runs a
+      // second batch once the Agent's cap is 2.
+      await patchMaxIterations(fixture, round.agentId, 2);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-3', name: 'Read', input: { path: 'notes.txt' } }], '第三批'),
+        provider.toolCalls([{ id: 'call-4', name: 'Read', input: { path: 'notes.txt' } }], '第四批'),
+        provider.text('两批都读完了'),
+      ]);
+      await sendMessage(fixture, round.channelId, '@读文件的成员 再读一下');
+
+      assert.equal(
+        fixture.endpoint.requests.length,
+        5,
+        'a cap of 2 executes two batches and then answers',
+      );
+      assert.equal(
+        provider.toolResults(requestPayload(fixture.endpoint.requests[4]!)).length,
+        2,
+        'the second round really executed two batches instead of one',
+      );
+      const outcomes = roundOutcomes(fixture);
+      assert.equal(outcomes.length, 2, 'two wakes ran two rounds');
+      assert.equal(
+        outcomes[1]?.finished_reason,
+        ZH_CN['round.finished.completed'].text,
+        'a round the model stops by itself is a normal completion, never iteration-limit',
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] hitting the cap lands the partial conclusion as the iteration-limit reply and consumes the trigger`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-cap-partial-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      await patchMaxIterations(fixture, round.agentId, 1);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls(
+          [{ id: 'call-1', name: 'Read', input: { path: 'notes.txt' } }],
+          '我先读一下这个文件。',
+        ),
+        provider.toolCalls(
+          [{ id: 'call-2', name: 'Read', input: { path: 'notes.txt' } }],
+          '部分结论：notes.txt 里有 NEEDLE-ONE，细节还想再看一眼。',
+        ),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 读一下');
+
+      const rows = await messages(fixture, round.channelId);
+      assert.deepEqual(
+        rows.map((message) => [message['kind'], message['body']]),
+        [
+          ['human', '@读文件的成员 读一下'],
+          ['agent', '部分结论：notes.txt 里有 NEEDLE-ONE，细节还想再看一眼。'],
+        ],
+        'the turn that hit the cap is the one extra message, and it is the partial conclusion',
+      );
+      const outcome = roundOutcome(fixture);
+      assert.equal(outcome.status, 'replied', 'a capped round is answered, not failed');
+      assert.equal(
+        outcome.finished_reason,
+        ZH_CN['round.finished.iterationLimit'].text,
+        'the cap reads as its own finished reason',
+      );
+      assert.equal(
+        consumedSeq(fixture, round.agentId, round.channelId),
+        rows[0]?.['seq'],
+        'the trigger message is consumed, so the next wake does not re-read it',
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] hitting the cap with no text closes the round as failed and lands nothing`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-cap-empty-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      await patchMaxIterations(fixture, round.agentId, 1);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-1', name: 'Read', input: { path: 'notes.txt' } }]),
+        provider.toolCalls([{ id: 'call-2', name: 'Read', input: { path: 'notes.txt' } }]),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 读一下');
+
+      assert.deepEqual(
+        (await messages(fixture, round.channelId)).map((message) => message['kind']),
+        ['human'],
+        'a capped round with no conclusion writes no message',
+      );
+      const outcome = roundOutcome(fixture);
+      assert.equal(outcome.status, 'failed');
+      assert.ok(
+        outcome.reason.includes('empty completion'),
+        `the existing empty-completion rule closes the capped round: ${outcome.reason}`,
       );
       assert.equal(outcome.finished_reason, ZH_CN['round.finished.error'].text);
     } finally {

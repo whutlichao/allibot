@@ -10,7 +10,7 @@ import {
   readCredential,
 } from './providers.js';
 import { createAnthropicConversation } from './tool-conversation-anthropic.js';
-import { createRoundToolExecutor, runToolLoop } from './tool-loop.js';
+import { createRoundToolExecutor, runToolLoop, type ToolLoopOutcome } from './tool-loop.js';
 import { roundToolSpecs } from './tool-specs.js';
 
 /**
@@ -130,15 +130,26 @@ export function createModelProvider(
       }
       const { available } = availability;
       try {
-        const text = await callModel(doFetch, available, input, timeoutMs);
-        if (text.trim().length === 0) {
+        const outcome = await callModel(doFetch, available, input, timeoutMs);
+        if (outcome.text.trim().length === 0) {
+          // A round with no conclusion — including one that hit the cap before
+          // producing anything — is the existing empty-completion failure.
           return {
             verdict: 'failed',
             replies: [],
             detail: failureReason(db, 'empty completion', available.credential),
           };
         }
-        return { verdict: 'replied', replies: [text] };
+        if (outcome.exhausted) {
+          // The budget ran out, not the model's answer: the partial conclusion
+          // still lands, and the round states how it ended (D8).
+          return {
+            verdict: 'replied',
+            replies: [outcome.text],
+            finishedReason: 'iteration-limit',
+          };
+        }
+        return { verdict: 'replied', replies: [outcome.text] };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return {
@@ -156,16 +167,18 @@ function failureReason(db: Database.Database, message: string, secret: string): 
 }
 
 /**
- * One round's model text. The Anthropic line runs the round-level tool loop:
- * the loop's final turn is the round's answer. The OpenAI-compatible line is
- * still the single completion it always was (#58 brings it the same loop).
+ * One round's model text and whether the iteration cap stopped it. The
+ * Anthropic line runs the round-level tool loop bounded by the Agent's
+ * `max_iterations`; the loop's final turn is the round's answer. The
+ * OpenAI-compatible line is still the single completion it always was (#58
+ * brings it the same loop), so it never exhausts a cap.
  */
 async function callModel(
   doFetch: typeof fetch,
   available: ProviderAvailability,
   input: RoundInput,
   timeoutMs: number,
-): Promise<string> {
+): Promise<ToolLoopOutcome> {
   if (available.provider === 'anthropic') {
     const conversation = createAnthropicConversation({
       fetch: doFetch,
@@ -178,9 +191,15 @@ async function callModel(
       // empty list means the request carries no tool definitions at all.
       tools: roundToolSpecs(input),
     });
-    return await runToolLoop(conversation, createRoundToolExecutor(input), { timeoutMs });
+    return await runToolLoop(conversation, createRoundToolExecutor(input), {
+      timeoutMs,
+      maxIterations: input.maxIterations,
+    });
   }
-  return await callProvider(doFetch, available, input.systemPrompt, userMessage(input), timeoutMs);
+  return {
+    text: await callProvider(doFetch, available, input.systemPrompt, userMessage(input), timeoutMs),
+    exhausted: false,
+  };
 }
 
 /**
