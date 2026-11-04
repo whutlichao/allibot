@@ -45,6 +45,22 @@ export default defineConfig({
     proxy: {
       [API_PREFIX]: {
         target: apiOrigin(),
+        /**
+         * http-proxy 只把上游的头存进下游响应（`setHeader` + `statusCode`），
+         * 真正的 `writeHead` 要等第一段响应体到达才发生。`/api/events` 在帧
+         * 到达前没有字节，头就会一直攒在 Vite 这一侧：浏览器等不到
+         * `text/event-stream`，空闲代理也可能先把连接掐掉。所以转发头就位
+         * 后显式 flush 一次；已经写过数据时 `flushHeaders()` 是空操作。
+         */
+        configure: (proxy) => {
+          proxy.on('proxyRes', (_proxyResponse, _request, response) => {
+            // http-proxy 在本事件之后于同一 tick 里搬状态与头，所以下一个
+            // immediate 才是「头已就位」的时刻。
+            setImmediate(() => {
+              response.flushHeaders();
+            });
+          });
+        },
       },
     },
   },

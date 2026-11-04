@@ -33,7 +33,8 @@ allibot_API_ORIGIN=http://127.0.0.1:3010 npm run dev:web
 这条规则同时覆盖 `/api` 下的三面，且不改写路径（后端路由本身就是 `/api/...`）：
 
 - REST 读数（`/api/workspace`、`/api/settings` 等）返回 `application/json`；
-- `/api/events` 是 SSE 长连接：代理按响应体流式转发，帧不被缓冲，连接也不会被立刻断开；
+- `/api/events` 是 SSE 长连接：代理在转发头就位时显式 flush，所以前端不必等第一帧就能
+  拿到 `text/event-stream`；帧到达时按字节转发、不缓存，连接也不会被立刻断开；
 - `/api/copilotkit` 是 CopilotKit handler：它在后端内部再分流多个子路由并读请求体流。
 
 **前端 dev 与后端同源靠这条代理，没有它前端只能落到兜底设置面**：5173 上的
