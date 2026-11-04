@@ -47,7 +47,7 @@ import { createPlanFace } from './plans.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
-import { createLocalShell, getShellEnvNames } from './local-shell.js';
+import { createLocalShell } from './local-shell.js';
 import { createToolGate } from './tool-gate.js';
 import { readTargetPermissionContext } from './permissions.js';
 import { createRoundFileTools } from './workspace-files.js';
@@ -1615,9 +1615,10 @@ async function readRoundWorkspace(
       shell: createLocalShell({
         root: local.root,
         allowLocalShell: permission.allowLocalShell,
-        // #47 replaces this process-level list with the member's enabled MCP
-        // servers' `env_names`; the shell face itself already merges per round.
-        envNames: getShellEnvNames(),
+        // The same per-round source the Docker path uses (D5.4 / D6.1): the
+        // member's enabled MCP servers' declared names; values are read from
+        // the process environment at spawn time.
+        envNames: readDeclaredEnvNames(memberId),
         gate,
       }),
     },

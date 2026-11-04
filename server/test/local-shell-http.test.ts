@@ -50,6 +50,8 @@ interface StartOptions {
   commands?: readonly string[];
   allowLocalShell?: 0 | 1;
   env?: NodeJS.ProcessEnv;
+  /** Declare these names on one enabled remote MCP server in the agent's mcp.json. */
+  mcpEnvNames?: readonly string[];
 }
 
 async function startFixture(prefix: string, options: StartOptions = {}): Promise<Fixture> {
@@ -68,8 +70,6 @@ async function startFixture(prefix: string, options: StartOptions = {}): Promise
     '--scripted-provider',
     'shell',
     ...commands.flatMap((command) => ['--scripted-shell-command', command]),
-    '--shell-env-name',
-    DECLARED_NAME,
     ...(options.args ?? []),
   ];
   const running = await startServer(dataDir, {
@@ -101,6 +101,23 @@ async function startFixture(prefix: string, options: StartOptions = {}): Promise
     },
   };
   fixture.agentId = await createAgent(fixture, '本地成员');
+  if (options.mcpEnvNames !== undefined && options.mcpEnvNames.length > 0) {
+    // D5.4 / D6.1: the member's mcp.json is the only source of extra tool
+    // environment variables. The remote entry is enabled but has no consent,
+    // so runtime declares the names without connecting anywhere.
+    const declaration = await putJson(fixture, `/api/agents/${fixture.agentId}/mcp`, {
+      entries: [
+        {
+          name: 'declared-env',
+          transport: 'http',
+          enabled: true,
+          url: 'http://127.0.0.1:9/mcp',
+          env_names: options.mcpEnvNames,
+        },
+      ],
+    });
+    assert.equal(declaration.status, 200, await declaration.clone().text());
+  }
   fixture.channelId = await createChannel(fixture, '本地频道');
   await joinChannel(fixture, fixture.channelId, fixture.agentId);
   if (options.configureWorkspace !== false) {
@@ -492,7 +509,10 @@ test('the shell environment is the allowlist plus declared env_names; provider k
     "printf '%s|%s|%s|%s|%s|%s|%s' \"$MCP_DECLARED_SENTINEL\" " +
     "\"${ANTHROPIC_API_KEY-ABSENT}\" \"${OPENAI_API_KEY-ABSENT}\" " +
     "\"${ALLIBOT_WEB_CREDENTIAL-ABSENT}\" \"$LANG\" \"$TERM\" \"$HOME\"";
-  const fixture = await startFixture('allibot-shell-env-', { commands: [command] });
+  const fixture = await startFixture('allibot-shell-env-', {
+    commands: [command],
+    mcpEnvNames: [DECLARED_NAME],
+  });
   try {
     // `HOME` in the child must be the server's temp home, not the test process
     // home; compute it from the fixture after startup.

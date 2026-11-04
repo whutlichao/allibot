@@ -19,7 +19,6 @@ import {
 } from './docker-workspace.js';
 import { HOST, startHttpServer, type OrchestrationRuntime } from './http.js';
 import { acquireDataDirLock } from './lock.js';
-import { setShellEnvNames } from './local-shell.js';
 import { runMcpExport } from './mcp-export.js';
 import { runSkillMigration } from './skill-migrate.js';
 import { createModelProvider } from './model-provider.js';
@@ -64,10 +63,6 @@ async function run(argv: readonly string[]): Promise<number> {
     setClock(() => new Date(instant));
   }
   setApprovalTimeoutMs(options.approvalTimeoutMs);
-  // 本地 shell 环境 (#46 / D5.4): the declared `env_names` merge point. #47
-  // sources these from the member's mcp.json; the startup injection is the
-  // documented stand-in until then. Names only, never values.
-  setShellEnvNames(options.shellEnvNames);
   const { command, port } = options;
   const resolution = resolveDataDir(options.dataDir);
   if (resolution.origin === 'legacy') {
