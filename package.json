@@ -14,14 +14,28 @@
   "scripts": {
     "build": "npm run build --workspace shared && npm run build --workspace server && node scripts/write-root-cli.mjs && npm run build --workspace web",
     "typecheck": "npm run typecheck --workspace shared && npm run typecheck --workspace server && npm run typecheck --workspace web",
-    "test": "npm run build && npm run test --workspace server && npm run test:strings && npm run test:visual-contract && npm run test:workspace-shell && npm run test:task-board && npm run test:agent-detail && npm run test:web-render",
+    "test": "npm run build && npm run test --workspace server && npm run test:strings && npm run test:visual-contract && npm run test:workspace-shell && npm run test:task-board && npm run test:agent-detail && npm run test:agent-rules && npm run test:team-config && npm run test:team-runs && npm run test:team-assignments && npm run test:plan-panel && npm run test:sop-definitions && npm run test:sop-runs && npm run test:workspace-root && npm run test:approvals && npm run test:local-shell && npm run test:mcp-tab && npm run test:agent-skills && npm run test:workspace-backend && npm run test:web-render && npm run test:m2-e2e --workspace web",
     "test:strings": "npm run build --workspace shared && npm run test:strings --workspace shared && npm run test:strings --workspace web",
     "test:visual-contract": "npm run test:visual-contract --workspace web",
     "test:web-render": "npm run build --workspace shared && npm run test:web-render --workspace web",
     "test:workspace-shell": "npm run test:workspace-shell --workspace web",
     "test:task-board": "npm run test:task-board --workspace web",
     "test:agent-detail": "npm run build --workspace shared && npm run test:agent-detail --workspace web",
+    "test:agent-rules": "npm run build --workspace shared && npm run test:agent-rules --workspace web",
+    "test:team-config": "npm run build --workspace shared && npm run test:team-config --workspace web",
     "test:agui-contract": "npm run build && node --test server/test/agui-contract.test.ts && npm run test:agui-contract --workspace web",
-    "test:agui-live": "npm run build && node --test server/test/agui-live.test.ts && npm run test:agui-live --workspace web"
+    "test:agui-live": "npm run build && node --test server/test/agui-live.test.ts && npm run test:agui-live --workspace web",
+    "test:team-runs": "npm run build --workspace shared && npm run test:team-runs --workspace web",
+    "test:team-assignments": "npm run build --workspace shared && npm run test:team-assignments --workspace web",
+    "test:plan-panel": "npm run build --workspace shared && npm run test:plan-panel --workspace web",
+    "test:sop-definitions": "npm run build --workspace shared && npm run test:sop-definitions --workspace web",
+    "test:sop-runs": "npm run build --workspace shared && npm run test:sop-runs --workspace web",
+    "test:workspace-root": "npm run build --workspace shared && npm run test:workspace-root --workspace web",
+    "test:approvals": "npm run build --workspace shared && npm run test:approvals --workspace web",
+    "test:local-shell": "npm run build && node --test server/test/local-shell-http.test.ts && npm run test:local-shell --workspace web",
+    "test:mcp-tab": "npm run build --workspace shared && npm run test:mcp-tab --workspace web",
+    "test:agent-skills": "npm run build --workspace shared && npm run test:agent-skills --workspace web",
+    "test:workspace-backend": "npm run build && node --test server/test/docker-workspace-http.test.ts && npm run test:workspace-backend --workspace web",
+    "test:m2-e2e": "npm run build && node --test server/test/m2-e2e.test.ts && npm run test:m2-e2e --workspace web && npm run test:strings"
   }
 }

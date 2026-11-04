@@ -4,7 +4,14 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
-import { CLI_ENTRY, REPO_ROOT, makeTempDir, removeTempDir, runCli } from './support.ts';
+import {
+  CLI_ENTRY,
+  FAKE_DOCKER_FIXTURE,
+  REPO_ROOT,
+  makeTempDir,
+  removeTempDir,
+  runCli,
+} from './support.ts';
 import { SCHEMA_VERSION } from '../dist/db.js';
 
 /**
@@ -70,7 +77,19 @@ test('the serve listening message renders from the zh-CN catalog', async () => {
 
   // 自己起进程而不是复用 startServer：后者只等到端口就返回，这一条要看
   // 同一行 stdout 上的用户可见文案。
-  const child = spawn(process.execPath, [CLI_ENTRY, 'serve', '--data-dir', dataDir, '--port', '0'], {
+  const child = spawn(
+    process.execPath,
+    [
+      CLI_ENTRY,
+      'serve',
+      '--data-dir',
+      dataDir,
+      '--port',
+      '0',
+      '--docker-command',
+      FAKE_DOCKER_FIXTURE,
+    ],
+    {
     cwd: REPO_ROOT,
     env: { ...process.env, HOME: path.join(dataDir, 'home') },
     stdio: ['ignore', 'pipe', 'pipe'],

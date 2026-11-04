@@ -110,6 +110,10 @@ function agent(id: string, displayName: string): AgentView {
     compression_threshold: 30,
     max_iterations: 8,
     auto_claim: 1,
+    workspace_backend: null,
+    permission_mode: null,
+    effective_permission_mode: 'ask-writes',
+    home_path: '/tmp/allibot-home/agents/agent-1',
     status: 'online',
     offline_reason: null,
   };
@@ -119,6 +123,9 @@ function channel(overrides: Partial<ChannelView> & Pick<ChannelView, 'id' | 'nam
   return {
     description: '',
     mode: 'autonomous',
+    team: { leader_member_id: null, status: 'valid', reason: null },
+    workspace: { root: null, backend: 'local', allow_local_shell: 0 },
+    permission_mode: 'ask-writes',
     response_budget_limit: 3,
     archived_at: null,
     deleted_at: null,
@@ -146,6 +153,7 @@ function task(overrides: Partial<TaskView> = {}): TaskView {
     claimed_at: '2026-11-03T00:00:00.000Z',
     created_at: '2026-11-03T00:00:00.000Z',
     updated_at: '2026-11-03T00:00:00.000Z',
+    channel_mode: 'autonomous',
     allowed_transitions: ['in_review', 'closed'],
     message_count: 2,
     unread_count: 1,
@@ -193,10 +201,14 @@ function workspace(): WorkspaceView {
     ],
     dms: [dm(DM_ID, '阿绿'), dm(ARCHIVED_DM_ID, '阿灰', '2026-11-02T00:00:00.000Z')],
     tasks: [task()],
+    pending_approvals: 0,
     unread_total: 4,
     unread_by_target: { [CHANNEL_ID]: 2, [DM_ID]: 1, [ARCHIVED_DM_ID]: 1 },
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
     status_points: { 'agent-1': { status: 'online', offline_reason: null } },
+    workspace_runtime: {
+      docker: { available: false, image: 'node:22-bookworm-slim', reason: 'docker-unavailable' },
+    },
   };
 }
 
@@ -263,9 +275,13 @@ test('an empty workspace yields no initial target', () => {
     channels: [],
     dms: [],
     tasks: [],
+    pending_approvals: 0,
     unread_total: 0,
     unread_by_target: {},
     status_points: {},
+    workspace_runtime: {
+      docker: { available: false, image: 'node:22-bookworm-slim', reason: 'docker-unavailable' },
+    },
   };
 
   assert.equal(initialTargetId(empty), null);

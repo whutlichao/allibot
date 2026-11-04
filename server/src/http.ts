@@ -8,6 +8,12 @@ import {
 } from 'node:http';
 import { ApiFailure } from './api-error.js';
 import {
+  decideApproval,
+  getApproval,
+  listApprovals,
+  parseApprovalQuery,
+} from './approvals.js';
+import {
   maxUploadEnvelopeBytes,
   readAttachment,
   uploadAttachment,
@@ -19,8 +25,12 @@ import {
   formatSseFrame,
   SSE_ROTATE_EVENT,
 } from './events.js';
+import { readAgentRules } from './agent-home.js';
+import { readAgentMcp, replaceAgentMcp } from './mcp-file.js';
 import {
   archiveChannel,
+  assertChannelReadable,
+  assertChannelWritable,
   createChannel,
   deleteChannel,
   getChannel,
@@ -38,6 +48,8 @@ import { createDm, listDms } from './dms.js';
 import { appendMessageAndDispatch, listMessages, parseMessageRequest, parsePageQuery } from './messages.js';
 import {
   confirmProviderConsent,
+  confirmRemoteConsent,
+  parseConsentScope,
   parseProviderParam,
   remoteDataFlowView,
 } from './providers.js';
@@ -58,6 +70,35 @@ import {
   listChannelMembers,
   listTargetMembers,
 } from './target-members.js';
+import { listPlans, parsePlanQuery } from './plans.js';
+import {
+  assertRuleScopeExists,
+  parsePermissionRuleSet,
+  readPermissionRules,
+  writePermissionRules,
+} from './permissions.js';
+import {
+  createSopDefinition,
+  getSopDefinition,
+  getSopRun,
+  listSopDefinitions,
+  listSopRuns,
+  parseSopRunQuery,
+  startSopRun,
+} from './sops.js';
+import { scheduleSopRun } from './sop-executor.js';
+import {
+  deleteSkill,
+  importAllSkillCandidates,
+  installSkillFromRequest,
+  installSkillFromZip,
+  listSkills,
+  MAX_SKILL_ZIP_BYTES,
+  readSkillMarkdown,
+  scanSkillCandidates,
+  setSkillEnabled,
+} from './skills.js';
+import { listTeamRuns, parseTeamRunQuery, prepareTeamChangeWake } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
 import { readWorkspace } from './workspace.js';
 
@@ -174,6 +215,9 @@ const TARGET_ID = '([^/]+)';
 const ATTACHMENT_ID = '([^/]+)';
 const TASK_ID = '([^/]+)';
 const REMINDER_ID = '([^/]+)';
+const SOP_ID = '([^/]+)';
+const SOP_RUN_ID = '([^/]+)';
+const SKILL_NAME = '([^/]+)';
 
 const ROUTES: readonly Route[] = [
   {
@@ -230,32 +274,32 @@ const ROUTES: readonly Route[] = [
   {
     method: 'GET',
     pattern: /^\/api\/channels$/,
-    handle: async (_request, response, { db }) => {
-      sendJson(response, 200, { channels: listChannels(db) });
+    handle: async (_request, response, { db, env }) => {
+      sendJson(response, 200, { channels: listChannels(db, env) });
     },
   },
   {
     method: 'POST',
     pattern: /^\/api\/channels$/,
-    handle: async (request, response, { db }) => {
-      sendJson(response, 201, createChannel(db, await readJsonBody(request)));
+    handle: async (request, response, { db, env }) => {
+      sendJson(response, 201, createChannel(db, await readJsonBody(request), env));
     },
   },
   {
     method: 'GET',
     pattern: new RegExp(`^/api/channels/${CHANNEL_ID}$`),
-    handle: async (_request, response, { db }, ...params) => {
-      sendJson(response, 200, getChannel(db, decodeId(params[0])));
+    handle: async (_request, response, { db, env }, ...params) => {
+      sendJson(response, 200, getChannel(db, decodeId(params[0]), env));
     },
   },
   {
     method: 'PATCH',
     pattern: new RegExp(`^/api/channels/${CHANNEL_ID}$`),
-    handle: async (request, response, { db }, ...params) => {
+    handle: async (request, response, { db, dataDir, env }, ...params) => {
       sendJson(
         response,
         200,
-        updateChannel(db, decodeId(params[0]), await readJsonBody(request)),
+        updateChannel(db, decodeId(params[0]), await readJsonBody(request), dataDir, env),
       );
     },
   },
@@ -271,8 +315,8 @@ const ROUTES: readonly Route[] = [
   {
     method: 'POST',
     pattern: new RegExp(`^/api/channels/${CHANNEL_ID}/archive$`),
-    handle: async (_request, response, { db }, ...params) => {
-      sendJson(response, 200, archiveChannel(db, decodeId(params[0])));
+    handle: async (_request, response, { db, env }, ...params) => {
+      sendJson(response, 200, archiveChannel(db, decodeId(params[0]), env));
     },
   },
   {
@@ -312,6 +356,93 @@ const ROUTES: readonly Route[] = [
     handle: async (request, response, { db }) => {
       const created = createDm(db, await readJsonBody(request));
       sendJson(response, created.created ? 201 : 200, { id: created.id });
+    },
+  },
+  {
+    // The team run snapshot (D2.3): newest runs first, each with its nested
+    // assignments. A run is a forensic record, not a message; the route reads
+    // the same target id the message route does, but a non-team target is an
+    // empty list rather than an error.
+    method: 'GET',
+    pattern: new RegExp(`^/api/targets/${TARGET_ID}/team-runs$`),
+    handle: async (request, response, { db, env }, ...params) => {
+      const query = parseTeamRunQuery(new URL(request.url ?? '/', `http://${HOST}`).searchParams);
+      sendJson(response, 200, {
+        team_runs: listTeamRuns(db, decodeId(params[0]), query, env),
+      });
+    },
+  },
+  {
+    // The Plan read model (D2.3): the target's latest runs with their complete
+    // task lists, newest first; `member_id` narrows to one member. Plan has no
+    // human-face write endpoint — the four tools run inside a member round.
+    method: 'GET',
+    pattern: new RegExp(`^/api/targets/${TARGET_ID}/plans$`),
+    handle: async (request, response, { db }, ...params) => {
+      const query = parsePlanQuery(
+        db,
+        new URL(request.url ?? '/', `http://${HOST}`).searchParams,
+      );
+      sendJson(response, 200, {
+        plans: listPlans(db, decodeId(params[0]), query),
+      });
+    },
+  },
+  {
+    // The SOP definitions (#41 / D2.3): one immutable, channel-scoped ordered
+    // step list per (channel_id, name). `channel_id` narrows the read; an
+    // archived channel keeps its definitions readable.
+    method: 'GET',
+    pattern: /^\/api\/sops$/,
+    handle: async (request, response, { db }) => {
+      const channelId =
+        new URL(request.url ?? '/', `http://${HOST}`).searchParams.get('channel_id') ?? undefined;
+      sendJson(response, 200, { sops: listSopDefinitions(db, channelId) });
+    },
+  },
+  {
+    // A first create is 201; a same-name same-shape replay is 200 (D2.4). The
+    // route has no PATCH / DELETE sibling: a definition is immutable in M2.
+    method: 'POST',
+    pattern: /^\/api\/sops$/,
+    handle: async (request, response, { db }) => {
+      const created = createSopDefinition(db, await readJsonBody(request));
+      sendJson(response, created.created ? 201 : 200, created.definition);
+    },
+  },
+  {
+    // The one SOP start (D4.2): the row is inserted `pending`, the response
+    // carries it, and the execution worker advances it asynchronously.
+    method: 'POST',
+    pattern: new RegExp(`^/api/sops/${SOP_ID}/runs$`),
+    handle: async (_request, response, { db, orchestration }, ...params) => {
+      const run = startSopRun(db, decodeId(params[0]));
+      sendJson(response, 202, run);
+      scheduleSopRun(db, orchestration.provider, run.id);
+    },
+  },
+  {
+    // The run snapshot of one definition (D2.3): newest first, each with the
+    // stored state snapshot; `before` is the run-id cursor.
+    method: 'GET',
+    pattern: new RegExp(`^/api/sops/${SOP_ID}/runs$`),
+    handle: async (request, response, { db }, ...params) => {
+      const query = parseSopRunQuery(new URL(request.url ?? '/', `http://${HOST}`).searchParams);
+      sendJson(response, 200, { runs: listSopRuns(db, decodeId(params[0]), query) });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/sops/${SOP_ID}$`),
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, getSopDefinition(db, decodeId(params[0])));
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/sop-runs/${SOP_RUN_ID}$`),
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, getSopRun(db, decodeId(params[0])));
     },
   },
   {
@@ -364,12 +495,19 @@ const ROUTES: readonly Route[] = [
     method: 'POST',
     pattern: /^\/api\/tasks$/,
     handle: async (request, response, { db, orchestration, env }) => {
-      const task = createTask(db, await readJsonBody(request));
-      const claim = claimTask(db, task.id, env);
+      const created = createTask(db, await readJsonBody(request));
+      const claim = claimTask(db, created.task.id, env);
       if (claim !== null) {
         await dispatchWakes(db, orchestration.provider, [claim.wake], orchestration.inFlight);
+      } else {
+        // team 模式建任务 (D3.5): no claim, but the leader gets one mandatory
+        // team-change round whose from_seq is the 「任务已创建」 system record.
+        const wake = prepareTeamChangeWake(db, created.task.target_id, created.createdEventSeq, env);
+        if (wake !== null) {
+          await dispatchWakes(db, orchestration.provider, [wake], orchestration.inFlight);
+        }
       }
-      sendJson(response, 201, getTask(db, task.id));
+      sendJson(response, 201, getTask(db, created.task.id));
     },
   },
   {
@@ -382,12 +520,22 @@ const ROUTES: readonly Route[] = [
   {
     method: 'PATCH',
     pattern: new RegExp(`^/api/tasks/${TASK_ID}$`),
-    handle: async (request, response, { db }, ...params) => {
-      sendJson(
-        response,
-        200,
-        updateTask(db, decodeId(params[0]), await readJsonBody(request)),
-      );
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const updated = updateTask(db, decodeId(params[0]), await readJsonBody(request));
+      if (updated.assigneeEventSeq !== null) {
+        // owner 改派 on a team channel wakes the leader with the change record
+        // as its from_seq; a non-team channel prepares nothing.
+        const wake = prepareTeamChangeWake(
+          db,
+          updated.task.target_id,
+          updated.assigneeEventSeq,
+          env,
+        );
+        if (wake !== null) {
+          await dispatchWakes(db, orchestration.provider, [wake], orchestration.inFlight);
+        }
+      }
+      sendJson(response, 200, updated.task);
     },
   },
   {
@@ -447,11 +595,94 @@ const ROUTES: readonly Route[] = [
     },
   },
   {
+    // 通用一次性确认 (#47 / D2.3): model / mcp / docker all write the same
+    // `remote_consent_scope` row and keep the first confirmation time.
+    method: 'POST',
+    pattern: /^\/api\/remote-data-flow\/consent$/,
+    handle: async (request, response, { db }) => {
+      const scope = parseConsentScope(await readJsonBody(request));
+      sendJson(response, 200, confirmRemoteConsent(db, scope.scopeKind, scope.scopeId));
+    },
+  },
+  {
     method: 'POST',
     pattern: /^\/api\/remote-data-flow\/([^/]+)\/consent$/,
     handle: async (_request, response, { db }, ...params) => {
       const provider = parseProviderParam(decodeId(params[0]));
       sendJson(response, 200, confirmProviderConsent(db, provider));
+    },
+  },
+  {
+    // The channel rule set (D2.3): a bare JSON array is the complete
+    // replacement; an empty array is valid and a same-content replay is
+    // idempotent. The write path validates every row before the transaction,
+    // so an invalid row leaves the old set untouched.
+    method: 'GET',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}/permission-rules$`),
+    handle: async (_request, response, { db }, ...params) => {
+      const id = decodeId(params[0]);
+      assertChannelReadable(db, id);
+      sendJson(response, 200, { rules: readPermissionRules(db, 'channel', id) });
+    },
+  },
+  {
+    method: 'PUT',
+    pattern: new RegExp(`^/api/channels/${CHANNEL_ID}/permission-rules$`),
+    handle: async (request, response, { db }, ...params) => {
+      const id = decodeId(params[0]);
+      const channel = assertChannelReadable(db, id);
+      assertChannelWritable(channel);
+      const rules = parsePermissionRuleSet(await readJsonBody(request));
+      sendJson(response, 200, { rules: writePermissionRules(db, 'channel', id, rules) });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/permission-rules$`),
+    handle: async (_request, response, { db }, ...params) => {
+      const id = decodeId(params[0]);
+      assertRuleScopeExists(db, 'agent', id);
+      sendJson(response, 200, { rules: readPermissionRules(db, 'agent', id) });
+    },
+  },
+  {
+    method: 'PUT',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/permission-rules$`),
+    handle: async (request, response, { db }, ...params) => {
+      const id = decodeId(params[0]);
+      assertRuleScopeExists(db, 'agent', id);
+      const rules = parsePermissionRuleSet(await readJsonBody(request));
+      sendJson(response, 200, { rules: writePermissionRules(db, 'agent', id, rules) });
+    },
+  },
+  {
+    // The approval list (D2.3): pending by default, `status=all` reads every
+    // state. It is a pure read: no message, no wake, no budget, no frame.
+    method: 'GET',
+    pattern: /^\/api\/approvals$/,
+    handle: async (request, response, { db }) => {
+      const query = parseApprovalQuery(
+        new URL(request.url ?? '/', `http://${HOST}`).searchParams,
+      );
+      sendJson(response, 200, { approvals: listApprovals(db, query) });
+    },
+  },
+  {
+    method: 'GET',
+    pattern: /^\/api\/approvals\/([^/]+)$/,
+    handle: async (_request, response, { db }, ...params) => {
+      sendJson(response, 200, getApproval(db, decodeId(params[0])));
+    },
+  },
+  {
+    // The one approval decision (D2.3 / D5.6): pending only; a same decision
+    // replay is 200, the opposite is 409, an unknown call is 400. `rules?` is
+    // written in the same transaction as the decision.
+    method: 'POST',
+    pattern: /^\/api\/approvals\/([^/]+)$/,
+    handle: async (request, response, { db }, ...params) => {
+      const body = await readJsonBody(request);
+      sendJson(response, 200, decideApproval(db, decodeId(params[0]), body));
     },
   },
   {
@@ -473,14 +704,151 @@ const ROUTES: readonly Route[] = [
     },
   },
   {
+    // mcp.json 管理面 (#47 / D2.3 / D6.1): both blocks read and replace the one
+    // Agent-home file the runtime assembles from. The body is exactly one of
+    // `entries` (structured form) or `raw` (textarea); the file write is atomic
+    // and a same-content replay does not touch mtime.
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/mcp$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      getAgentOr404(db, id, env, orchestration.inFlight);
+      sendJson(response, 200, readAgentMcp(db, id, env));
+    },
+  },
+  {
+    method: 'PUT',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/mcp$`),
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      getAgentOr404(db, id, env, orchestration.inFlight);
+      sendJson(response, 200, replaceAgentMcp(db, id, await readJsonBody(request), env));
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/rules$`),
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      // The Agent must be a live Agent; the channel only supplies the project
+      // context. No channel / no root simply means the project section is
+      // absent — it is not an error (D2.3).
+      getAgentOr404(db, id, env, orchestration.inFlight);
+      const rawChannelId = new URL(request.url ?? '/', `http://${HOST}`).searchParams.get(
+        'channel_id',
+      );
+      const channelId = rawChannelId === null || rawChannelId.length === 0 ? null : rawChannelId;
+      sendJson(response, 200, readAgentRules(db, id, channelId, env));
+    },
+  },
+  {
+    // Skill 管理面 (#48 / D2.3 / D6.3): the rows are metadata; the bytes live
+    // in the member home. Listing is alphabetical and reads the v21 table only.
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      const agent = getAgentOr404(db, id, env, orchestration.inFlight);
+      sendJson(response, 200, {
+        agent_id: id,
+        home_path: agent.home_path,
+        skills: listSkills(db, id),
+      });
+    },
+  },
+  {
+    // One install entry for the directory / agents-skills JSON sources; a
+    // first install is 201, the same bytes replay 200, a different hash 409.
+    method: 'POST',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills$`),
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      getAgentOr404(db, id, env, orchestration.inFlight);
+      const installed = installSkillFromRequest(db, id, await readJsonBody(request), env);
+      sendJson(response, installed.created ? 201 : 200, installed);
+    },
+  },
+  {
+    // The read-only landing-directory scan (D2.3 / D6.3). A missing
+    // `~/.agents/skills/` is available:false, not an error.
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skill-candidates$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      getAgentOr404(db, id, env, orchestration.inFlight);
+      sendJson(response, 200, scanSkillCandidates(db, id, env));
+    },
+  },
+  {
+    // Import every importable, not-installed candidate; each item carries its
+    // own result and a failure never blocks the remaining items (D2.3).
+    method: 'POST',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/import-all$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      getAgentOr404(db, id, env, orchestration.inFlight);
+      sendJson(response, 200, importAllSkillCandidates(db, id, env));
+    },
+  },
+  {
+    // The raw zip upload (D2.3). The query carries the target skill name; the
+    // body is the archive itself, with the 5 MiB ceiling enforced while reading.
+    method: 'POST',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/upload$`),
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      getAgentOr404(db, id, env, orchestration.inFlight);
+      const name = new URL(request.url ?? '/', `http://${HOST}`).searchParams.get('name');
+      if (name === null || name.length === 0) {
+        throw ApiFailure.validation('upload requires a name query parameter', { field: 'name' });
+      }
+      const body = await readBody(request, MAX_SKILL_ZIP_BYTES, 'zip');
+      const installed = installSkillFromZip(db, id, body, name, env);
+      sendJson(response, installed.created ? 201 : 200, installed);
+    },
+  },
+  {
+    method: 'GET',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/${SKILL_NAME}$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      getAgentOr404(db, id, env, orchestration.inFlight);
+      const name = decodeId(params[1]).normalize('NFC');
+      const reading = readSkillMarkdown(db, id, name, env);
+      sendJson(response, 200, { agent_id: id, skill: reading.skill, markdown: reading.markdown });
+    },
+  },
+  {
+    method: 'PATCH',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/${SKILL_NAME}$`),
+    handle: async (request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      getAgentOr404(db, id, env, orchestration.inFlight);
+      const name = decodeId(params[1]).normalize('NFC');
+      sendJson(response, 200, {
+        skill: setSkillEnabled(db, id, name, await readJsonBody(request)),
+      });
+    },
+  },
+  {
+    // Deleting is idempotent: the row and bytes are removed once, and a repeat
+    // is still 204 because the resource is already gone (D2.4).
+    method: 'DELETE',
+    pattern: new RegExp(`^/api/agents/${AGENT_ID}/skills/${SKILL_NAME}$`),
+    handle: async (_request, response, { db, env, orchestration }, ...params) => {
+      const id = decodeId(params[0]);
+      getAgentOr404(db, id, env, orchestration.inFlight);
+      deleteSkill(db, id, decodeId(params[1]).normalize('NFC'), env);
+      response.writeHead(204);
+      response.end();
+    },
+  },
+  {
     method: 'GET',
     pattern: new RegExp(`^/api/agents/${AGENT_ID}$`),
     handle: async (_request, response, { db, env, orchestration }, ...params) => {
       const id = decodeId(params[0]);
-      const agent = getAgent(db, id, env, orchestration.inFlight);
-      if (agent === null) {
-        throw ApiFailure.notFound(`agent not found: ${id}`);
-      }
+      const agent = getAgentOr404(db, id, env, orchestration.inFlight);
       sendJson(response, 200, agent);
     },
   },
@@ -661,6 +1029,20 @@ function parseIncludeDeleted(searchParams: URLSearchParams): boolean {
  * Route captures are always present; the only real failure is a malformed
  * percent-encoding, which reads as "that id does not exist".
  */
+/** Resolve one Agent for a management route or throw the shared 404 envelope. */
+function getAgentOr404(
+  db: Database.Database,
+  id: string,
+  env: NodeJS.ProcessEnv,
+  inFlight: Parameters<typeof getAgent>[3],
+): NonNullable<ReturnType<typeof getAgent>> {
+  const agent = getAgent(db, id, env, inFlight);
+  if (agent === null) {
+    throw ApiFailure.notFound(`agent not found: ${id}`);
+  }
+  return agent;
+}
+
 function decodeId(raw: string | undefined): string {
   try {
     return decodeURIComponent(raw ?? '');

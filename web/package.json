@@ -15,7 +15,21 @@
     "test:agui-live": "node --import ./test/support/register-css.mjs --test test/copilotkit-contract.test.ts test/workspace-shell.test.ts",
     "test:task-board": "node --import ./test/support/register-css.mjs --test test/task-board.test.ts",
     "test:workspace-shell": "node --import ./test/support/register-css.mjs --test test/workspace-shell.test.ts",
-    "test:agent-detail": "node --import ./test/support/register-css.mjs --test test/agent-detail.test.ts"
+    "test:agent-detail": "node --import ./test/support/register-css.mjs --test test/agent-detail.test.ts",
+    "test:agent-rules": "node --import ./test/support/register-css.mjs --test test/agent-rules.test.ts",
+    "test:team-config": "node --import ./test/support/register-css.mjs --test test/team-config.test.ts",
+    "test:team-runs": "node --import ./test/support/register-css.mjs --test test/team-runs.test.ts",
+    "test:team-assignments": "node --import ./test/support/register-css.mjs --test test/team-assignments.test.ts",
+    "test:plan-panel": "node --import ./test/support/register-css.mjs --test test/plan-panel.test.ts",
+    "test:sop-definitions": "node --import ./test/support/register-css.mjs --test test/sop-definitions.test.ts",
+    "test:sop-runs": "node --import ./test/support/register-css.mjs --test test/sop-runs.test.ts",
+    "test:workspace-root": "node --import ./test/support/register-css.mjs --test test/workspace-root.test.ts",
+    "test:approvals": "node --import ./test/support/register-css.mjs --test test/approvals.test.ts",
+    "test:local-shell": "node --import ./test/support/register-css.mjs --test test/local-shell.test.ts",
+    "test:mcp-tab": "node --import ./test/support/register-css.mjs --test test/mcp-tab.test.ts",
+    "test:agent-skills": "node --import ./test/support/register-css.mjs --test test/agent-skills.test.ts",
+    "test:workspace-backend": "node --import ./test/support/register-css.mjs --test test/workspace-backend.test.ts",
+    "test:m2-e2e": "node --import ./test/support/register-css.mjs --test test/m2-e2e-contract.test.ts"
   },
   "dependencies": {
     "@allibot/shared": "*",

@@ -1,0 +1,101 @@
+import type { PermissionMode } from '@allibot/shared';
+import type Database from 'better-sqlite3';
+import {
+  requestApproval,
+  type RegisterApprovalInput,
+} from './approvals.js';
+import { tFromDb } from './copy.js';
+import {
+  checkPermission,
+  type PermissionDecision,
+  type PermissionRequest,
+  type TargetPermissionContext,
+} from './permissions.js';
+
+/**
+ * 工具闸门 (#44 / D5.5 / D5.6): the one object the file tools (and the later
+ * shell / MCP adapters) ask before executing. `check` is the pure decision
+ * preview; `authorize` applies it and waits for a human decision when the
+ * answer is `ask`.
+ *
+ * A denied call is a `DENIED` tool result, not a round error: the adapter
+ * continues. A timed-out batch throws so the round closes failed with a
+ * readable reason (the approval row has already been closed `failed`).
+ */
+export interface ToolGate {
+  readonly mode: PermissionMode;
+  check(request: PermissionRequest): PermissionDecision;
+  authorize(request: PermissionRequest): Promise<'allow' | 'denied'>;
+}
+
+export interface ToolGateOptions {
+  db: Database.Database;
+  /** The target-context permission facts. */
+  permission: TargetPermissionContext;
+  replyId: string;
+  /** `round` for an ordinary round, `team-assignment` for a sub-round. */
+  contextKind: 'round' | 'team-assignment' | 'sop';
+  /** The assignment / SOP run id; null for an ordinary round. */
+  contextId: string | null;
+  /**
+   * The approval row's `target_id`. An ordinary / team-assignment round names
+   * its target; a SOP approval has no target (`null`, D5.6). Undefined keeps
+   * the permission context's target.
+   */
+  approvalTargetId?: string | null;
+  /** The SOP executor's hook: the batch is about to wait for a human. */
+  onApprovalWait?: () => void;
+  /** The SOP executor's hook: the wait settled (approved / denied / timeout). */
+  onApprovalSettled?: () => void;
+}
+
+export function createToolGate(options: ToolGateOptions): ToolGate {
+  const { db, permission, replyId, contextKind, contextId } = options;
+  return {
+    mode: permission.effective,
+    // The caller supplies `root_internal_write`, resolved from its own path
+    // boundary; the gate never infers it from the pattern text (D5.5).
+    check: (request) => checkPermission(db, permission, request),
+    authorize: async (request) => {
+      const decided = checkPermission(db, permission, request);
+      if (decided.decision === 'allow') {
+        return 'allow';
+      }
+      if (decided.decision === 'deny') {
+        return 'denied';
+      }
+      const registration: RegisterApprovalInput = {
+        replyId,
+        toolCallId: request.tool_call_id,
+        targetId:
+          options.approvalTargetId === undefined
+            ? permission.targetId
+            : options.approvalTargetId,
+        contextKind,
+        contextId,
+        memberId: permission.memberId,
+        toolName: request.tool_name,
+        pattern: request.pattern,
+        arguments: {
+          tool_name: request.tool_name,
+          ...(request.arguments ?? {}),
+        },
+        onWait: options.onApprovalWait,
+      };
+      const outcome = await requestApproval(db, registration);
+      options.onApprovalSettled?.();
+      if (outcome === 'timeout') {
+        throw new ApprovalTimeoutError(tFromDb(db, 'permission.approval.timeout'));
+      }
+      return outcome === 'approved' ? 'allow' : 'denied';
+    },
+  };
+}
+
+/** The readable round failure for a batch that timed out (already stored failed). */
+export class ApprovalTimeoutError extends Error {
+  constructor(readonly readable: string) {
+    super(readable);
+    this.name = 'ApprovalTimeoutError';
+  }
+}

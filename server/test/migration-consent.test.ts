@@ -212,15 +212,22 @@ test('remote_consent_scope records only the scope and when it was confirmed, onc
         /CHECK constraint failed/,
         'a consent scope always names what was confirmed',
       );
+      // v21 widened the vocabulary to the three remote data-flow kinds.
+      db.prepare(
+        "INSERT INTO remote_consent_scope (scope_kind, scope_id, confirmed_at) VALUES ('mcp', 'demo', ?)",
+      ).run('2026-01-01T00:00:00.000Z');
+      db.prepare(
+        "INSERT INTO remote_consent_scope (scope_kind, scope_id, confirmed_at) VALUES ('docker', 'node:22', ?)",
+      ).run('2026-01-01T00:00:00.000Z');
       assert.throws(
         () =>
           db
             .prepare(
-              "INSERT INTO remote_consent_scope (scope_kind, scope_id, confirmed_at) VALUES ('mcp', 'x', ?)",
+              "INSERT INTO remote_consent_scope (scope_kind, scope_id, confirmed_at) VALUES ('web', 'x', ?)",
             )
             .run('2026-01-01T00:00:00.000Z'),
         /CHECK constraint failed/,
-        'M1 confirms model providers only',
+        'the consent vocabulary is exactly model / mcp / docker',
       );
     } finally {
       db.close();

@@ -84,6 +84,27 @@ test('loaded stylesheet exposes exactly the fixed visual-contract token names', 
   }
 });
 
+test('every token the loaded stylesheet consumes is declared by the token layer', async () => {
+  const files = await loadCssBundle(STYLES_ENTRY);
+  const defined = declarations(files);
+  const undeclared = new Set<string>();
+
+  for (const file of files) {
+    for (const match of file.css.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)/g)) {
+      const name = match[1]!;
+      if (!defined.has(name)) {
+        undeclared.add(name);
+      }
+    }
+  }
+
+  assert.deepEqual(
+    [...undeclared].sort(),
+    [],
+    'components consume token names the token layer does not declare',
+  );
+});
+
 test('the app entry loads the styles entry', async () => {
   const appEntry = await readFile(APP_ENTRY, 'utf8');
   assert.match(

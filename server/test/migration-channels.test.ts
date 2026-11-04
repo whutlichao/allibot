@@ -70,16 +70,23 @@ test('migrating an empty data dir adds channel, target and target_member', async
       assert.ok(tables.includes(table), `${table} table is missing; tables: ${tables.join(', ')}`);
     }
 
+    // v14 (#37) rebuilds channel: the leader column sits beside mode and the
+    // mode CHECK accepts autonomous / team.
     assert.deepEqual(columnNames(dataDir, 'channel'), [
       'id',
       'name',
       'description',
       'mode',
+      'team_leader_member_id',
       'response_budget_limit',
       'archived_at',
       'deleted_at',
       'created_at',
       'updated_at',
+      'workspace_root',
+      'workspace_backend',
+      'allow_local_shell',
+      'permission_mode',
     ]);
     assert.deepEqual(columnNames(dataDir, 'target'), ['id', 'kind']);
     assert.deepEqual(columnNames(dataDir, 'target_member'), ['target_id', 'member_id']);

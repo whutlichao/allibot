@@ -39,6 +39,11 @@ export const LIVE_EVENT_TYPES = [
   'unread.changed',
   'reminder.due',
   'workspace.changed',
+  'team_assignment',
+  'plan_update',
+  'sop_update',
+  'approval.requested',
+  'approval.resolved',
 ] as const;
 
 export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];
@@ -425,7 +430,13 @@ export function parseLiveEvent(eventType: string, rawData: string): LiveEvent | 
 }
 
 const WORKSPACE_REFRESH_EVENTS: ReadonlySet<string> = new Set(
-  LIVE_EVENT_TYPES.filter((event) => event !== 'message.created'),
+  LIVE_EVENT_TYPES.filter(
+    (event) =>
+      event !== 'message.created' &&
+      event !== 'team_assignment' &&
+      event !== 'plan_update' &&
+      event !== 'sop_update',
+  ),
 );
 
 /**

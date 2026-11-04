@@ -51,6 +51,9 @@ function channel(id: string, name: string, archived = false): ChannelView {
     name,
     description: '',
     mode: 'autonomous',
+    team: { leader_member_id: null, status: 'valid', reason: null },
+    workspace: { root: null, backend: 'local', allow_local_shell: 0 },
+    permission_mode: 'ask-writes',
     response_budget_limit: 3,
     archived_at: archived ? '2026-11-02T00:00:00.000Z' : null,
     deleted_at: null,
@@ -71,6 +74,7 @@ function task(status: TaskStatus, overrides: Partial<TaskView> = {}): TaskView {
     claimed_at: null,
     created_at: '2026-11-03T00:00:00.000Z',
     updated_at: '2026-11-03T00:00:00.000Z',
+    channel_mode: 'autonomous',
     allowed_transitions: BACKEND_ALLOWED[status],
     message_count: index,
     unread_count: index,
@@ -347,10 +351,14 @@ function workspaceView(): WorkspaceView {
     channels: CHANNELS.map((row) => ({ ...row })),
     dms: [],
     tasks: ALL_TASKS.map((row) => ({ ...row })),
+    pending_approvals: 0,
     unread_total: 0,
     unread_by_target: {},
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
     status_points: {},
+    workspace_runtime: {
+      docker: { available: false, image: 'node:22-bookworm-slim', reason: 'docker-unavailable' },
+    },
   };
 }
 

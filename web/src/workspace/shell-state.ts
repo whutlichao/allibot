@@ -12,6 +12,7 @@ export const WORKSPACE_PANELS = [
   'members',
   'roster',
   'agent-detail',
+  'approvals',
 ] as const;
 
 export type WorkspacePanel = (typeof WORKSPACE_PANELS)[number];

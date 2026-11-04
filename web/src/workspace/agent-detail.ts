@@ -12,8 +12,8 @@ import type { AgentView } from '@allibot/shared';
 export const AGENT_DETAIL_TABS = ['basic', 'skills', 'mcp'] as const;
 export type AgentDetailTab = (typeof AGENT_DETAIL_TABS)[number];
 
-/** 基础信息页签的四个区块；危险操作恒为最后一块。 */
-export const AGENT_BASIC_SECTIONS = ['stats', 'system-prompt', 'config', 'danger'] as const;
+/** 基础信息页签的区块；家目录 / 规则在配置之后，危险操作恒为最后一块。 */
+export const AGENT_BASIC_SECTIONS = ['stats', 'system-prompt', 'config', 'rules', 'danger'] as const;
 export type AgentBasicSection = (typeof AGENT_BASIC_SECTIONS)[number];
 
 /**

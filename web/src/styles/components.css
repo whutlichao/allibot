@@ -518,11 +518,16 @@
 
 .context-panel__kind,
 .context-panel__unread,
+.context-panel__workspace,
 .context-panel__description,
 .context-panel__status {
   margin: 0;
   font-size: 13px;
   color: var(--muted);
+}
+
+.context-panel__workspace[data-workspace-status='unavailable'] {
+  color: var(--error);
 }
 
 .context-panel__entries {
@@ -535,6 +540,122 @@
 .workspace-panel__title {
   margin: 0 0 8px;
   font-size: 15px;
+}
+
+/*
+ * 频道配置区（#37）：模式 / 队长两个控件与配置无效原因。只消费既有 token，
+ * 不引入新的色值；无效原因用状态点的 error 色表达后端事实。
+ */
+.channel-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-block-start: 4px;
+  padding-block-start: 8px;
+  border-block-start: 1px solid var(--border);
+}
+
+.channel-config__title {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.channel-config__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-config__label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.channel-config__select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 8px;
+}
+
+.channel-config__workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.channel-config__workspace-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  inline-size: 100%;
+}
+
+.channel-config__input {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  font: inherit;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 8px;
+}
+
+.channel-config__button {
+  flex: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.channel-config__button:disabled {
+  cursor: default;
+  color: var(--faint);
+}
+
+.channel-config__workspace-status {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.channel-config__workspace-status[data-workspace-status='unavailable'] {
+  color: var(--error);
+}
+
+.channel-config__invalid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--error);
+}
+
+.channel-config__invalid-title {
+  font-weight: 600;
+}
+
+.channel-config__hint,
+.channel-config__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.channel-config__error {
+  color: var(--error);
 }
 /*
  * 任务看板（Task Board）：按任务状态分列的呈现面。卡片状态色只消费既有
@@ -839,6 +960,71 @@
   resize: vertical;
 }
 
+.agent-detail__home-path,
+.agent-detail__rule-path {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.agent-detail__rules {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-detail__rule {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.agent-detail__rule-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-detail__rule-kind {
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.agent-detail__rule-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.agent-detail__rule[data-rule-status='unreadable'] .agent-detail__rule-status {
+  color: var(--warn-deep);
+}
+
+.agent-detail__rule-content {
+  margin: 0;
+  max-block-size: 160px;
+  overflow: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  color: var(--fg);
+}
+
+.agent-detail__rule-note,
+.agent-detail__rules-pending {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .agent-detail__save-bar {
   display: flex;
   align-items: center;
@@ -999,4 +1185,867 @@
 .member-roster__owner {
   font-size: 12px;
   color: var(--muted);
+}
+
+/* 运行记录面板（#38）：状态、reason、归属与时间是取证读数，不是消息气泡。 */
+.team-runs {
+  margin-block-start: 8px;
+  border-block-start: 1px solid var(--border);
+  padding-block-start: 8px;
+}
+
+.team-runs__title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.team-runs__empty {
+  margin: 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+.team-runs__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.team-runs__run {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+}
+
+.team-runs__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.team-runs__status {
+  font-weight: 600;
+}
+
+.team-runs__run[data-team-run-status='running'] .team-runs__status {
+  color: var(--working);
+}
+
+.team-runs__run[data-team-run-status='failed'] .team-runs__status {
+  color: var(--offline);
+}
+
+.team-runs__run[data-team-run-status='invalid-leader'] .team-runs__status {
+  color: var(--error);
+}
+
+.team-runs__attribution,
+.team-runs__reason,
+.team-runs__time {
+  margin: 0;
+  font-size: 13px;
+}
+
+.team-runs__reason,
+.team-runs__time {
+  color: var(--muted);
+}
+
+.team-runs__label {
+  margin-inline-end: 4px;
+  color: var(--faint);
+  font-weight: 500;
+}
+
+/* 分派区块（#39）：assignment 是运行记录，展开状态 / 跳数 / 摘录，不是消息。 */
+.team-runs__assignments {
+  border-block-start: 1px dashed var(--border);
+  margin-block-start: 4px;
+  padding-block-start: 4px;
+}
+
+.team-runs__assignments-title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--faint);
+  font-weight: 500;
+}
+
+.team-runs__assignment-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.team-runs__assignment {
+  border-inline-start: 2px solid var(--border);
+  padding-inline-start: 6px;
+  display: grid;
+  gap: 3px;
+}
+
+.team-runs__assignment[data-team-assignment-state='failed'] {
+  border-inline-start-color: var(--offline);
+}
+
+.team-runs__assignment[data-team-assignment-state='budget-exhausted'] {
+  border-inline-start-color: var(--working);
+}
+
+.team-runs__assignment[data-team-assignment-state='completed'] {
+  border-inline-start-color: var(--accent);
+}
+
+.team-runs__assignment-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.team-runs__assignment-state {
+  font-weight: 600;
+}
+
+.team-runs__assignment-jump {
+  color: var(--faint);
+}
+
+.team-runs__assignment-excerpt,
+.team-runs__assignment-reason {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Plan 区块（#40）：成员轮次内的工作清单，三词状态不是任务五态，也不是消息。 */
+.plan-panel {
+  margin-block-start: 8px;
+  border-block-start: 1px solid var(--border);
+  padding-block-start: 8px;
+}
+
+.plan-panel__title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.plan-panel__empty {
+  margin: 0;
+  color: var(--faint);
+  font-size: 13px;
+}
+
+.plan-panel__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.plan-panel__run {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+}
+
+.plan-panel__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.plan-panel__list-title {
+  margin: 0;
+  font-size: 12px;
+  color: var(--faint);
+  font-weight: 500;
+}
+
+.plan-panel__tasks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+}
+
+.plan-panel__task {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.plan-panel__position {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.plan-panel__task-title {
+  flex: 1;
+}
+
+.plan-panel__task-status {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.plan-panel__task[data-plan-task-status='in_progress'] .plan-panel__task-status {
+  color: var(--accent);
+}
+
+.plan-panel__task[data-plan-task-status='completed'] .plan-panel__task-status {
+  color: var(--online);
+}
+
+/* SOP 区块（#41）：频道级不可变定义、启动与只读 run 快照；不是消息/看板。 */
+.sop-panel {
+  margin-block-start: 10px;
+  border-block-start: 1px solid var(--border);
+  padding-block-start: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.sop-panel__title {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.sop-panel__form,
+.sop-panel__step,
+.sop-panel__definition {
+  display: grid;
+  gap: 6px;
+}
+
+.sop-panel__form-title,
+.sop-panel__runs-title {
+  margin: 0;
+  font-size: 12px;
+  color: var(--faint);
+  font-weight: 500;
+}
+
+.sop-panel__step {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.sop-panel__legend {
+  font-size: 12px;
+  color: var(--muted);
+  padding-inline: 4px;
+}
+
+.sop-panel__field {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.sop-panel__label {
+  color: var(--muted);
+}
+
+.sop-panel__input,
+.sop-panel__select {
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+
+.sop-panel__attempts {
+  max-inline-size: 80px;
+}
+
+.sop-panel__action,
+.sop-panel__submit,
+.sop-panel__start {
+  justify-self: start;
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent-deep);
+  background: var(--accent);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+
+.sop-panel__definitions,
+.sop-panel__steps,
+.sop-panel__run-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.sop-panel__steps {
+  padding-inline-start: 16px;
+  list-style: decimal;
+}
+
+.sop-panel__definition {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.sop-panel__definition-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.sop-panel__definition-step,
+.sop-panel__run {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 13px;
+}
+
+.sop-panel__step-roles,
+.sop-panel__run-detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sop-panel__run-phase {
+  color: var(--accent-deep);
+  font-weight: 500;
+}
+
+.sop-panel__empty,
+.sop-panel__hint {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.sop-panel__error {
+  margin: 0;
+  color: var(--error);
+  font-size: 12px;
+}
+
+.sop-panel__phase-strip {
+  flex-basis: 100%;
+  display: grid;
+  gap: 2px;
+}
+
+.sop-panel__phase-strip-label {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.sop-panel__phases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sop-panel__phase {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sop-panel__phase--active {
+  border-color: var(--accent-deep);
+  color: var(--accent-deep);
+  font-weight: 500;
+}
+
+.sop-panel__run-head {
+  flex-basis: 100%;
+}
+
+.sop-panel__run-details {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.sop-panel__run-steps {
+  flex-basis: 100%;
+  display: grid;
+  gap: 4px;
+  margin: 2px 0 0;
+  padding: 0 0 0 10px;
+  list-style: none;
+  border-left: 1px solid var(--border);
+}
+
+.sop-panel__run-step {
+  display: grid;
+  gap: 2px;
+}
+
+.sop-panel__run-step-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sop-panel__run-excerpt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.sop-panel__run-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--error);
+  font-size: 12px;
+}
+
+/* 权限档 / 规则集与审批面板 (#44 / D5.5 / D5.6) */
+.permission-rules {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.permission-rules__title,
+.approval-panel__title,
+.approval-panel__batch-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.permission-rules__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.permission-rules__head,
+.permission-rules__row {
+  display: grid;
+  grid-template-columns: 1.1fr 1.4fr 0.8fr auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.permission-rules__head {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.permission-rules__tool,
+.permission-rules__pattern,
+.permission-rules__behavior {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.permission-rules__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.permission-rules__add,
+.permission-rules__remove,
+.permission-rules__save,
+.approval-panel__back,
+.approval-panel__approve,
+.approval-panel__deny {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--fg);
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.permission-rules__save,
+.approval-panel__approve {
+  border-color: var(--accent);
+  color: var(--accent-deep);
+}
+
+.approval-panel__deny {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.permission-rules__empty,
+.permission-rules__error,
+.approval-panel__empty,
+.approval-panel__decided,
+.approval-panel__history {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.permission-rules__error {
+  color: var(--error);
+}
+
+.approval-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.approval-panel__entry {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--fg);
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.approval-panel__entry-status {
+  font-weight: 600;
+}
+
+.approval-panel__entry-meta {
+  color: var(--faint);
+}
+
+.approval-panel__detail,
+.approval-panel__batch {
+  display: grid;
+  gap: 8px;
+}
+
+.approval-panel__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+
+.approval-panel__fact dt {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.approval-panel__fact dd {
+  margin: 0;
+  font-size: 12px;
+}
+
+.approval-panel__batch {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.approval-panel__call {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.approval-panel__call-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.approval-panel__pattern {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.approval-panel__args {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  background: var(--panel-2);
+  border-radius: 4px;
+  padding: 6px;
+  font-size: 11px;
+}
+
+.approval-panel__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.approval-panel__decision {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Skill 页签 (#48 / D6.5): 左栏安装列表、右栏元数据 + SKILL.md 配置文本。 */
+.skills-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skills-tab__top {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.skills-tab__pick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+}
+
+.skills-tab__pick-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.skills-tab__select {
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.skills-tab__action {
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.skills-tab__action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.skills-tab__hint,
+.skills-tab__pending,
+.skills-tab__empty {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.skills-tab__error {
+  color: var(--error);
+  font-size: 13px;
+}
+
+.skills-tab__columns {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(320px, 1.2fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .skills-tab__columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.skills-tab__heading {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.skills-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skills-list__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.skills-list__row--selected {
+  border-color: var(--accent-fill);
+  background: var(--panel-2);
+}
+
+.skills-list__select {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.skills-list__name {
+  font-weight: 600;
+}
+
+.skills-list__hash,
+.skills-detail__value code {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.skills-list__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.skills-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.skills-detail__name {
+  margin: 0;
+  font-size: 15px;
+}
+
+.skills-detail__facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+}
+
+.skills-detail__fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.skills-detail__label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.skills-detail__value {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.skills-detail__heading {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.skills-detail__markdown {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--fg);
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.skills-detail__delete {
+  align-self: flex-start;
+  padding: 5px 12px;
+  border: 1px solid var(--error);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--error);
+  cursor: pointer;
 }

@@ -82,6 +82,7 @@ export const ZH_CN = {
   'wake.mention': { text: '本轮由个人提及唤醒', params: [] },
   'wake.claim': { text: '本轮由认领唤醒', params: [] },
   'wake.continue': { text: '本轮由自动续跑唤醒', params: [] },
+  'wake.teamChange': { text: '本轮由任务变化唤醒', params: [] },
   'round.replied': { text: '已回复', params: [] },
   'round.ignored': { text: '自判忽略：本轮没有需要回应的话', params: [] },
   'round.failed': { text: '处理失败，需要排查', params: [] },
@@ -93,6 +94,10 @@ export const ZH_CN = {
   'round.mandatory.claim': { text: '本轮由认领唤醒：这是确定信号，必须回应', params: [] },
   'round.mandatory.humanMessage': { text: '本轮由人类消息唤醒：这是确定信号，必须回应', params: [] },
   'round.mandatory.continue': { text: '本轮由自动续跑唤醒：这是确定信号，必须回应', params: [] },
+  'round.mandatory.teamChange': {
+    text: '本轮由任务变化唤醒：这是确定信号，必须回应',
+    params: [],
+  },
   'round.silent.allowed': {
     text: '本轮不是确定信号：结构化沉默是正常协议结果，不按失败收口',
     params: [],
@@ -131,9 +136,37 @@ export const ZH_CN = {
     text: '已按结构化动作 continue_task 申请续跑（本世代第 {round} 轮）',
     params: ['round'],
   },
+  'round.continue.teamDisabled': {
+    text: 'team 任务线程不提供自动续跑（结构化动作 continue_task 被拒绝），本轮不产生续跑轮次',
+    params: [],
+  },
   'round.continue.paused': {
     text: '结构化动作 continue_task 到达本世代上限（{rounds} 轮），不再续跑',
     params: ['rounds'],
+  },
+  // 转派（#38 / D3.5）：受派者的结构化动作。拒绝是结构化结果，不是轮次失败；
+  // 转派本身只追加 system 变更记录，不写消息正文、不开人类世代。
+  'round.transfer.done': {
+    text: '已按结构化动作 transfer_task 把任务转派给 {assignee}',
+    params: ['assignee'],
+  },
+  'round.transfer.rejected': {
+    text: '结构化动作 transfer_task 被拒绝：{reason}',
+    params: ['reason'],
+  },
+  'round.transfer.notAssignee': {
+    text: '只有当前受派者才能转派这张任务',
+    params: [],
+  },
+  'round.transfer.self': { text: '不能把任务转派给自己', params: [] },
+  'round.transfer.same': { text: '目标成员已经是当前受派者', params: [] },
+  'round.transfer.notMember': {
+    text: '目标必须是同一频道的另一个活 Agent 成员',
+    params: [],
+  },
+  'round.transfer.noTarget': {
+    text: '结构化动作没有给出目标成员',
+    params: [],
   },
   'system.member.piercedJoin': {
     text: '{name} 加入了频道：它被点名时并不在频道里，回复时顺带加入（成员变化只随真实回复发生）',
@@ -158,6 +191,56 @@ export const ZH_CN = {
     text: '这条消息来自人类（owner）：人类消息是确定信号，必须回应。',
     params: [],
   },
+  // 队长被任务变化唤醒的那一轮（#38 / D3.2）：任务变化是确定信号，与人类
+  // 消息、认领、提及的可读文案分开，不能写下没发生过的来源。
+  'prompt.teamChange.mandatory': {
+    text: '这次唤醒来自任务变化（建任务 / 改派 / 转派）：作为队长，你必须回应并推进这件事。',
+    params: [],
+  },
+  // 显示名身份句（D3.7）：与 M1 相同，由 member.display_name 派生，不是库内
+  // 可编辑的系统提示。它属于每一轮，不只在队长轮。
+  'prompt.identity': { text: '你的名字是 {name}。', params: ['name'] },
+  // 队长职责段（#39 / D3.7）：三段规则之后再追加一段，说明 TeamAssign 的用法、
+  // 成员在同一轮运行、结果作为工具结果回来，以及 transfer_task 只属于受派者。
+  'prompt.teamLeader.duties': {
+    text:
+      '你是队长：用 TeamAssign 拆解并分派工作给成员（入参 {member_id, instruction}）；' +
+      '成员会在同一轮内运行，结果作为工具结果回到你这里；成员的产出不会落成频道消息。' +
+      '只有当你自己是当前任务的受派者时，才使用 transfer_task。',
+    params: [],
+  },
+  // TeamAssign 子轮次的输入段落：子任务说明由队长给出，产出只回到队长。
+  'prompt.teamAssignment.context': {
+    text: '你正在执行队长分派的子任务：{instruction}',
+    params: ['instruction'],
+  },
+  // SOP 内部轮次（#45 / D4.3）：执行者 / 校验者段落，产出不写频道消息。
+  'prompt.sop.discipline': {
+    text:
+      '这是 SOP 内部轮次：产出只回到 SOP 运行，不写频道消息、不写任务、不进未读 / 搜索 / 唤醒 / 预算。',
+    params: [],
+  },
+  'prompt.sop.executor': {
+    text:
+      '你正在执行 SOP「{title}」的第 {step} 步（第 {attempt}/{max_attempts} 次尝试）。' +
+      '步骤说明：{description}。只执行这一步，并说明结果。',
+    params: ['title', 'step', 'attempt', 'max_attempts', 'description'],
+  },
+  'prompt.sop.verifier': {
+    text:
+      '你正在校验 SOP「{title}」的第 {step} 步（第 {attempt}/{max_attempts} 次尝试）。' +
+      '执行者输出：{executor}。必须返回结构化 sopVerdict（pass 或 fail）。',
+    params: ['title', 'step', 'attempt', 'max_attempts', 'executor'],
+  },
+
+  // 已安装技能 (Skill) 本轮的系统提示段（#48 / D5.2 / D6.3）：技能正文是提示
+  // 素材，不是工具、不是权限来源；装配与 workspace 无关，DM / 无根轮次同样有。
+  'prompt.skills': {
+    text:
+      '下面是本轮装配的技能（成员家目录优先于全局公共库）。技能正文是提示素材：' +
+      '它不是工具，也不能让你获得未装配的工具，不能绕过权限档、规则或审批。\n{skills}',
+    params: ['skills'],
+  },
 
   // 示例文案：用来看消息密度在壳里的呈现。
   'message.sample.author': { text: '示例成员', params: [] },
@@ -175,6 +258,10 @@ export const ZH_CN = {
   },
   'task.event.assignee.assigned': { text: '任务已指派给 {assignee}。', params: ['assignee'] },
   'task.event.assignee.unassigned': { text: '任务已收回指派。', params: [] },
+  'task.event.assignee.transferred': {
+    text: '任务由 {previous} 转派给 {assignee}。',
+    params: ['previous', 'assignee'],
+  },
   'task.event.assignee.reassigned': {
     text: '任务由 {previous} 改派给 {assignee}。',
     params: ['previous', 'assignee'],
@@ -300,7 +387,17 @@ export const ZH_CN = {
   'workspace.agentDetail.section.stats': { text: '统计', params: [] },
   'workspace.agentDetail.section.systemPrompt': { text: '系统提示', params: [] },
   'workspace.agentDetail.section.config': { text: '配置', params: [] },
+  'workspace.agentDetail.section.rules': { text: '家目录与规则', params: [] },
   'workspace.agentDetail.section.danger': { text: '危险操作', params: [] },
+  'workspace.agentDetail.field.homePath': { text: '家目录', params: [] },
+  'workspace.agentDetail.rules.global': { text: '全局规则基座', params: [] },
+  'workspace.agentDetail.rules.systemPrompt': { text: '系统提示（库内）', params: [] },
+  'workspace.agentDetail.rules.project': { text: '项目补充', params: [] },
+  'workspace.agentDetail.rules.present': { text: '已读取', params: [] },
+  'workspace.agentDetail.rules.absent': { text: '缺失', params: [] },
+  'workspace.agentDetail.rules.unreadable': { text: '不可读', params: [] },
+  'workspace.agentDetail.rules.pending': { text: '规则读取中…', params: [] },
+  'workspace.agentDetail.rules.readOnly': { text: '规则由人维护，这里只读显示。', params: [] },
   'workspace.agentDetail.field.status': { text: '状态点', params: [] },
   'workspace.agentDetail.field.model': { text: '模型标识', params: [] },
   'workspace.agentDetail.field.credential': { text: '凭证', params: [] },
@@ -317,9 +414,75 @@ export const ZH_CN = {
   'workspace.agentDetail.enabled.off': { text: '已停用', params: [] },
   'workspace.agentDetail.yes': { text: '是', params: [] },
   'workspace.agentDetail.no': { text: '否', params: [] },
-  'workspace.agentDetail.t11.placeholder': { text: '依赖规格 T11（M2）', params: [] },
-  'workspace.agentDetail.t11.body': {
-    text: 'skills 与 mcp 页签在 M2 交付；M1 只呈现基础信息和配置。',
+  // skills 页签 (#48 / D6.5): 左栏安装列表、右栏元数据 + SKILL.md 正文 + 删除；
+  // 顶部是单条导入、刷新候选与全部导入。技能正文按配置文本呈现。
+  'workspace.agentDetail.skills.title': { text: '技能', params: [] },
+  'workspace.agentDetail.skills.pending': { text: '技能读取中…', params: [] },
+  'workspace.agentDetail.skills.empty': {
+    text: '还没有安装技能。可以把技能目录放到 ~/.agents/skills/ 后导入，或从本机目录安装。',
+    params: [],
+  },
+  'workspace.agentDetail.skills.selectHint': { text: '从左侧选择一条技能查看详情。', params: [] },
+  'workspace.agentDetail.skills.importTitle': { text: '导入', params: [] },
+  'workspace.agentDetail.skills.importSelected': { text: '导入所选', params: [] },
+  'workspace.agentDetail.skills.refreshCandidates': { text: '刷新候选', params: [] },
+  'workspace.agentDetail.skills.importAll': { text: '全部导入', params: [] },
+  'workspace.agentDetail.skills.importing': { text: '导入中…', params: [] },
+  'workspace.agentDetail.skills.candidatesPending': { text: '候选读取中…', params: [] },
+  'workspace.agentDetail.skills.candidatesEmpty': {
+    text: '没有可导入的候选；把技能放到 ~/.agents/skills/ 后刷新。',
+    params: [],
+  },
+  'workspace.agentDetail.skills.candidatesUnavailable': {
+    text: '候选目录不存在：~/.agents/skills/',
+    params: [],
+  },
+  'workspace.agentDetail.skills.candidateImportable': { text: '可导入', params: [] },
+  'workspace.agentDetail.skills.candidateInstalled': { text: '已安装', params: [] },
+  'workspace.agentDetail.skills.enabled': { text: '已启用', params: [] },
+  'workspace.agentDetail.skills.disabled': { text: '已停用', params: [] },
+  'workspace.agentDetail.skills.field.name': { text: '名字', params: [] },
+  'workspace.agentDetail.skills.field.hash': { text: '内容 hash', params: [] },
+  'workspace.agentDetail.skills.field.source': { text: '来源', params: [] },
+  'workspace.agentDetail.skills.field.enabled': { text: '启停', params: [] },
+  'workspace.agentDetail.skills.field.created': { text: '创建时间', params: [] },
+  'workspace.agentDetail.skills.field.updated': { text: '更新时间', params: [] },
+  'workspace.agentDetail.skills.markdown': { text: 'SKILL.md 正文', params: [] },
+  'workspace.agentDetail.skills.delete': { text: '删除技能', params: [] },
+  'workspace.agentDetail.skills.deleting': { text: '删除中…', params: [] },
+  'workspace.agentDetail.skills.importFailed': { text: '导入失败。', params: [] },
+  'workspace.agentDetail.skills.toggleFailed': { text: '启停失败。', params: [] },
+  'workspace.agentDetail.skills.deleteFailed': { text: '删除失败。', params: [] },
+  'workspace.agentDetail.skills.refreshFailed': { text: '候选刷新失败。', params: [] },
+  'workspace.agentDetail.skills.enabledToggle': { text: '启用 {name}', params: ['name'] },
+  // mcp 页签 (#47 / D6.5): 上块是结构化条目表单，下块是同一文件的原文文本域。
+  'workspace.agentDetail.mcp.entries': { text: '条目', params: [] },
+  'workspace.agentDetail.mcp.raw': { text: '原文', params: [] },
+  'workspace.agentDetail.mcp.entriesEmpty': {
+    text: '家目录还没有 mcp.json；新增条目并保存即可创建。',
+    params: [],
+  },
+  'workspace.agentDetail.mcp.name': { text: '名称', params: [] },
+  'workspace.agentDetail.mcp.transport': { text: 'transport', params: [] },
+  'workspace.agentDetail.mcp.enabled': { text: '启用', params: [] },
+  'workspace.agentDetail.mcp.command': { text: 'command', params: [] },
+  'workspace.agentDetail.mcp.args': { text: 'args（每行一个）', params: [] },
+  'workspace.agentDetail.mcp.url': { text: 'url', params: [] },
+  'workspace.agentDetail.mcp.envNames': { text: 'env_names（逗号分隔，只存变量名）', params: [] },
+  'workspace.agentDetail.mcp.addEntry': { text: '新增条目', params: [] },
+  'workspace.agentDetail.mcp.removeEntry': { text: '删除条目', params: [] },
+  'workspace.agentDetail.mcp.saveEntries': { text: '保存条目', params: [] },
+  'workspace.agentDetail.mcp.saveRaw': { text: '保存原文', params: [] },
+  'workspace.agentDetail.mcp.saving': { text: '保存中…', params: [] },
+  'workspace.agentDetail.mcp.saveFailed': { text: 'mcp.json 保存失败，请修正后重试。', params: [] },
+  'workspace.agentDetail.mcp.fileMissing': { text: 'mcp.json 缺失：本轮不装配 MCP。', params: [] },
+  'workspace.agentDetail.mcp.diagnostic': { text: '诊断', params: [] },
+  'workspace.agentDetail.mcp.sameFile': {
+    text: '两块读写同一份家目录 mcp.json；管理面与运行期装配读的是它。',
+    params: [],
+  },
+  'workspace.agentDetail.mcp.consent': {
+    text: '远端 http / sse 服务器需要先确认远端数据流，否则运行期不会连接。',
     params: [],
   },
   'workspace.agentDetail.save': { text: '保存', params: [] },
@@ -358,4 +521,531 @@ export const ZH_CN = {
   'workspace.member.notice.open': { text: '查看成员面板', params: [] },
   'workspace.roster.channelOnly': { text: '成员名册只属于频道。', params: [] },
   'workspace.roster.ownerRole': { text: 'owner', params: [] },
+  // team 模式配置（#37）：频道配置区的模式 / 队长 / 配置无效原因。模式与
+  // 队长都是频道级配置，不落消息、不唤醒；配置无效时消息照常落库但零唤醒。
+  'channel.config.title': { text: '频道配置', params: [] },
+  'channel.config.mode.label': { text: '协作拓扑', params: [] },
+  'channel.config.mode.autonomous': { text: '自主', params: [] },
+  'channel.config.mode.team': { text: 'team 模式', params: [] },
+  'channel.config.leader.label': { text: '队长', params: [] },
+  'channel.config.leader.placeholder': { text: '选择队长', params: [] },
+  'channel.config.leader.unknown': { text: '未知成员', params: [] },
+  'channel.config.leader.saving': { text: '保存中…', params: [] },
+  'channel.config.leader.saveFailed': { text: '保存失败，请重试。', params: [] },
+  'channel.config.leader.loading': { text: '正在读取频道成员…', params: [] },
+  'channel.config.invalid': { text: '配置无效', params: [] },
+  'channel.config.workspace.root.label': { text: '项目根', params: [] },
+  'channel.config.workspace.root.placeholder': { text: '输入项目根的绝对路径', params: [] },
+  'channel.config.workspace.root.save': { text: '保存项目根', params: [] },
+  'channel.config.workspace.backend.label': { text: '工作区后端', params: [] },
+  'channel.config.workspace.backend.local': { text: '本地', params: [] },
+  'channel.config.workspace.backend.docker': { text: 'Docker', params: [] },
+  'workspace.agent.workspaceBackend.followChannel': { text: '跟随频道', params: [] },
+  'channel.config.workspace.status.label': { text: '工作区状态', params: [] },
+  'channel.config.workspace.shell.label': { text: '允许本地 shell', params: [] },
+  'channel.config.workspace.shell.risk': {
+    text: '本地 shell 无沙箱：命令以项目根为工作目录运行，且每次调用都必须人工审批。',
+    params: [],
+  },
+  'workspace.status.available': { text: '可用', params: [] },
+  'workspace.status.line': { text: '工作区状态：{status}', params: ['status'] },
+  'workspace.status.loading': { text: '正在读取工作区状态…', params: [] },
+  'workspace.status.reason.workspaceRootMissing': { text: '项目根不存在或不可读', params: [] },
+  'workspace.status.reason.dockerUnavailable': { text: 'Docker 后端不可用', params: [] },
+  'workspace.status.reason.dockerImageMissing': { text: 'Docker 镜像不存在或无法拉取', params: [] },
+  'workspace.status.reason.dockerConsentMissing': { text: '镜像未确认远端数据流', params: [] },
+  'workspace.round.rootMissing': {
+    text: '工作区不可用：项目根不存在或不可读（workspace-root-missing）。',
+    params: [],
+  },
+  'workspace.round.dockerUnavailable': {
+    text: '工作区不可用：Docker 后端不可用（docker-unavailable），本轮不回落本地文件工具。',
+    params: [],
+  },
+  'workspace.round.dockerImageMissing': {
+    text: '工作区不可用：Docker 镜像不存在或无法拉取（docker-image-missing），本轮不回落本地文件工具。',
+    params: [],
+  },
+  'workspace.round.dockerConsentMissing': {
+    text: '工作区不可用：镜像未确认远端数据流（docker-consent-missing），本轮不回落本地文件工具。',
+    params: [],
+  },
+  // 运行面板（#38）：run 是取证面，不是消息；状态、reason、归属与时间都来自
+  // `GET /api/targets/{id}/team-runs` 的同一份读数。
+  'workspace.teamRuns.title': { text: '运行记录', params: [] },
+  'workspace.teamRuns.empty': { text: '还没有 team 运行记录。', params: [] },
+  'workspace.teamRuns.status.running': { text: '运行中', params: [] },
+  'workspace.teamRuns.status.completed': { text: '已完成', params: [] },
+  'workspace.teamRuns.status.failed': { text: '失败', params: [] },
+  'workspace.teamRuns.status.invalidLeader': { text: '队长不可用', params: [] },
+  'workspace.teamRuns.attribution.task': { text: '任务', params: [] },
+  'workspace.teamRuns.attribution.channel': { text: '频道', params: [] },
+  'workspace.teamRuns.reason': { text: '原因', params: [] },
+  'workspace.teamRuns.time': { text: '时间', params: [] },
+  // 队长不可用的可读原因（D3.8）：读模型与轮次共用同一段文案。
+  'team.invalid.leaderMissing': { text: '队长成员不存在或已被移除。', params: [] },
+  'team.invalid.leaderNotAgent': { text: '队长必须是 Agent 成员。', params: [] },
+  'team.invalid.leaderDeleted': { text: '队长已被软删除。', params: [] },
+  'team.invalid.leaderDisabled': { text: '队长已被禁用（enabled=0）。', params: [] },
+  'team.invalid.leaderNotMember': { text: '队长已不是该频道的成员。', params: [] },
+  'team.invalid.modelMissing': { text: '队长没有配置可用的模型。', params: [] },
+  'team.invalid.consentMissing': { text: '队长所属模型 provider 尚未确认远端数据流告知。', params: [] },
+  // 运行记录（#38）：进程重启把残留 running 收口为 failed，reason 带 interrupted；
+  // 已计跳不退款，也不产生消息、assignment 或新轮次。
+  'team.run.interrupted': {
+    text: '进程重启：残留的 running 运行记录收口为 failed（interrupted），已计跳不退款',
+    params: [],
+  },
+  'team.invalid.credentialMissing': {
+    text: '队长所属模型 provider 缺少凭证（{credential_env}）。',
+    params: ['credential_env'],
+  },
+  // 目标上下文的工作区不可用也是队长无效事实（D3.8 / D5.7）：读模型、消息
+  // 触发与 team-change 触发共用这段文案，而不是让轮次失败后再说原因。
+  'team.invalid.workspaceRootMissing': {
+    text: '队长在目标上下文不可用：项目根不存在或不可读（workspace-root-missing）。',
+    params: [],
+  },
+  'team.invalid.dockerUnavailable': {
+    text: '队长在目标上下文不可用：Docker 后端不可用（docker-unavailable）。',
+    params: [],
+  },
+  'team.invalid.dockerImageMissing': {
+    text: '队长在目标上下文不可用：Docker 镜像不存在或无法拉取（docker-image-missing）。',
+    params: [],
+  },
+  'team.invalid.dockerConsentMissing': {
+    text: '队长在目标上下文不可用：镜像未确认远端数据流（docker-consent-missing）。',
+    params: [],
+  },
+  // TeamAssign 目标成员的可用性（#39 / D3.4 第 1 步）：与队长的不可用原因
+  // 分开措辞，因为被分派的是成员，不是队长。
+  'team.member.missing': { text: '目标成员不存在或已被移除。', params: [] },
+  'team.member.notAgent': { text: '目标必须是 Agent 成员。', params: [] },
+  'team.member.deleted': { text: '目标成员已被软删除。', params: [] },
+  'team.member.disabled': { text: '目标成员已被禁用（enabled=0）。', params: [] },
+  'team.member.notMember': { text: '目标成员已不是该频道的成员。', params: [] },
+  'team.member.modelMissing': { text: '目标成员没有配置可用的模型。', params: [] },
+  'team.member.consentMissing': {
+    text: '目标成员所属模型 provider 尚未确认远端数据流告知。',
+    params: [],
+  },
+  'team.member.credentialMissing': {
+    text: '目标成员所属模型 provider 缺少凭证（{credential_env}）。',
+    params: ['credential_env'],
+  },
+  'team.member.workspaceRootMissing': {
+    text: '目标成员在目标上下文不可用：项目根不存在或不可读（workspace-root-missing）。',
+    params: [],
+  },
+  'team.member.dockerUnavailable': {
+    text: '目标成员在目标上下文不可用：Docker 后端不可用（docker-unavailable）。',
+    params: [],
+  },
+  'team.member.dockerImageMissing': {
+    text: '目标成员在目标上下文不可用：Docker 镜像不存在或无法拉取（docker-image-missing）。',
+    params: [],
+  },
+  'team.member.dockerConsentMissing': {
+    text: '目标成员在目标上下文不可用：镜像未确认远端数据流（docker-consent-missing）。',
+    params: [],
+  },
+  // 分派的固定裁决顺序（D3.4）：先校验调用者与目标，再解析预算 target，
+  // 再原子扣跳；失败落 failed / budget-exhausted，jump_consumed 定格。
+  'team.assignment.reason.notLeader': {
+    text: 'TeamAssign 只能由该频道的队长发起。',
+    params: [],
+  },
+  'team.assignment.reason.self': {
+    text: '不能把子任务分派给队长本人。',
+    params: [],
+  },
+  'team.assignment.budgetExhausted': {
+    text: '分派预算耗尽：本世代已用 {used}/{limit} 跳，本次分派未运行成员。',
+    params: ['used', 'limit'],
+  },
+  'team.assignment.memberFailed': {
+    text: '成员子轮次失败：{reason}',
+    params: ['reason'],
+  },
+  'team.assignment.memberNoOutput': {
+    text: '成员子轮次没有可用的产出。',
+    params: [],
+  },
+  'team.assignment.truncated': { text: '…（摘录已截断）', params: [] },
+  // Plan 工具的输入错误（#40）：工具结果的可读原因，不是 HTTP 错误文案。
+  'plan.error.titleRequired': { text: '计划项标题不能为空。', params: [] },
+  'plan.error.statusInvalid': {
+    text: '计划项状态无效：{status}；只接受 pending / in_progress / completed。',
+    params: ['status'],
+  },
+  // 运行面板的分派区块（#39）：assignment 是运行记录，不渲染成消息。
+  'workspace.teamRuns.assignments.title': { text: '分派', params: [] },
+  'workspace.teamRuns.assignments.jump': { text: '跳数', params: [] },
+  'workspace.teamRuns.assignments.excerpt': { text: '摘录', params: [] },
+  'workspace.teamRuns.assignments.reason': { text: '原因', params: [] },
+  'workspace.teamRuns.assignments.state.running': { text: '运行中', params: [] },
+  'workspace.teamRuns.assignments.state.completed': { text: '已完成', params: [] },
+  'workspace.teamRuns.assignments.state.failed': { text: '失败', params: [] },
+  'workspace.teamRuns.assignments.state.budgetExhausted': { text: '预算耗尽', params: [] },
+  // 运行面板的 Plan 区块（#40）：plan_task 是自己的三词状态，不是任务五态。
+  'workspace.plan.title': { text: '计划', params: [] },
+  'workspace.plan.empty': { text: '暂无计划', params: [] },
+  'workspace.plan.member': { text: '成员', params: [] },
+  'workspace.plan.tasks': { text: '清单', params: [] },
+  'workspace.plan.updatedAt': { text: '更新于', params: [] },
+  'workspace.plan.status.pending': { text: '待开始', params: [] },
+  'workspace.plan.status.inProgress': { text: '进行中', params: [] },
+  'workspace.plan.status.completed': { text: '已完成', params: [] },
+  // SOP 定义与启动（#41 / D4.2）：owner 显式启动的多步流程。定义不可变，
+  // 运行按五 phase 只读呈现；它不是消息、任务或 team pipeline。
+  'workspace.sop.title': { text: 'SOP 流程', params: [] },
+  'workspace.sop.empty': { text: '暂无 SOP 定义', params: [] },
+  'workspace.sop.archived': { text: '归档频道不能创建或启动 SOP。', params: [] },
+  'workspace.sop.start': { text: '启动', params: [] },
+  'workspace.sop.form.title': { text: '新建 SOP', params: [] },
+  'workspace.sop.form.name': { text: '名称', params: [] },
+  'workspace.sop.form.step': { text: '步骤 {index}', params: ['index'] },
+  'workspace.sop.form.stepTitle': { text: '标题', params: [] },
+  'workspace.sop.form.stepDescription': { text: '说明', params: [] },
+  'workspace.sop.form.executor': { text: '执行者', params: [] },
+  'workspace.sop.form.verifier': { text: '校验者', params: [] },
+  'workspace.sop.form.maxAttempts': { text: '最大尝试', params: [] },
+  'workspace.sop.form.addStep': { text: '添加步骤', params: [] },
+  'workspace.sop.form.removeStep': { text: '删除步骤', params: [] },
+  'workspace.sop.form.submit': { text: '创建定义', params: [] },
+  'workspace.sop.form.agentsPending': { text: '成员表读取中。', params: [] },
+  'workspace.sop.form.saveFailed': { text: 'SOP 定义创建失败。', params: [] },
+  'workspace.sop.form.startFailed': { text: 'SOP 启动失败。', params: [] },
+  'workspace.sop.runs.title': { text: '运行', params: [] },
+  'workspace.sop.runs.empty': { text: '暂无运行', params: [] },
+  'workspace.sop.runs.currentStep': { text: '当前步骤', params: [] },
+  'workspace.sop.runs.startedAt': { text: '开始', params: [] },
+  'workspace.sop.runs.finishedAt': { text: '结束', params: [] },
+  'workspace.sop.phase.pending': { text: '待开始', params: [] },
+  'workspace.sop.phase.running': { text: '运行中', params: [] },
+  'workspace.sop.phase.awaiting': { text: '等待中', params: [] },
+  'workspace.sop.phase.completed': { text: '已完成', params: [] },
+  'workspace.sop.phase.failed': { text: '失败', params: [] },
+  'workspace.sop.runs.attempt': { text: '尝试', params: [] },
+  'workspace.sop.runs.waitingOn': { text: '等待', params: [] },
+  'workspace.sop.runs.phaseStrip': { text: '阶段', params: [] },
+  'workspace.sop.runs.executorExcerpt': { text: '执行者输出', params: [] },
+  'workspace.sop.runs.verifierExcerpt': { text: '校验者输出', params: [] },
+  'workspace.sop.runs.error': { text: '错误', params: [] },
+  'workspace.sop.waiting.verifier': { text: '校验者判定', params: [] },
+  'workspace.sop.waiting.approval': { text: '审批', params: [] },
+  // SOP 运行收口与轮次失败的可读原因（后端）。
+  'sop.run.interrupted': { text: 'SOP 运行因进程重启中断（interrupted）。', params: [] },
+  'sop.run.verifier.noVerdict': {
+    text: '校验者未返回结构化 sopVerdict，无法判定这一步。',
+    params: [],
+  },
+  'sop.run.verifier.noReason': {
+    text: '校验者判定为 fail，但没有给出可读说明。',
+    params: [],
+  },
+  'sop.run.round.failed': { text: 'SOP 轮次失败：{reason}', params: ['reason'] },
+  // 权限档 / 规则 / 审批（#44 / D5.5 / D5.6）：三档权限、规则集与 HITL 面。
+  'permission.approval.timeout': {
+    text: '审批等待超时（600 秒），本轮以失败收口。',
+    params: [],
+  },
+  'workspace.permission.mode.label': { text: '权限档', params: [] },
+  'workspace.permission.mode.readOnly': { text: '只读', params: [] },
+  'workspace.permission.mode.askWrites': { text: '写前确认', params: [] },
+  'workspace.permission.mode.trustedWrites': { text: '信任写入', params: [] },
+  'workspace.permission.mode.followChannel': { text: '跟随频道', params: [] },
+  'workspace.permission.rules.title': { text: '权限规则', params: [] },
+  'workspace.permission.rules.empty': { text: '暂无规则', params: [] },
+  'workspace.permission.rules.tool': { text: '工具', params: [] },
+  'workspace.permission.rules.pattern': { text: '匹配', params: [] },
+  'workspace.permission.rules.behavior': { text: '行为', params: [] },
+  'workspace.permission.rules.add': { text: '添加规则', params: [] },
+  'workspace.permission.rules.remove': { text: '删除', params: [] },
+  'workspace.permission.rules.save': { text: '保存规则', params: [] },
+  'workspace.permission.rules.saveFailed': { text: '规则保存失败。', params: [] },
+  'workspace.permission.behavior.allow': { text: '放行', params: [] },
+  'workspace.permission.behavior.ask': { text: '询问', params: [] },
+  'workspace.permission.behavior.deny': { text: '拒绝', params: [] },
+  'workspace.approval.title': { text: '审批', params: [] },
+  'workspace.approval.empty': { text: '暂无审批', params: [] },
+  'workspace.approval.open': { text: '打开审批面板', params: [] },
+  'workspace.approval.status.pending': { text: '等待确认', params: [] },
+  'workspace.approval.status.confirmed': { text: '已批准', params: [] },
+  'workspace.approval.status.denied': { text: '已拒绝', params: [] },
+  'workspace.approval.status.failed': { text: '已失败', params: [] },
+  'workspace.approval.status.expired': { text: '已过期', params: [] },
+  'workspace.approval.context.round': { text: '普通轮次', params: [] },
+  'workspace.approval.context.teamAssignment': { text: 'team 分派', params: [] },
+  'workspace.approval.context.sop': { text: 'SOP', params: [] },
+  'workspace.approval.target': { text: '目标', params: [] },
+  'workspace.approval.batch': { text: '批次 {index}', params: ['index'] },
+  'workspace.approval.approve': { text: '批准', params: [] },
+  'workspace.approval.deny': { text: '拒绝', params: [] },
+  'workspace.approval.decided': { text: '已决策', params: [] },
+  'workspace.approval.detail': { text: '审批详情', params: [] },
+  'workspace.approval.back': { text: '返回列表', params: [] },
+  'workspace.approval.shell.command': { text: '命令', params: [] },
+  'workspace.approval.shell.cwd': { text: '工作目录', params: [] },
+  // 后端诊断（D2.1 / D5.4 / D6）：这些文案由后端生成，按库内语言偏好渲染；
+  // 键只描述事实，参数只带标识与可读细节，从不携带 env 值或凭据。
+  'mcp.file.invalidJson': { text: 'mcp.json 不是合法 JSON', params: [] },
+  'mcp.file.topNotObject': { text: 'mcp.json 顶层必须是对象', params: [] },
+  'mcp.file.unknownTop': {
+    text: 'mcp.json 含未知字段：{field}',
+    params: ['field'],
+  },
+  'mcp.file.serversRequired': { text: 'mcp.json 必须含 servers 数组', params: [] },
+  'mcp.file.duplicateName': {
+    text: 'mcp.json 条目名重复：{name}',
+    params: ['name'],
+  },
+  'mcp.file.entriesArray': { text: 'entries 必须是数组', params: [] },
+  'mcp.file.duplicateEntry': { text: '条目名重复：{name}', params: ['name'] },
+  'mcp.file.unreadable': { text: 'mcp.json 不可读：{path}', params: ['path'] },
+  'mcp.file.bodyObject': { text: '请求体必须是对象', params: [] },
+  'mcp.file.entriesOrRaw': {
+    text: '请求体必须恰好给 entries 或 raw 之一',
+    params: [],
+  },
+  'mcp.file.unknownField': { text: '未知字段：{field}', params: ['field'] },
+  'mcp.file.rawString': { text: 'raw 必须是字符串', params: [] },
+  'mcp.file.remoteUnconfirmed': {
+    text: '远端 MCP 未确认数据面，运行期不会连接：{names}',
+    params: ['names'],
+  },
+  'mcp.file.entryNotObject': {
+    text: '第 {index} 个条目必须是对象',
+    params: ['index'],
+  },
+  'mcp.file.entryTransport': {
+    text: '第 {index} 个条目的 transport 必须是 stdio / http / sse',
+    params: ['index'],
+  },
+  'mcp.file.entryStdioUrl': {
+    text: '第 {index} 个条目是 stdio，不能带 url',
+    params: ['index'],
+  },
+  'mcp.file.entryRemoteCommand': {
+    text: '第 {index} 个条目是 {transport}，不能带 {field}',
+    params: ['index', 'transport', 'field'],
+  },
+  'mcp.file.entryUnknownField': {
+    text: '第 {index} 个条目含未知字段：{field}',
+    params: ['index', 'field'],
+  },
+  'mcp.file.entryNameMissing': {
+    text: '第 {index} 个条目缺少条目名',
+    params: ['index'],
+  },
+  'mcp.file.entryNameChars': {
+    text: '第 {index} 个条目的条目名不能含空白或 /：{name}',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryEnabledBoolean': {
+    text: '第 {index} 个条目（{name}）的 enabled 必须是布尔值',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryCommandMissing': {
+    text: '第 {index} 个条目（{name}）缺少 command',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryArgsArray': {
+    text: '第 {index} 个条目（{name}）的 args 必须是字符串数组',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryUrlMissing': {
+    text: '第 {index} 个条目（{name}）缺少 url',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryUrlInvalid': {
+    text: '第 {index} 个条目（{name}）的 url 不是合法 URL',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryUrlProtocol': {
+    text: '第 {index} 个条目（{name}）的 url 必须是 http / https',
+    params: ['index', 'name'],
+  },
+  'mcp.file.entryEnvNames': {
+    text: '第 {index} 个条目（{name}）的 env_names 必须是变量名数组',
+    params: ['index', 'name'],
+  },
+  'mcp.runtime.permissionContextMissing': {
+    text: 'MCP 装配失败：找不到 {target_id} 的权限上下文',
+    params: ['target_id'],
+  },
+  'mcp.runtime.remoteUnconfirmed': {
+    text: 'MCP 服务器 {name}（{transport}）未确认远端数据流，未连接',
+    params: ['name', 'transport'],
+  },
+  'mcp.runtime.assembleFailed': {
+    text: 'MCP 服务器 {name} 装配失败：{detail}',
+    params: ['name', 'detail'],
+  },
+  'mcp.runtime.connectFailed': {
+    text: 'MCP 服务器 {name} 连接失败：{detail}',
+    params: ['name', 'detail'],
+  },
+  'mcp.runtime.serverMissing': {
+    text: 'MCP 服务器未装配：{name}',
+    params: ['name'],
+  },
+  'mcp.export.applyYes': {
+    text: 'export-mcp：--apply 与 --yes 必须同时给出；未写入任何文件。',
+    params: [],
+  },
+  'mcp.export.noRows': {
+    text: 'export-mcp：没有可导出的 Agent 级 mcp_server 行。',
+    params: [],
+  },
+  'mcp.export.rejectedHeader': {
+    text: 'export-mcp：整次导出被拒绝，未写入任何文件：',
+    params: [],
+  },
+  'mcp.export.dryRunLine': {
+    text: '[dry-run] agent {agent_id}：{count} 条声明{status}',
+    params: ['agent_id', 'count', 'status'],
+  },
+  'mcp.export.latestSuffix': { text: '（已是最新）', params: [] },
+  'mcp.export.dryRunEnd': {
+    text: 'export-mcp：dry-run，未写入；同时给出 --apply --yes 才会写入。',
+    params: [],
+  },
+  'mcp.export.unchanged': {
+    text: 'agent {agent_id}：mcp.json 已包含这些声明，未改写。',
+    params: ['agent_id'],
+  },
+  'mcp.export.written': {
+    text: 'agent {agent_id}：写入 {path}{backup}',
+    params: ['agent_id', 'path', 'backup'],
+  },
+  'mcp.export.backupSuffix': { text: '（备份 {path}）', params: ['path'] },
+  'mcp.export.done': {
+    text: 'export-mcp：完成；mcp_server 行保留未删（{rows} 行），远端确认只保留旧行上已有的 {consents} 条。',
+    params: ['rows', 'consents'],
+  },
+  'mcp.export.missingAgent': {
+    text: 'agent {agent_id}：mcp_server 行指向不存在的 Agent，拒绝导出',
+    params: ['agent_id'],
+  },
+  'mcp.export.invalidExisting': {
+    text: 'agent {agent_id}：现有 mcp.json 不可用（{diagnostic}），拒绝覆盖',
+    params: ['agent_id', 'diagnostic'],
+  },
+  'mcp.export.shapeConflict': {
+    text: 'agent {agent_id} / {name}：同名条目在 mcp.json 中的形状与旧行不同，拒绝整次写入',
+    params: ['agent_id', 'name'],
+  },
+  'mcp.export.configInvalidJson': { text: 'config 不是合法 JSON', params: [] },
+  'mcp.export.configNotObject': { text: 'config 必须是对象', params: [] },
+  'mcp.export.configUnsupported': {
+    text: 'config 含 M2 不支持的字段：{field}',
+    params: ['field'],
+  },
+  'skill.migrate.applyYes': {
+    text: 'migrate-skills：--apply 与 --yes 必须同时给出；未写入任何文件。',
+    params: [],
+  },
+  'skill.migrate.refused': {
+    text: '拒绝执行：存在目标同名但内容不同或无法读取的条目。请先手动裁定；本命令不覆盖、不提供 --force；本次未写入任何文件。',
+    params: [],
+  },
+  'skill.migrate.dryRunEnd': {
+    text: '预演结束：未写入任何文件、未改动数据库、未创建备份或迁移清单。',
+    params: [],
+  },
+  'skill.migrate.nothingToDo': {
+    text: '技能迁移：没有需要写入的条目（全部已就位或没有成员级字节）；未写入任何文件。',
+    params: [],
+  },
+  'skill.migrate.processedZero': {
+    text: '处理条目： 0 条（已复制 0 / 只补行 0 / 跳过 {skipped}）',
+    params: ['skipped'],
+  },
+  'skill.migrate.channelDeprecated': { text: '频道级已弃用，请按成员安装', params: [] },
+  'skill.migrate.done': { text: '技能迁移完成', params: [] },
+  'skill.migrate.backupLine': { text: '  数据目录备份： {path}', params: ['path'] },
+  'skill.migrate.manifestLine': { text: '  迁移清单： {path}', params: ['path'] },
+  'skill.migrate.processed': {
+    text: '处理条目： {processed} 条（已复制 {copied} / 只补行 {rows_only} / 跳过 {skipped}）',
+    params: ['processed', 'copied', 'rows_only', 'skipped'],
+  },
+  'skill.migrate.entryLine': {
+    text: '  {action} {source} → {target}（{files} 个文件 / {bytes} 字节；hash {hash}）',
+    params: ['action', 'source', 'target', 'files', 'bytes', 'hash'],
+  },
+  'skill.migrate.copy': { text: '复制', params: [] },
+  'skill.migrate.rowOnly': { text: '只补行', params: [] },
+  'skill.migrate.new': { text: '新建', params: [] },
+  'skill.migrate.skip': { text: '跳过', params: [] },
+  'skill.migrate.refuse': { text: '拒绝', params: [] },
+  'skill.migrate.removable': {
+    text: '可手工删除的源路径（确认后；本命令不删除任何源文件）：',
+    params: [],
+  },
+  'skill.migrate.unknownPartitionMember': { text: '未匹配现行成员或频道', params: [] },
+  'skill.migrate.unsafePartition': { text: '分区名不是安全 slug', params: [] },
+  'skill.migrate.unsafeName': { text: '技能名不是安全 slug，拒绝迁移', params: [] },
+  'skill.migrate.multiRootConflict': {
+    text: '同一成员的同名旧技能在多个频道根内容不同，需人工裁定',
+    params: [],
+  },
+  'skill.migrate.targetDiffers': {
+    text: '目标已存在但内容不同，需人工裁定后再迁移（本命令不覆盖）',
+    params: [],
+  },
+  'skill.migrate.targetUnreadable': {
+    text: '目标已存在但不可读取：{detail}',
+    params: ['detail'],
+  },
+  'skill.migrate.rowHashDiffers': { text: '库行已存在且 hash 不同，需人工裁定', params: [] },
+  'skill.migrate.skippedPresent': { text: '目标字节与库行均已就位，跳过', params: [] },
+  'skill.migrate.rowOnlyPresent': {
+    text: '目标字节已存在且内容相同，只补写 Agent 级库行',
+    params: [],
+  },
+  'skill.migrate.rowMissingBytes': {
+    text: '库行已存在但目标字节缺失，补齐成员家目录副本',
+    params: [],
+  },
+  'skill.migrate.copyNew': {
+    text: '目标不存在，将复制字节并新建 Agent 级库行',
+    params: [],
+  },
+  'skill.migrate.planTitle': { text: '技能迁移计划（migrate-skills，只读扫描）', params: [] },
+  'skill.migrate.dataDirLine': { text: '数据目录： {path}', params: ['path'] },
+  'skill.migrate.globalLayerLine': { text: '全局层根： {path}', params: ['path'] },
+  'skill.migrate.empty': {
+    text: '没有发现旧项目层技能字节；空操作（未写入任何文件、未改动数据库）。',
+    params: [],
+  },
+  'skill.migrate.memberEntries': {
+    text: '成员级技能： {total} 条（新建 {copy} / 只补行 {row} / 跳过 {skip} / 拒绝 {refuse}）',
+    params: ['total', 'copy', 'row', 'skip', 'refuse'],
+  },
+  'skill.migrate.entryHead': {
+    text: '  {action} {source} → {target}',
+    params: ['action', 'source', 'target'],
+  },
+  'skill.migrate.entryDetail': {
+    text: '（{files} 个文件 / {bytes} 字节；hash {hash}）',
+    params: ['files', 'bytes', 'hash'],
+  },
+  'skill.migrate.reasonLine': { text: '    原因：{reason}', params: ['reason'] },
+  'skill.migrate.channelSection': {
+    text: '频道级技能（不迁移）： {partitions} 个分区 / {skills} 个技能 —— 频道级已弃用，请按成员安装',
+    params: ['partitions', 'skills'],
+  },
+  'skill.migrate.channelLine': {
+    text: '  频道 {channel_id}：{path}（{count} 个技能：{skills}）',
+    params: ['channel_id', 'path', 'count', 'skills'],
+  },
+  'skill.migrate.channelNotice': { text: '    频道级已弃用，请按成员安装', params: [] },
+  'skill.migrate.unknownSection': {
+    text: '未匹配分区（不迁移）： {count} 个',
+    params: ['count'],
+  },
+  'plan.error.limit': { text: 'limit 必须是 1 到 50 之间的整数', params: [] },
+  'plan.error.targetNotFound': { text: 'target 不存在：{target_id}', params: ['target_id'] },
 } as const satisfies Record<string, CatalogEntry>;

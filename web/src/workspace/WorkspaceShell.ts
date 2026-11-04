@@ -1,9 +1,24 @@
 import {
   t,
+  type AgentMcpView,
+  type AgentRulesView,
+  type AgentSkillCandidatesView,
+  type AgentSkillDetailView,
+  type AgentSkillsView,
+  type ApprovalDecisionInput,
+  type ApprovalView,
+  type ChannelConfigPatch,
   type Locale,
+  type PermissionRuleInput,
+  type PermissionRuleView,
+  type PlanRunView,
+  type SopDefinitionCreate,
+  type SopDefinitionView,
+  type SopRunView,
   type TargetMemberView,
   type TaskStatus,
   type TaskView,
+  type TeamRunView,
   type WorkspaceSettingsView,
   type WorkspaceView,
 } from '@allibot/shared';
@@ -17,6 +32,10 @@ import { SettingsPanel } from '../components/SettingsPanel.ts';
 import { TaskBoard } from '../task-board/TaskBoard.ts';
 import type { AsyncAction1, AsyncAction2 } from '../async-action.ts';
 import { AgentDetailPanel } from './AgentDetailPanel.ts';
+import { rulesChannelId } from './agent-rules.ts';
+import { ApprovalPanel } from './ApprovalPanel.ts';
+import type { McpSaveBody } from './mcp-tab.ts';
+import { permissionScopeKey } from './permissions.ts';
 import { ContextPanel } from './ContextPanel.ts';
 import { MemberPanel } from './MemberPanel.ts';
 import { MemberRoster } from './MemberRoster.ts';
@@ -46,12 +65,52 @@ export interface WorkspaceShellProps {
   /** The Agent the detail drawer starts on; omitted means the first local Agent. */
   initialAgentId?: string | null;
   /**
-   * The channel member tables the shell may render, keyed by channel id. The
-   * member panel and roster are channel-scoped readings; when a channel's table
-   * is absent the panel states that it is still loading rather than guessing
-   * membership.
+   * The selected target's member tables, keyed by target id. The member panel
+   * and roster are channel-scoped; the context panel also reads the table's
+   * workspace_status for task / DM contexts. An absent table states that it is
+   * still loading rather than guessing membership or availability.
    */
   channelMembers?: Record<string, readonly TargetMemberView[]>;
+  /** Team run snapshots, keyed by target id; the run panel reads them. */
+  teamRuns?: Record<string, readonly TeamRunView[]>;
+  /** Plan snapshots, keyed by target id; the run panel reads them. */
+  plans?: Record<string, readonly PlanRunView[]>;
+  /** The approval list reading (#44); undefined while it is loading. */
+  approvals?: readonly ApprovalView[];
+  /** Permission rule sets, keyed by `permissionScopeKey`. */
+  permissionRules?: Readonly<Record<string, readonly PermissionRuleView[]>>;
+  /** SOP definitions, keyed by channel id; the channel context panel reads them. */
+  sopDefinitions?: Record<string, readonly SopDefinitionView[]>;
+  /** SOP run snapshots, keyed by definition id. */
+  sopRuns?: Record<string, readonly SopRunView[]>;
+  /** Agent-home mcp.json readings, keyed by Agent id. */
+  agentMcp?: Record<string, AgentMcpView>;
+  /** Read the Agent's mcp.json when the detail opens; the host fetches. */
+  onAgentMcpNeeded?: (agentId: string) => void;
+  /** The one mcp.json write shared by the structured form and raw textarea. */
+  onAgentMcpChange?: (agentId: string, body: McpSaveBody) => void | Promise<AgentMcpView | void>;
+  /** Effective rules per Agent id, read on demand when the detail opens. */
+  agentRules?: Record<string, AgentRulesView>;
+  /** Installed skills per Agent id (#48); read when the detail opens. */
+  agentSkills?: Record<string, AgentSkillsView>;
+  /** The selected skill detail (metadata + SKILL.md) per Agent id. */
+  agentSkillDetails?: Record<string, AgentSkillDetailView>;
+  /** `~/.agents/skills/` candidates per Agent id; the host reads them. */
+  agentSkillCandidates?: Record<string, AgentSkillCandidatesView>;
+  /** Read the list + candidates when the Agent detail opens. */
+  onAgentSkillsNeeded?: (agentId: string) => void;
+  /** Read one skill's metadata + SKILL.md when it is selected. */
+  onAgentSkillNeeded?: (agentId: string, name: string) => void;
+  /** Re-scan the landing directory. */
+  onAgentSkillRefreshCandidates?: (agentId: string) => void | Promise<void>;
+  /** Import one candidate through the single-entry install path. */
+  onAgentSkillImport?: (agentId: string, name: string) => void | Promise<void>;
+  /** Import every importable, not-installed candidate. */
+  onAgentSkillsImportAll?: (agentId: string) => void | Promise<void>;
+  /** Enable / disable one installed skill. */
+  onAgentSkillToggle?: (agentId: string, name: string, enabled: boolean) => void | Promise<void>;
+  /** Delete one installed skill (bytes and row). */
+  onAgentSkillDelete?: (agentId: string, name: string) => void | Promise<void>;
   viewportWidth?: number;
   onSelectTarget?: (targetId: string) => void;
   /** The task board's write entry; the board itself never changes a task row. */
@@ -61,8 +120,28 @@ export interface WorkspaceShellProps {
   onJoinMember?: AsyncAction2<string, string>;
   /** Save the Agent's system prompt; resolves after the host re-read the Agent. */
   onSaveAgent?: AsyncAction2<string, { system_prompt: string }>;
+  /** Read the channel's team config change; resolves after the host re-read it. */
+  onChannelConfigChange?: AsyncAction2<string, ChannelConfigPatch>;
+  /** Create / start a SOP; the host writes and re-reads, the panel only displays. */
+  onCreateSop?: (input: SopDefinitionCreate) => void | Promise<void>;
+  onStartSop?: (definitionId: string) => void | Promise<void>;
   /** Soft delete the Agent; resolves after the host re-read the workspace. */
   onDeleteAgent?: AsyncAction1<string>;
+  /** One approval decision (approve / deny); the host re-reads the list. */
+  onApprovalDecision?: (replyId: string, input: ApprovalDecisionInput) => void | Promise<void>;
+  /** The full-replacement permission rule write for a channel / Agent scope. */
+  onPermissionRulesChange?: (
+    scope: { kind: 'channel' | 'agent'; id: string },
+    rules: PermissionRuleInput[],
+  ) => void | Promise<void>;
+  /** The raw Agent permission-mode override write (null = follow). */
+  onAgentPermissionModeChange?: (agentId: string, mode: string | null) => void | Promise<void>;
+  onAgentWorkspaceBackendChange?: (
+    agentId: string,
+    backend: string | null,
+  ) => void | Promise<void>;
+  /** Read the Agent's effective rules for the open detail; the host fetches. */
+  onAgentRulesNeeded?: (agentId: string, channelId: string | null) => void;
   saveFailed?: boolean;
   onLiveEvent?: LiveEventSink;
 }
@@ -81,6 +160,8 @@ function drawerTitle(locale: Locale, drawer: WorkspaceDrawer): string {
       return t(locale, 'workspace.panel.roster');
     case 'agent-detail':
       return t(locale, 'workspace.panel.agentDetail');
+    case 'approvals':
+      return t(locale, 'workspace.approval.title');
   }
 }
 
@@ -113,11 +194,40 @@ export function WorkspaceShell({
   onJoinMember,
   onSaveAgent,
   onDeleteAgent,
+  onChannelConfigChange,
+  teamRuns,
+  plans,
+  approvals,
+  permissionRules,
+  sopDefinitions,
+  sopRuns,
+  onCreateSop,
+  onStartSop,
+  onApprovalDecision,
+  onPermissionRulesChange,
+  onAgentPermissionModeChange,
+  onAgentWorkspaceBackendChange,
+  agentRules,
+  onAgentRulesNeeded,
+  agentMcp,
+  onAgentMcpNeeded,
+  onAgentMcpChange,
+  agentSkills,
+  agentSkillDetails,
+  agentSkillCandidates,
+  onAgentSkillsNeeded,
+  onAgentSkillNeeded,
+  onAgentSkillRefreshCandidates,
+  onAgentSkillImport,
+  onAgentSkillsImportAll,
+  onAgentSkillToggle,
+  onAgentSkillDelete,
   saveFailed = false,
   onLiveEvent,
 }: WorkspaceShellProps) {
   const locale = settings.locale;
   const [drawer, setDrawer] = useState<WorkspaceDrawer | null>(initialDrawer);
+  const [approvalReplyId, setApprovalReplyId] = useState<string | null>(null);
   const [detailAgentId, setDetailAgentId] = useState<string | null>(initialAgentId);
   const layout = resolveWorkspaceLayout(viewportWidth);
   const selectedTargetId =
@@ -133,10 +243,10 @@ export function WorkspaceShell({
       ? workspace.dms.find((dm) => dm.id === selectedTargetId)
       : undefined;
   const archivedDm = selectedDm !== undefined && selectedDm.peer.deleted_at !== null;
+  // The target's member table also carries workspace_status for a task / DM
+  // context; only the channel-scoped panels are gated by `channelSelected`.
   const selectedMembers =
-    channelSelected && selectedTargetId !== null
-      ? channelMembers?.[selectedTargetId]
-      : undefined;
+    selectedTargetId !== null ? channelMembers?.[selectedTargetId] : undefined;
   const selectedAgent =
     detailAgentId === null
       ? (workspace.agents[0] ?? null)
@@ -150,6 +260,14 @@ export function WorkspaceShell({
   function openPanel(panel: WorkspacePanel, agentId?: string): void {
     if (panel === 'agent-detail' && agentId !== undefined) {
       setDetailAgentId(agentId);
+      // The rules are a separate read (D2.3); opening the detail asks the host
+      // for them instead of fabricating sections from the workspace snapshot.
+      onAgentRulesNeeded?.(
+        agentId,
+        rulesChannelId(workspace, selectedTargetId),
+      );
+      onAgentMcpNeeded?.(agentId);
+      onAgentSkillsNeeded?.(agentId);
     }
     setDrawer(openWorkspacePanel({ activeTargetId: selectedTargetId, drawer }, panel).drawer);
   }
@@ -221,6 +339,20 @@ export function WorkspaceShell({
       },
       t(locale, 'workspace.context.title'),
     ),
+    createElement(
+      'button',
+      {
+        type: 'button',
+        className: 'workspace-header__action workspace-header__action--approvals',
+        'data-action': 'open-approvals',
+        'data-pending-approvals': workspace.pending_approvals,
+        'aria-label': t(locale, 'workspace.approval.open'),
+        onClick: () => openPanel('approvals'),
+      },
+      workspace.pending_approvals > 0
+        ? `${t(locale, 'workspace.approval.title')} (${workspace.pending_approvals})`
+        : t(locale, 'workspace.approval.title'),
+    ),
   );
 
   const memberNotice =
@@ -281,6 +413,34 @@ export function WorkspaceShell({
       workspace,
       targetId: selectedTargetId,
       locale,
+      channelMembers: selectedMembers,
+      onChannelConfigChange:
+        selectedTargetId === null || onChannelConfigChange === undefined
+          ? undefined
+          : (patch: ChannelConfigPatch) => onChannelConfigChange(selectedTargetId, patch),
+      teamRuns: selectedTargetId === null ? undefined : teamRuns?.[selectedTargetId],
+      plans: selectedTargetId === null ? undefined : plans?.[selectedTargetId],
+      sopDefinitions:
+        selectedTargetId === null ? undefined : sopDefinitions?.[selectedTargetId],
+      sopRuns,
+      permissionRules:
+        selectedTargetId === null || selectedKind !== 'channel'
+          ? undefined
+          : permissionRules?.[
+              permissionScopeKey({ kind: 'channel', id: selectedTargetId })
+            ],
+      onPermissionRulesChange:
+        selectedTargetId === null ||
+        selectedKind !== 'channel' ||
+        onPermissionRulesChange === undefined
+          ? undefined
+          : (rules) =>
+              onPermissionRulesChange(
+                { kind: 'channel', id: selectedTargetId },
+                rules,
+              ),
+      onCreateSop,
+      onStartSop,
       onOpenPanel: openPanel,
     });
   } else if (drawer === 'members') {
@@ -320,13 +480,76 @@ export function WorkspaceShell({
             key: selectedAgent.id,
             agent: selectedAgent,
             locale,
+            rules: agentRules?.[selectedAgent.id] ?? null,
+            mcp: agentMcp?.[selectedAgent.id] ?? null,
+            onMcpChange:
+              onAgentMcpChange === undefined
+                ? undefined
+                : (body) => onAgentMcpChange(selectedAgent.id, body),
+            skills: {
+              view: agentSkills?.[selectedAgent.id] ?? null,
+              detail: agentSkillDetails?.[selectedAgent.id] ?? null,
+              candidates: agentSkillCandidates?.[selectedAgent.id] ?? null,
+              onSelect:
+                onAgentSkillNeeded === undefined
+                  ? undefined
+                  : (name) => onAgentSkillNeeded(selectedAgent.id, name),
+              onRefreshCandidates:
+                onAgentSkillRefreshCandidates === undefined
+                  ? undefined
+                  : () => onAgentSkillRefreshCandidates(selectedAgent.id),
+              onImport:
+                onAgentSkillImport === undefined
+                  ? undefined
+                  : (name) => onAgentSkillImport(selectedAgent.id, name),
+              onImportAll:
+                onAgentSkillsImportAll === undefined
+                  ? undefined
+                  : () => onAgentSkillsImportAll(selectedAgent.id),
+              onToggleEnabled:
+                onAgentSkillToggle === undefined
+                  ? undefined
+                  : (name, enabled) => onAgentSkillToggle(selectedAgent.id, name, enabled),
+              onDelete:
+                onAgentSkillDelete === undefined
+                  ? undefined
+                  : (name) => onAgentSkillDelete(selectedAgent.id, name),
+            },
             onSave:
               onSaveAgent === undefined
                 ? undefined
                 : (patch: { system_prompt: string }) => onSaveAgent(selectedAgent.id, patch),
             onDelete:
               onDeleteAgent === undefined ? undefined : () => onDeleteAgent(selectedAgent.id),
+            permissionRules:
+              permissionRules?.[
+                permissionScopeKey({ kind: 'agent', id: selectedAgent.id })
+              ],
+            onPermissionRulesChange:
+              onPermissionRulesChange === undefined
+                ? undefined
+                : (rules) =>
+                    onPermissionRulesChange({ kind: 'agent', id: selectedAgent.id }, rules),
+            onPermissionModeChange:
+              onAgentPermissionModeChange === undefined
+                ? undefined
+                : (mode) => onAgentPermissionModeChange(selectedAgent.id, mode),
+            onWorkspaceBackendChange:
+              onAgentWorkspaceBackendChange === undefined
+                ? undefined
+                : (backend) => onAgentWorkspaceBackendChange(selectedAgent.id, backend),
           });
+  } else if (drawer === 'approvals') {
+    drawerBody = createElement(ApprovalPanel, {
+      approvals,
+      selectedReplyId: approvalReplyId,
+      locale,
+      onSelect: setApprovalReplyId,
+      onDecision:
+        onApprovalDecision === undefined
+          ? undefined
+          : (replyId, input) => onApprovalDecision(replyId, input),
+    });
   } else if (drawer !== null) {
     drawerBody = createElement(
       'div',

@@ -477,5 +477,7 @@ User Stories 使用严格句式 `As an <actor>, I want a <feature>, so that <ben
 
 **词条缺口。** 本轮没有发现需要新增 GLOSSARY 词条的缺口；需要记录的是取值与字段，不是新承重词：`team-change` 是 wake reason 取值，`pending / in_progress / completed` 是 plan_task 字段取值，`running / completed / failed / invalid-leader` 是 team_run 字段取值，`awaiting` 是 SOP phase 取值。实现票不得自行发明新的承重词；若发现真实缺口，按「不自行补写词条」的纪律上抛，不在实现里静默改名。
 
+**M2 集成 review 的实现注记（2026-11-04）。** D3.4 第 6 条的「成员子轮次不写 target 消息」按「不写成员发言与回复」理解，不排除系统事实记录：`transfer_task` 在 TeamAssign 子轮次成功时按 D3.5 追加一条 system 变更记录（受派者变更），该记录不计未读、不进搜索、不唤醒、不扣跳，也不产生成员 `round_outcome` 或对话正文；成员子轮次仍不写任何 human / agent 消息。D3.4 正文不改。真实模型 adapter 的 tool loop 是 M2 的已知限制（GitHub #51）：M2 只用脚本化 provider 驱动 TeamAssign / Plan / SOP verifier，接入真实模型不等于这些能力可用；该限制同时记录在集成 PR 的 Door 段与 `docs/deployment.md`，不扩大 M2 的能力承诺。
+
 
 

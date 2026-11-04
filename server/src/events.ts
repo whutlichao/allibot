@@ -1,3 +1,5 @@
+import type { PlanTaskView } from '@allibot/shared';
+
 /**
  * 订阅 (Subscription): the process-local publish/subscribe hub behind the one
  * global live stream. It carries events only — it never reads the database and
@@ -18,6 +20,11 @@ export const SSE_EVENT_TYPES = [
   'unread.changed',
   'reminder.due',
   'workspace.changed',
+  'team_assignment',
+  'plan_update',
+  'sop_update',
+  'approval.requested',
+  'approval.resolved',
 ] as const;
 
 export type SseEventType = (typeof SSE_EVENT_TYPES)[number];
@@ -130,6 +137,119 @@ export function publishRoundOutcome(outcome: {
 }
 
 /**
+ * The frame one final TeamAssign assignment produces (D2.5). Only a final state
+ * is published — `running` itself is not a frame, and the live hub never
+ * replays, so a reconnecting client re-reads the run snapshot instead.
+ */
+export function publishTeamAssignment(assignment: {
+  team_run_id: string;
+  id: string;
+  target_id: string;
+  task_id: string | null;
+  member_id: string;
+  state: string;
+  jump_consumed: number;
+  reply_excerpt: string | null;
+  reason: string | null;
+  finished_at: string | null;
+}): void {
+  if (assignment.finished_at === null) {
+    return;
+  }
+  eventHub.publish({
+    event: 'team_assignment',
+    data: {
+      team_run_id: assignment.team_run_id,
+      assignment_id: assignment.id,
+      target_id: assignment.target_id,
+      task_id: assignment.task_id,
+      member_id: assignment.member_id,
+      state: assignment.state,
+      jump_consumed: assignment.jump_consumed,
+      reply_excerpt: assignment.reply_excerpt,
+      reason: assignment.reason,
+      occurred_at: assignment.finished_at,
+    },
+  });
+}
+
+/**
+ * The frame a Plan mutation produces (D2.5): `tasks` is the run's complete
+ * current list, never a delta, so a subscriber can replace its copy. Only a
+ * committed mutation publishes; a read-only tool call and the retention prune
+ * announce nothing.
+ */
+export function publishPlanUpdate(update: {
+  plan_run_id: string;
+  target_id: string;
+  member_id: string;
+  tasks: readonly PlanTaskView[];
+  occurred_at: string;
+}): void {
+  eventHub.publish({
+    event: 'plan_update',
+    data: {
+      plan_run_id: update.plan_run_id,
+      target_id: update.target_id,
+      member_id: update.member_id,
+      tasks: update.tasks,
+      occurred_at: update.occurred_at,
+    },
+  });
+}
+
+
+/**
+ * The frame one SOP run progress point produces (D2.5): a phase change or a
+ * step / attempt change. The stream is live-only; the excerpt snapshot stays on
+ * `GET /api/sop-runs/{id}` and is never replayed here.
+ */
+export function publishSopUpdate(update: {
+  sopRunId: string;
+  definitionId: string;
+  phase: string;
+  currentStep: number;
+  attempt: number;
+  occurredAt: string;
+}): void {
+  eventHub.publish({
+    event: 'sop_update',
+    data: {
+      sop_run_id: update.sopRunId,
+      definition_id: update.definitionId,
+      phase: update.phase,
+      current_step: update.currentStep,
+      attempt: update.attempt,
+      occurred_at: update.occurredAt,
+    },
+  });
+}
+
+/**
+ * The frame an approval batch produces (D2.5). `tool_call_ids` names only the
+ * calls this frame is about: a reopened batch publishes the new calls, not the
+ * history. The payload carries no tool arguments, so no masked / raw parameter
+ * can leak through it.
+ */
+export function publishApprovalRequested(payload: ApprovalSsePayload): void {
+  eventHub.publish({ event: 'approval.requested', data: { ...payload } });
+}
+
+/** The frame a batch closure produces: confirmed / denied / failed / expired. */
+export function publishApprovalResolved(payload: ApprovalSsePayload): void {
+  eventHub.publish({ event: 'approval.resolved', data: { ...payload } });
+}
+
+export interface ApprovalSsePayload {
+  reply_id: string;
+  context_kind: string;
+  context_id: string | null;
+  target_id: string | null;
+  status: string;
+  tool_call_ids: string[];
+}
+
+/**
  * The frame a status point transition produces. `status` is the transition the
  * writer just committed (working / online / error / offline); the reading that
  * carries reasons and config stays `GET /api/workspace`, so this frame only
@@ -163,7 +283,7 @@ export function publishTaskChanged(change: {
  * assembling a reading from frames.
  */
 export function publishWorkspaceChanged(change: {
-  source: 'channel' | 'dm' | 'settings' | 'agent';
+  source: 'channel' | 'dm' | 'settings' | 'agent' | 'team';
 }): void {
   eventHub.publish({
     event: 'workspace.changed',

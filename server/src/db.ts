@@ -7,7 +7,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 21;
 
 export interface MigrationStep {
   readonly to: number;
@@ -524,6 +524,499 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
       `);
     },
   },
+  {
+    // The team-mode ticket (#37 / T13) rebuilds `channel` so the mode CHECK
+    // widens to `autonomous` / `team` and the leader column exists. The order
+    // is new table -> copy every row -> drop the old table -> rename; the
+    // migration runner turns foreign keys off before BEGIN and checks them
+    // before COMMIT, because SQLite cannot toggle the pragma inside a
+    // transaction. Existing rows are copied verbatim with a NULL leader.
+    to: 14,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE channel_rebuild (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          mode TEXT NOT NULL DEFAULT 'autonomous' CHECK (mode IN ('autonomous', 'team')),
+          team_leader_member_id TEXT REFERENCES member (id),
+          response_budget_limit INTEGER NOT NULL DEFAULT 3 CHECK (
+            response_budget_limit IN (3, 5, 10)
+          ),
+          archived_at TEXT,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK (mode = 'team' OR team_leader_member_id IS NULL),
+          CHECK (mode = 'autonomous' OR team_leader_member_id IS NOT NULL)
+        );
+
+        INSERT INTO channel_rebuild
+          (id, name, description, mode, team_leader_member_id, response_budget_limit,
+           archived_at, deleted_at, created_at, updated_at)
+        SELECT id, name, description, mode, NULL, response_budget_limit,
+               archived_at, deleted_at, created_at, updated_at
+          FROM channel;
+
+        DROP TABLE channel;
+        ALTER TABLE channel_rebuild RENAME TO channel;
+      `);
+    },
+  },  {
+    // The team-run ticket (#38 / T14) lands the run records for the leader's
+    // team rounds. A run is one row per round; an assignment is one row per
+    // TeamAssign call (#39 fills those rows). Both are closed exactly once:
+    // the closed-immutability triggers make the database, not the code, the
+    // backstop for "状态从 running 收口一次" and for the frozen jump / start.
+    to: 15,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE team_run (
+          id TEXT PRIMARY KEY,
+          target_id TEXT NOT NULL REFERENCES target (id),
+          channel_id TEXT NOT NULL REFERENCES channel (id),
+          task_id TEXT REFERENCES task (id),
+          leader_member_id TEXT NOT NULL REFERENCES member (id),
+          status TEXT NOT NULL CHECK (
+            status IN ('running', 'completed', 'failed', 'invalid-leader')
+          ),
+          reason TEXT,
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          CHECK (
+            (status = 'running' AND finished_at IS NULL)
+            OR (status <> 'running' AND finished_at IS NOT NULL)
+          )
+        );
+
+        -- The snapshot read is per target in reverse time order.
+        CREATE INDEX team_run_target_started ON team_run (target_id, started_at);
+
+        -- A channel-type target has no task and is its own channel target; a
+        -- task-type target names the task it belongs to and that task's channel.
+        -- Column references cannot express the join, so the trigger is the
+        -- backstop for the target / task consistency rule.
+        CREATE TRIGGER team_run_target_consistency_insert
+        BEFORE INSERT ON team_run
+        FOR EACH ROW
+        WHEN NOT (
+          (
+            NEW.task_id IS NULL
+            AND NEW.target_id = NEW.channel_id
+            AND (SELECT kind FROM target WHERE id = NEW.target_id) = 'channel'
+          )
+          OR (
+            NEW.task_id IS NOT NULL
+            AND (SELECT kind FROM target WHERE id = NEW.target_id) = 'task'
+            AND EXISTS (
+              SELECT 1 FROM task
+               WHERE id = NEW.task_id
+                 AND target_id = NEW.target_id
+                 AND channel_id = NEW.channel_id
+            )
+          )
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'team_run target/task do not match');
+        END;
+
+        CREATE TRIGGER team_run_target_consistency_update
+        BEFORE UPDATE OF target_id, channel_id, task_id ON team_run
+        FOR EACH ROW
+        WHEN NOT (
+          (
+            NEW.task_id IS NULL
+            AND NEW.target_id = NEW.channel_id
+            AND (SELECT kind FROM target WHERE id = NEW.target_id) = 'channel'
+          )
+          OR (
+            NEW.task_id IS NOT NULL
+            AND (SELECT kind FROM target WHERE id = NEW.target_id) = 'task'
+            AND EXISTS (
+              SELECT 1 FROM task
+               WHERE id = NEW.task_id
+                 AND target_id = NEW.target_id
+                 AND channel_id = NEW.channel_id
+            )
+          )
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'team_run target/task do not match');
+        END;
+
+        -- A run closes exactly once. Its identity, target, task and start time
+        -- are frozen at insert; only the transition out of running is allowed.
+        CREATE TRIGGER team_run_closed_immutable
+        BEFORE UPDATE ON team_run
+        FOR EACH ROW
+        WHEN OLD.status <> 'running'
+          OR NEW.id <> OLD.id
+          OR NEW.target_id <> OLD.target_id
+          OR NEW.channel_id <> OLD.channel_id
+          OR NEW.task_id IS NOT OLD.task_id
+          OR NEW.leader_member_id <> OLD.leader_member_id
+          OR NEW.started_at <> OLD.started_at
+        BEGIN
+          SELECT RAISE(ABORT, 'team_run is already closed or changes an immutable field');
+        END;
+
+        CREATE TABLE team_assignment (
+          id TEXT PRIMARY KEY,
+          team_run_id TEXT NOT NULL REFERENCES team_run (id),
+          target_id TEXT NOT NULL REFERENCES target (id),
+          task_id TEXT REFERENCES task (id),
+          member_id TEXT NOT NULL REFERENCES member (id),
+          state TEXT NOT NULL CHECK (
+            state IN ('running', 'completed', 'failed', 'budget-exhausted')
+          ),
+          jump_consumed INTEGER NOT NULL CHECK (jump_consumed IN (0, 1)),
+          reply_excerpt TEXT,
+          reason TEXT,
+          started_at TEXT NOT NULL,
+          finished_at TEXT,
+          CHECK (
+            (state = 'running' AND finished_at IS NULL)
+            OR (state <> 'running' AND finished_at IS NOT NULL)
+          ),
+          CHECK (state <> 'budget-exhausted' OR jump_consumed = 0)
+        );
+
+        -- The nested read loads the assignments of one run.
+        CREATE INDEX team_assignment_run_started ON team_assignment (team_run_id, started_at);
+
+        -- An assignment inherits its run's target / task: the two rows can never
+        -- name different scopes.
+        CREATE TRIGGER team_assignment_matches_run_insert
+        BEFORE INSERT ON team_assignment
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+          SELECT 1 FROM team_run r
+           WHERE r.id = NEW.team_run_id
+             AND r.target_id = NEW.target_id
+             AND r.task_id IS NEW.task_id
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'team_assignment target/task does not match its run');
+        END;
+
+        CREATE TRIGGER team_assignment_matches_run_update
+        BEFORE UPDATE OF team_run_id, target_id, task_id ON team_assignment
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+          SELECT 1 FROM team_run r
+           WHERE r.id = NEW.team_run_id
+             AND r.target_id = NEW.target_id
+             AND r.task_id IS NEW.task_id
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'team_assignment target/task does not match its run');
+        END;
+
+        -- An assignment closes exactly once. jump_consumed and started_at are
+        -- frozen at insert (a consumed jump is never refunded).
+        CREATE TRIGGER team_assignment_closed_immutable
+        BEFORE UPDATE ON team_assignment
+        FOR EACH ROW
+        WHEN OLD.state <> 'running'
+          OR NEW.team_run_id <> OLD.team_run_id
+          OR NEW.target_id <> OLD.target_id
+          OR NEW.task_id IS NOT OLD.task_id
+          OR NEW.member_id <> OLD.member_id
+          OR NEW.jump_consumed <> OLD.jump_consumed
+          OR NEW.started_at <> OLD.started_at
+        BEGIN
+          SELECT RAISE(ABORT, 'team_assignment is closed or changes an immutable field');
+        END;
+      `);
+    },
+  },
+  {
+    // The Plan ticket (#40 / T15) lands the member's Plan work list. A run is
+    // one persisted plan for a (target, member) pair; a task is one item with
+    // its own three-word status, which is not the task five-state. plan_task
+    // follows its run: the foreign key cascades on delete, because retention
+    // deletes whole runs and their snapshots go with them.
+    to: 16,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE plan_run (
+          id TEXT PRIMARY KEY,
+          target_id TEXT NOT NULL REFERENCES target (id),
+          member_id TEXT NOT NULL REFERENCES member (id),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        -- The one current-run lookup and the retention scan are per pair,
+        -- newest first.
+        CREATE INDEX plan_run_target_member_created
+          ON plan_run (target_id, member_id, created_at);
+
+        CREATE TABLE plan_task (
+          id TEXT PRIMARY KEY,
+          plan_run_id TEXT NOT NULL REFERENCES plan_run (id) ON DELETE CASCADE,
+          title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+          status TEXT NOT NULL CHECK (status IN ('pending', 'in_progress', 'completed')),
+          position INTEGER NOT NULL CHECK (position >= 0),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        -- The plan read and every tool result walk one run in plan order.
+        CREATE INDEX plan_task_run_position ON plan_task (plan_run_id, position);
+      `);
+    },
+  },
+  {
+    // The SOP ticket (#41 / T16) lands the owner-started multi-step flow. A
+    // definition is immutable in M2: its ordered steps are one JSON array, and
+    // (channel_id, name) names exactly one definition. A run is the five-phase
+    // progress record of one start; its state is an opaque JSON snapshot, while
+    // its identity and start instant stay frozen at insert.
+    to: 17,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE sop_definition (
+          id TEXT PRIMARY KEY,
+          channel_id TEXT NOT NULL REFERENCES channel (id),
+          name TEXT NOT NULL,
+          steps TEXT NOT NULL CHECK (json_valid(steps) AND json_type(steps) = 'array'),
+          created_at TEXT NOT NULL,
+          UNIQUE (channel_id, name)
+        );
+
+        CREATE TABLE sop_run (
+          id TEXT PRIMARY KEY,
+          definition_id TEXT NOT NULL REFERENCES sop_definition (id),
+          channel_id TEXT NOT NULL REFERENCES channel (id),
+          phase TEXT NOT NULL CHECK (phase IN ('pending', 'running', 'awaiting', 'completed', 'failed')),
+          state TEXT NOT NULL CHECK (json_valid(state)),
+          current_step INTEGER NOT NULL CHECK (current_step >= 0),
+          started_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          finished_at TEXT,
+          CHECK (
+            (phase IN ('pending', 'running', 'awaiting') AND finished_at IS NULL)
+            OR (phase IN ('completed', 'failed') AND finished_at IS NOT NULL)
+          )
+        );
+
+        -- A run belongs to its definition's channel: the row cannot name a
+        -- different channel on insert or on any later update.
+        CREATE TRIGGER sop_run_channel_consistency_insert
+        BEFORE INSERT ON sop_run
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+          SELECT 1 FROM sop_definition d
+           WHERE d.id = NEW.definition_id AND d.channel_id = NEW.channel_id
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'sop_run channel does not match its definition');
+        END;
+
+        CREATE TRIGGER sop_run_channel_consistency_update
+        BEFORE UPDATE OF definition_id, channel_id ON sop_run
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+          SELECT 1 FROM sop_definition d
+           WHERE d.id = NEW.definition_id AND d.channel_id = NEW.channel_id
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'sop_run channel does not match its definition');
+        END;
+
+        -- A run's identity and start instant are frozen at insert; phase,
+        -- state, current_step and updated_at are the progress surface.
+        CREATE TRIGGER sop_run_immutable_fields
+        BEFORE UPDATE ON sop_run
+        FOR EACH ROW
+        WHEN NEW.id <> OLD.id
+          OR NEW.definition_id <> OLD.definition_id
+          OR NEW.started_at <> OLD.started_at
+        BEGIN
+          SELECT RAISE(ABORT, 'sop_run changes an immutable field');
+        END;
+      `);
+    },
+  },
+  {
+    // The workspace ticket (#42 / T17) adds the channel-scoped project root,
+    // the workspace backend (Agent override = NULL follows the channel) and
+    // the local-shell switch. The shell switch is only a column in this
+    // ticket: shell execution arrives later (#46), so every existing row keeps
+    // the default 0. `workspace_root` stays nullable; the write path, not the
+    // database, validates that a non-NULL value is an absolute, existing
+    // directory outside the data directory and Agent homes.
+    to: 18,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE channel ADD COLUMN workspace_root TEXT;
+        ALTER TABLE channel ADD COLUMN workspace_backend TEXT NOT NULL DEFAULT 'local'
+          CHECK (workspace_backend IN ('local', 'docker'));
+        ALTER TABLE channel ADD COLUMN allow_local_shell INTEGER NOT NULL DEFAULT 0
+          CHECK (allow_local_shell IN (0, 1));
+        ALTER TABLE agent_config ADD COLUMN workspace_backend TEXT
+          CHECK (workspace_backend IS NULL OR workspace_backend IN ('local', 'docker'));
+      `);
+    },
+  },
+  {
+    // The permission ticket (#44 / T18) adds the three product modes, the
+    // Agent override (NULL = follow the channel) and the rule table. The
+    // mode CHECKs are the vocabulary gate at the database; the write path adds
+    // the readable 400 for BYPASS / DONT_ASK / unknown values. `pattern` is
+    // NOT NULL but may be the empty string: empty means "every call of this
+    // tool". A rule belongs to a real channel or Agent; the triggers are the
+    // backstop for that scope-existence invariant.
+    to: 19,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE channel ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'ask-writes'
+          CHECK (permission_mode IN ('read-only', 'ask-writes', 'trusted-writes'));
+        ALTER TABLE agent_config ADD COLUMN permission_mode TEXT
+          CHECK (permission_mode IS NULL
+                 OR permission_mode IN ('read-only', 'ask-writes', 'trusted-writes'));
+
+        CREATE TABLE permission_rule (
+          id TEXT PRIMARY KEY,
+          scope_kind TEXT NOT NULL CHECK (scope_kind IN ('channel', 'agent')),
+          scope_id TEXT NOT NULL,
+          tool_name TEXT NOT NULL CHECK (length(tool_name) > 0),
+          pattern TEXT NOT NULL,
+          behavior TEXT NOT NULL CHECK (behavior IN ('allow', 'deny', 'ask')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (scope_kind, scope_id, tool_name, pattern)
+        );
+        CREATE INDEX permission_rule_scope ON permission_rule (scope_kind, scope_id);
+
+        -- The scope must name a real channel for channel rules and a real
+        -- agent member for Agent rules; a mismatched or unknown id aborts.
+        CREATE TRIGGER permission_rule_scope_insert
+        BEFORE INSERT ON permission_rule
+        FOR EACH ROW
+        WHEN NOT (
+          (NEW.scope_kind = 'channel'
+            AND EXISTS (SELECT 1 FROM channel WHERE id = NEW.scope_id))
+          OR (NEW.scope_kind = 'agent'
+            AND EXISTS (SELECT 1 FROM member WHERE id = NEW.scope_id AND kind = 'agent'))
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'permission_rule scope does not exist');
+        END;
+
+        CREATE TRIGGER permission_rule_scope_update
+        BEFORE UPDATE ON permission_rule
+        FOR EACH ROW
+        WHEN NOT (
+          (NEW.scope_kind = 'channel'
+            AND EXISTS (SELECT 1 FROM channel WHERE id = NEW.scope_id))
+          OR (NEW.scope_kind = 'agent'
+            AND EXISTS (SELECT 1 FROM member WHERE id = NEW.scope_id AND kind = 'agent'))
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'permission_rule scope does not exist');
+        END;
+      `);
+    },
+  },
+  {
+    // The approval HITL record (#44 / T18). `reply_id` is the reply identity,
+    // not a message foreign key: a TeamAssign / SOP reply may never land a
+    // message. `pending` is the only unresolved state; the other four close
+    // with a `resolved_at`. `sop` carries no target (there is no target
+    // context for a run-scoped approval); the other two contexts must name
+    // their target. Both indexes are the list reads: by status and by target.
+    to: 20,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE approval_request (
+          reply_id TEXT PRIMARY KEY,
+          target_id TEXT REFERENCES target (id),
+          context_kind TEXT NOT NULL
+            CHECK (context_kind IN ('round', 'team-assignment', 'sop')),
+          context_id TEXT,
+          tool_calls TEXT NOT NULL
+            CHECK (json_valid(tool_calls) AND json_type(tool_calls) = 'array'),
+          decisions TEXT NOT NULL DEFAULT '[]'
+            CHECK (json_valid(decisions) AND json_type(decisions) = 'array'),
+          status TEXT NOT NULL
+            CHECK (status IN ('pending', 'confirmed', 'denied', 'failed', 'expired')),
+          requested_at TEXT NOT NULL,
+          resolved_at TEXT,
+          CHECK (
+            (status = 'pending' AND resolved_at IS NULL)
+            OR (status <> 'pending' AND resolved_at IS NOT NULL)
+          ),
+          CHECK (
+            (context_kind = 'sop' AND target_id IS NULL)
+            OR (context_kind <> 'sop' AND target_id IS NOT NULL)
+          )
+        );
+        CREATE INDEX approval_request_status_requested
+          ON approval_request (status, requested_at);
+        CREATE INDEX approval_request_target_requested
+          ON approval_request (target_id, requested_at);
+      `);
+    },
+  },
+  {
+    // The MCP / Skill ticket (#47 / T19). `mcp_server` is deliberately only a
+    // history and migration source: ADR-0008 makes the Agent-home mcp.json the
+    // single source of truth, and no runtime path reads this table. The UNIQUE
+    // pair is the old declaration key; the config JSON is opaque here because
+    // the file schema owns the entry shape.
+    //
+    // `skill` is metadata only (installation / assembly are #48); bytes never
+    // enter the database, and the hash is a 64-character lowercase SHA-256.
+    //
+    // The consent table is rebuilt (the v14 precedent) because SQLite cannot
+    // alter a CHECK: the runner turns foreign_keys OFF outside the transaction,
+    // the rebuild runs inside it, and `foreign_key_check` gates the commit. The
+    // existing model rows are copied verbatim.
+    to: 21,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE mcp_server (
+          id TEXT PRIMARY KEY,
+          scope_kind TEXT NOT NULL CHECK (scope_kind IN ('channel', 'agent')),
+          scope_id TEXT NOT NULL,
+          name TEXT NOT NULL CHECK (length(name) > 0),
+          transport TEXT NOT NULL CHECK (transport IN ('stdio', 'http', 'sse')),
+          config TEXT NOT NULL CHECK (json_valid(config)),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          created_at TEXT NOT NULL,
+          UNIQUE (scope_kind, scope_id, name)
+        );
+
+        CREATE TABLE skill (
+          id TEXT PRIMARY KEY,
+          member_id TEXT NOT NULL REFERENCES member (id),
+          name TEXT NOT NULL CHECK (length(name) > 0),
+          content_hash TEXT NOT NULL CHECK (
+            length(content_hash) = 64
+            AND content_hash NOT GLOB '*[^0-9a-f]*'
+          ),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+          source TEXT NOT NULL CHECK (source IN ('directory', 'zip', 'agents-skills')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE (member_id, name)
+        );
+
+        CREATE TABLE remote_consent_scope_v21 (
+          scope_kind TEXT NOT NULL CHECK (scope_kind IN ('model', 'mcp', 'docker')),
+          scope_id TEXT NOT NULL CHECK (length(scope_id) > 0),
+          confirmed_at TEXT NOT NULL,
+          PRIMARY KEY (scope_kind, scope_id)
+        );
+        INSERT INTO remote_consent_scope_v21 (scope_kind, scope_id, confirmed_at)
+          SELECT scope_kind, scope_id, confirmed_at FROM remote_consent_scope;
+        DROP TABLE remote_consent_scope;
+        ALTER TABLE remote_consent_scope_v21 RENAME TO remote_consent_scope;
+      `);
+    },
+  },
 ];
 
 export type MigrationOutcome =
@@ -594,12 +1087,23 @@ export function runMigrations(
 
     const db = new Database(dbPath);
     try {
-      db.transaction(() => {
-        for (const step of pendingSteps) {
-          step.apply(db);
-        }
-        db.prepare('UPDATE schema_meta SET schema_version = ?').run(targetVersion);
-      })();
+      // SQLite cannot toggle foreign_keys inside a transaction, and a
+      // table-rebuild step (v14 / v21) drops a parent table that child rows
+      // still reference. The pragma therefore flips outside the transaction,
+      // the steps run inside it, and `PRAGMA foreign_key_check` before COMMIT
+      // is the backstop: any dangling child row throws and rolls back.
+      db.pragma('foreign_keys = OFF');
+      try {
+        db.transaction(() => {
+          for (const step of pendingSteps) {
+            step.apply(db);
+          }
+          assertNoForeignKeyViolations(db);
+          db.prepare('UPDATE schema_meta SET schema_version = ?').run(targetVersion);
+        })();
+      } finally {
+        db.pragma('foreign_keys = ON');
+      }
     } finally {
       db.close();
     }
@@ -687,6 +1191,26 @@ function readSchemaVersion(dbPath: string): number | null {
     return row.schema_version;
   } finally {
     db.close();
+  }
+}
+
+/**
+ * The backstop for a table rebuild: run inside the migration transaction,
+ * before COMMIT. `PRAGMA foreign_key_check` reports one row per child row whose
+ * parent is gone; any row aborts the whole chain.
+ */
+function assertNoForeignKeyViolations(db: Database.Database): void {
+  const violations = db.pragma('foreign_key_check') as {
+    table: string;
+    rowid: number | null;
+    parent: string;
+    fkid: number;
+  }[];
+  const first = violations[0];
+  if (first !== undefined) {
+    throw new Error(
+      `foreign_key_check failed after migration: table=${first.table} rowid=${String(first.rowid)} parent=${first.parent}`,
+    );
   }
 }
 

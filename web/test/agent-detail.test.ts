@@ -61,6 +61,10 @@ function agent(overrides: Partial<AgentView> & Pick<AgentView, 'id' | 'display_n
     compression_threshold: 0.8,
     max_iterations: 8,
     auto_claim: 1,
+    workspace_backend: null,
+    permission_mode: null,
+    effective_permission_mode: 'ask-writes',
+    home_path: '/tmp/allibot-home/agents/agent-1',
     status: 'online',
     offline_reason: null,
     ...overrides,
@@ -95,6 +99,9 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
         name: '协作环',
         description: '',
         mode: 'autonomous',
+        team: { leader_member_id: null, status: 'valid', reason: null },
+    workspace: { root: null, backend: 'local', allow_local_shell: 0 },
+        permission_mode: 'ask-writes',
         response_budget_limit: 3,
         archived_at: null,
         deleted_at: null,
@@ -109,6 +116,7 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
       },
     ],
     tasks: [],
+    pending_approvals: 0,
     unread_total: 0,
     unread_by_target: { [CHANNEL_ID]: 0, [DM_ID]: 0 },
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
@@ -117,15 +125,18 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
       [NOT_JOINED_ID]: { status: 'online', offline_reason: null },
       [OFFLINE_ID]: { status: 'offline', offline_reason: 'credential-missing' },
     },
+    workspace_runtime: {
+      docker: { available: false, image: 'node:22-bookworm-slim', reason: 'docker-unavailable' },
+    },
     ...overrides,
   };
 }
 
 function channelMembers(): TargetMemberView[] {
   return [
-    { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0 },
-    { id: AGENT_ID, kind: 'agent', display_name: '阿蓝', avatar_slot: 1 },
-    { id: OFFLINE_ID, kind: 'agent', display_name: '阿灰', avatar_slot: 3 },
+    { id: OWNER_ID, kind: 'owner', display_name: 'owner', avatar_slot: 0, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, allow_local_shell: 0, permission_mode: 'ask-writes' },
+    { id: AGENT_ID, kind: 'agent', display_name: '阿蓝', avatar_slot: 1, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, allow_local_shell: 0, permission_mode: 'ask-writes' },
+    { id: OFFLINE_ID, kind: 'agent', display_name: '阿灰', avatar_slot: 3, workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' }, allow_local_shell: 0, permission_mode: 'ask-writes' },
   ];
 }
 
@@ -149,18 +160,24 @@ test('the Agent detail renders the three tabs in the fixed order', () => {
   }
 });
 
-test('the basic tab holds stats, system prompt, config and the danger block last', () => {
-  assert.deepEqual([...AGENT_BASIC_SECTIONS], ['stats', 'system-prompt', 'config', 'danger']);
+test('the basic tab holds stats, system prompt, config, rules and the danger block last', () => {
+  assert.deepEqual([...AGENT_BASIC_SECTIONS], [
+    'stats',
+    'system-prompt',
+    'config',
+    'rules',
+    'danger',
+  ]);
 
   const html = renderToStaticMarkup(
     createElement(AgentDetailPanel, { agent: agent({ id: AGENT_ID, display_name: '阿蓝' }), locale: 'zh-CN' }),
   );
   const basic = panelRegion(html, 'basic');
   const sections = [...basic.matchAll(/data-section="([^"]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(sections, ['stats', 'system-prompt', 'config', 'danger']);
+  assert.deepEqual(sections, ['stats', 'system-prompt', 'config', 'rules', 'danger']);
   assert.ok(basic.indexOf('data-section="danger"') > basic.indexOf('data-section="config"'), '危险操作恒为最后一块');
 
-  for (const copy of ['统计', '系统提示', '配置', '危险操作']) {
+  for (const copy of ['统计', '系统提示', '配置', '家目录与规则', '危险操作']) {
     assert.ok(basic.includes(copy), `the basic tab is missing ${copy}`);
   }
   assert.ok(basic.includes('在线'), 'the stats block shows the status point');
@@ -176,18 +193,25 @@ test('the basic tab holds stats, system prompt, config and the danger block last
   );
 });
 
-test('skills and mcp are T11 placeholders with no controls and no fabricated data', () => {
+test('skills is the two-column installer panel; mcp is the file editor with no fabricated data', () => {
   const html = renderToStaticMarkup(
     createElement(AgentDetailPanel, { agent: agent({ id: AGENT_ID, display_name: '阿蓝' }), locale: 'zh-CN' }),
   );
 
-  for (const name of ['skills', 'mcp']) {
-    const region = panelRegion(html, name);
-    assert.ok(region.includes('依赖规格 T11（M2）'), `${name} states its dependency`);
-    assert.doesNotMatch(region, /<(button|input|textarea|select)\b/, `${name} must not carry a control`);
-    for (const value of ['engineer', 'openai:gpt-5', '你是一名负责实现的工程师。']) {
-      assert.ok(!region.includes(value), `${name} must not fabricate ${value}`);
-    }
+  const skills = panelRegion(html, 'skills');
+  assert.match(skills, /data-section="skills"/);
+  assert.match(skills, /data-action="refresh-skill-candidates"/);
+  assert.match(skills, /data-action="import-all-skills"/);
+  assert.match(skills, /data-field="skills-pending"/);
+  assert.doesNotMatch(skills, /<a\b/, 'skills opens no route or link');
+  assert.doesNotMatch(skills, /data-skill-name=/, 'a null reading fabricates no skill row');
+
+  // mcp is now the #47 file editor: structured + raw blocks read the same file.
+  const mcp = panelRegion(html, 'mcp');
+  assert.match(mcp, /data-mcp-block="entries"/);
+  assert.match(mcp, /data-mcp-block="raw"/);
+  for (const value of ['engineer', 'openai:gpt-5', '你是一名负责实现的工程师。']) {
+    assert.ok(!skills.includes(value), `skills must not fabricate ${value}`);
   }
 });
 

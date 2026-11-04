@@ -217,6 +217,9 @@ const OWNER: TargetMemberView = {
   kind: 'owner',
   display_name: 'Owner',
   avatar_slot: 1,
+  workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
+  allow_local_shell: 0,
+  permission_mode: 'ask-writes',
 };
 
 const ALICE: TargetMemberView = {
@@ -224,6 +227,9 @@ const ALICE: TargetMemberView = {
   kind: 'agent',
   display_name: 'Alice',
   avatar_slot: 0,
+  workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
+  allow_local_shell: 0,
+  permission_mode: 'ask-writes',
 };
 
 const BOB: TargetMemberView = {
@@ -231,6 +237,9 @@ const BOB: TargetMemberView = {
   kind: 'agent',
   display_name: 'Bob',
   avatar_slot: 2,
+  workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
+  allow_local_shell: 0,
+  permission_mode: 'ask-writes',
 };
 
 const CAROL: TargetMemberView = {
@@ -238,6 +247,9 @@ const CAROL: TargetMemberView = {
   kind: 'agent',
   display_name: 'Carol',
   avatar_slot: 3,
+  workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
+  allow_local_shell: 0,
+  permission_mode: 'ask-writes',
 };
 
 function ids(members: readonly TargetMemberView[]): string[] {
@@ -394,6 +406,9 @@ const WORKSPACE_OWNER: TargetMemberView = {
   kind: 'owner',
   display_name: 'Owner',
   avatar_slot: 1,
+  workspace_status: { backend: 'local', available: false, reason: 'workspace-root-missing' },
+  allow_local_shell: 0,
+  permission_mode: 'ask-writes',
 };
 
 function chatView(overrides: Partial<MessageView> = {}): MessageView {
@@ -435,6 +450,7 @@ function taskRow(overrides: Partial<TaskView> = {}): TaskView {
     claimed_at: null,
     created_at: '2026-11-03T00:00:00.000Z',
     updated_at: '2026-11-03T00:00:00.000Z',
+    channel_mode: 'autonomous',
     allowed_transitions: ['in_review'],
     message_count: 3,
     unread_count: 2,

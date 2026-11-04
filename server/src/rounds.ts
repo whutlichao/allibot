@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
+import path from 'node:path';
 import type Database from 'better-sqlite3';
 import type {
   RoundDiscipline,
@@ -6,9 +8,14 @@ import type {
   RoundMember,
   RoundMemory,
   RoundMessage,
+  RoundPromptSections,
   RoundProvider,
   RoundResult,
   RoundTargetKind,
+  RoundTeamContext,
+  RoundWorkspaceContext,
+  TeamAssignRequest,
+  TeamAssignToolResult,
   WakeReason,
 } from './agent-seam.js';
 import { budgetExhaustedReason, tryConsumeJump, type BudgetRow } from './budget.js';
@@ -23,13 +30,55 @@ import {
   publishMemberStatus,
   publishMessageCreated,
   publishRoundOutcome,
+  publishTeamAssignment,
   publishUnreadChanged,
 } from './events.js';
+import { readRoundRuleSections } from './agent-home.js';
+import { skillPromptSection } from './skills.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
+import { buildRoundMcp, closeRoundMcp, readDeclaredEnvNames } from './mcp-runtime.js';
+import {
+  DockerWorkspaceError,
+  getDockerWorkspaceManager,
+  type DockerContainerHandle,
+} from './docker-workspace.js';
+import { createContainerFileTools, createContainerShell } from './docker-files.js';
+import { createPlanFace } from './plans.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
+import { createLocalShell } from './local-shell.js';
+import { createToolGate } from './tool-gate.js';
+import { readTargetPermissionContext } from './permissions.js';
+import { createRoundFileTools } from './workspace-files.js';
+import {
+  agentHomeRoot,
+  agentSkillsRoot,
+  readRoundWorkspaceBinding,
+  readRoundWorkspaceFailure,
+  readTargetWorkspaceBinding,
+  readWorkspaceBackendOverride,
+  workspaceHomeRoot,
+  workspaceRootAvailability,
+} from './workspace-root.js';
+import {
+  readTeamMemberAvailability,
+  readTeamTargetState,
+  readTeamWakeState,
+  type TeamTargetState,
+} from './team.js';
+import {
+  closeTeamAssignment,
+  closeTeamRun,
+  insertFinalTeamAssignment,
+  recordInvalidLeaderRun,
+  startTeamAssignment,
+  startTeamRun,
+  type StartedTeamRun,
+} from './team-runs.js';
+import { truncateTeamAssignmentExcerpt } from './team-assignments.js';
 import { countUnread } from './unread.js';
+import { transferTaskAsMember } from './tasks.js';
 
 /**
  * 自动续跑 (Auto-continue) is bounded independently of the response budget:
@@ -58,6 +107,8 @@ function wakeText(db: Database.Database, reason: WakeReason): string {
       return tFromDb(db, 'wake.claim');
     case 'continue':
       return tFromDb(db, 'wake.continue');
+    case 'team-change':
+      return tFromDb(db, 'wake.teamChange');
   }
 }
 
@@ -98,6 +149,8 @@ function mandatoryText(
       return tFromDb(db, 'round.mandatory.humanMessage');
     case 'continue':
       return tFromDb(db, 'round.mandatory.continue');
+    case 'team-change':
+      return tFromDb(db, 'round.mandatory.teamChange');
   }
 }
 
@@ -170,6 +223,7 @@ interface AgentMemberRow {
 export function collectWakes(
   db: Database.Database,
   message: { targetId: string; authorMemberId: string; kind: string; seq: number },
+  env: NodeJS.ProcessEnv = process.env,
 ): Wake[] {
   if (message.kind !== 'human' && message.kind !== 'agent') {
     return [];
@@ -177,11 +231,34 @@ export function collectWakes(
 
   const mentions = listMentionedAgents(db, message.targetId, message.seq);
   const mentioned = new Set(mentions.map((member) => member.id));
+  const targetKind = readTargetKind(db, message.targetId);
+
+  // team 模式收窄（D3.2 / D3.8）：the channel-type target's ordinary wake
+  // surface is only the leader. A team channel with an unusable leader delivers
+  // zero leader wakes and never falls back to the M1 member surface; the
+  // channel @mention penetration stays outside the team pipeline (D3.6).
+  if (targetKind === 'channel') {
+    const team = readTeamWakeState(db, message.targetId, env);
+    if (team !== null) {
+      return collectTeamChannelWakes(message, mentions, mentioned, team);
+    }
+  }
+
+  // team 任务线程收窄（D3.2 / D3.5）: a task target of a team channel wakes only
+  // the leader, and a task target has no penetration exception at all. The
+  // invalid-leader trigger is recorded by the message write path, not here: the
+  // wake surface stays a pure reading.
+  if (targetKind === 'task') {
+    const team = readTeamTargetState(db, message.targetId, env);
+    if (team !== null) {
+      return collectTeamTaskWakes(message, mentioned, team);
+    }
+  }
+
   const wakes: Wake[] = [];
   const woken = new Set<string>();
 
-  const isDm = readTargetKind(db, message.targetId) === 'dm';
-  const wakesTargetMembers = !(message.kind === 'agent' && isDm);
+  const wakesTargetMembers = !(message.kind === 'agent' && targetKind === 'dm');
   if (wakesTargetMembers) {
     for (const member of listTargetAgentMembers(db, message.targetId)) {
       if (member.id === message.authorMemberId) {
@@ -218,6 +295,78 @@ export function collectWakes(
   }
 
   return wakes;
+}
+
+/**
+ * The team channel's wake set (D3.2 / D3.6 / D3.8):
+ * - the leader is the whole ordinary surface, and only while it is usable;
+ * - a leader-authored message wakes nobody at all — not the ordinary surface
+ *   and not the mention penetration (the leader's final reply must not loop);
+ * - an @mention of a non-leader is still the M1 penetration path: it is
+ *   delivered once, member or not, and never changes the leader identity.
+ */
+function collectTeamChannelWakes(
+  message: { targetId: string; authorMemberId: string; kind: string; seq: number },
+  mentions: readonly { id: string }[],
+  mentioned: ReadonlySet<string>,
+  team: { leaderMemberId: string; available: boolean },
+): Wake[] {
+  if (team.leaderMemberId === message.authorMemberId) {
+    return [];
+  }
+  const wakes: Wake[] = [];
+  const delivered = new Set<string>();
+  if (team.leaderMemberId.length > 0) {
+    delivered.add(team.leaderMemberId);
+    if (team.available) {
+      wakes.push({
+        memberId: team.leaderMemberId,
+        targetId: message.targetId,
+        fromSeq: message.seq,
+        // A mention of the leader is the more specific readable reason.
+        reason: mentioned.has(team.leaderMemberId) ? 'mention' : 'channel-message',
+      });
+    }
+  }
+  for (const member of mentions) {
+    if (member.id === message.authorMemberId || delivered.has(member.id)) {
+      continue;
+    }
+    wakes.push({
+      memberId: member.id,
+      targetId: message.targetId,
+      fromSeq: message.seq,
+      reason: 'mention',
+    });
+    delivered.add(member.id);
+  }
+  return wakes;
+}
+
+/**
+ * The team task target's wake set: the leader is the whole surface, a
+ * leader-authored message wakes nobody, and a mention of anyone else never
+ * penetrates (task targets have no penetration exception, D3.6).
+ */
+function collectTeamTaskWakes(
+  message: { targetId: string; authorMemberId: string; kind: string; seq: number },
+  mentioned: ReadonlySet<string>,
+  team: { leaderMemberId: string; available: boolean },
+): Wake[] {
+  if (team.leaderMemberId.length === 0 || team.leaderMemberId === message.authorMemberId) {
+    return [];
+  }
+  if (!team.available) {
+    return [];
+  }
+  return [
+    {
+      memberId: team.leaderMemberId,
+      targetId: message.targetId,
+      fromSeq: message.seq,
+      reason: mentioned.has(team.leaderMemberId) ? 'mention' : 'channel-message',
+    },
+  ];
 }
 
 /** Whether the member holds a target_member row on this target (any kind). */
@@ -512,6 +661,30 @@ export async function runRound(
   const turn: Turn = { targetId: wake.targetId, repeats: [], deferred: [] };
   inFlight.set(wake.memberId, turn);
   const startedAt = new Date().toISOString();
+  // 审批 identity (D5.6): the reply id is allocated before the adapter runs. If
+  // this round later lands a message, this id is the message id; every approval
+  // batch of this reply uses the same stable identity.
+  const replyId = randomUUID();
+  // 运行记录 (D3.3): a real leader round on a team target opens one run. The
+  // target state is the same reading the wake surface used, so the run names
+  // the same leader, channel and task the delivery did.
+  const teamRun = openTeamRunForWake(db, wake, startedAt);
+  // The TeamAssign tool face (#39 / D3.4): only a leader round opens it, and it
+  // is bound to this run so the assignment rows and the sub-round belong to the
+  // same leader round.
+  const assign: TeamAssignExecutor | null =
+    teamRun === null
+      ? null
+      : (request) =>
+          executeTeamAssignment(db, provider, inFlight, {
+            run: teamRun,
+            targetId: wake.targetId,
+            leaderMemberId: wake.memberId,
+            baseSeq: wake.fromSeq,
+            wakeReason: wake.reason,
+            request,
+            signal,
+          });
   // The status point's `working` state is process state; the frame announces
   // the transition now, and the reading that carries reasons stays the
   // workspace snapshot.
@@ -524,7 +697,7 @@ export async function runRound(
   let result: RoundResult;
   let interrupted = false;
   try {
-    input = readRoundInput(db, wake);
+    input = await readRoundInput(db, wake, { teamRun, assign, replyId });
     const settled = await runProviderRound(provider, input, signal);
     interrupted = settled.interrupted;
     result = settled.result;
@@ -540,8 +713,13 @@ export async function runRound(
     committed = commitRound(db, wake, turn, startedAt, result, input, {
       jump,
       interrupted,
+      replyId,
     });
+    if (teamRun !== null) {
+      closeRoundTeamRun(db, teamRun, committed);
+    }
   } finally {
+    await closeRoundMcp(input?.mcp);
     inFlight.delete(wake.memberId);
   }
   // The subscription relays what the round committed, after its transaction
@@ -612,6 +790,853 @@ export async function runRound(
 }
 
 /**
+ * Whether this wake is the leader's own team round. The leader is the only
+ * ordinary wake target of a team channel / task target (D3.2), so a delivered
+ * wake from one of those surfaces is exactly the round the run records. A
+ * claim / continue wake never exists in a team target; guarding on the reason
+ * keeps a hypothetical one from opening a record.
+ */
+function openTeamRunForWake(
+  db: Database.Database,
+  wake: Wake,
+  startedAt: string,
+): StartedTeamRun | null {
+  if (
+    wake.reason !== 'channel-message' &&
+    wake.reason !== 'mention' &&
+    wake.reason !== 'team-change'
+  ) {
+    return null;
+  }
+  const state = readTeamTargetState(db, wake.targetId, process.env);
+  if (state === null || !state.available || state.leaderMemberId !== wake.memberId) {
+    return null;
+  }
+  return startTeamRun(db, state, startedAt);
+}
+
+/** Close the leader round's run with the round conclusion (D3.3). */
+function closeRoundTeamRun(
+  db: Database.Database,
+  run: StartedTeamRun,
+  committed: CommittedRound,
+): void {
+  const failed = committed.outcome.status === 'failed';
+  closeTeamRun(
+    db,
+    run.id,
+    failed ? 'failed' : 'completed',
+    failed ? committed.outcome.reason : null,
+    committed.outcome.finished_at,
+  );
+}
+
+/** The TeamAssign tool face a leader round hands to the adapter. */
+type TeamAssignExecutor = (request: TeamAssignRequest) => Promise<TeamAssignToolResult>;
+
+interface TeamAssignExecution {
+  run: StartedTeamRun;
+  targetId: string;
+  leaderMemberId: string;
+  /** The leader round's trigger, used by the sub-round's prompt context. */
+  baseSeq: number;
+  wakeReason: WakeReason;
+  request: TeamAssignRequest;
+  signal?: AbortSignal;
+}
+
+/**
+ * One TeamAssign call (D3.4). The fixed decision order is:
+ *
+ * 1. the caller is this target's leader; the target is another live Agent
+ *    member of the channel (or the task's channel), with a ready model provider.
+ *    A target that fails this is a `failed` assignment with `jump_consumed=0`
+ *    and an error tool result — no jump was spent and no member ran;
+ * 2. the budget target is the target itself: the channel's own `target_budget`
+ *    for a channel target, the task's own `target_budget` for a task target.
+ *    There is no borrowing across targets and no second jump ledger;
+ * 3. `tryConsumeJump` checks and decrements atomically. Exhausted means
+ *    `budget-exhausted`, `jump_consumed=0`, no member run, error tool result;
+ * 4. otherwise one `running` assignment with `jump_consumed=1` is inserted, the
+ *    member sub-round runs inside this leader round, and the full output is the
+ *    tool result. A member failure closes the assignment `failed` and never
+ *    refunds the jump.
+ *
+ * The member sub-round writes no target message, no `round_outcome`, no unread,
+ * no search hit and no second budget fact; only the truncated excerpt is stored
+ * on the assignment (D3.4 step 6).
+ */
+async function executeTeamAssignment(
+  db: Database.Database,
+  provider: RoundProvider,
+  inFlight: InFlightRounds,
+  context: TeamAssignExecution,
+): Promise<TeamAssignToolResult> {
+  const { run, targetId, leaderMemberId, request } = context;
+  const team = readTeamTargetState(db, targetId, process.env);
+  if (team === null || team.leaderMemberId !== leaderMemberId) {
+    return {
+      ok: false,
+      assignment_id: null,
+      member_id: request.member_id,
+      state: null,
+      jump_consumed: 0,
+      reply_excerpt: null,
+      reason: tFromDb(db, 'team.assignment.reason.notLeader'),
+      code: 'not_leader',
+      output: null,
+    };
+  }
+
+  if (request.member_id === leaderMemberId) {
+    const reason = tFromDb(db, 'team.assignment.reason.self');
+    const assignment = insertFinalTeamAssignment(db, {
+      teamRunId: run.id,
+      targetId: team.targetId,
+      taskId: team.taskId,
+      memberId: request.member_id,
+      jumpConsumed: 0,
+      state: 'failed',
+      reason,
+    });
+    publishTeamAssignment(assignment);
+    return {
+      ok: false,
+      assignment_id: assignment.id,
+      member_id: request.member_id,
+      state: 'failed',
+      jump_consumed: 0,
+      reply_excerpt: null,
+      reason,
+      code: 'target_self',
+      output: null,
+    };
+  }
+
+  const workspaceFailure = readRoundWorkspaceFailure(db, request.member_id, team.targetId);
+  if (workspaceFailure !== null) {
+    const reason = workspaceFailureReason(db, workspaceFailure.reason);
+    const assignment = insertFinalTeamAssignment(db, {
+      teamRunId: run.id,
+      targetId: team.targetId,
+      taskId: team.taskId,
+      memberId: request.member_id,
+      jumpConsumed: 0,
+      state: 'failed',
+      reason,
+    });
+    publishTeamAssignment(assignment);
+    return {
+      ok: false,
+      assignment_id: assignment.id,
+      member_id: request.member_id,
+      state: 'failed',
+      jump_consumed: 0,
+      reply_excerpt: null,
+      reason,
+      code: 'target_unavailable',
+      output: null,
+    };
+  }
+
+  const availability = readTeamMemberAvailability(
+    db,
+    team.channelId,
+    request.member_id,
+    process.env,
+    team.targetId,
+  );
+  if (!availability.ok) {
+    const assignment = insertFinalTeamAssignment(db, {
+      teamRunId: run.id,
+      targetId: team.targetId,
+      taskId: team.taskId,
+      memberId: request.member_id,
+      jumpConsumed: 0,
+      state: 'failed',
+      reason: availability.reason,
+    });
+    publishTeamAssignment(assignment);
+    return {
+      ok: false,
+      assignment_id: assignment.id,
+      member_id: request.member_id,
+      state: 'failed',
+      jump_consumed: 0,
+      reply_excerpt: null,
+      reason: availability.reason,
+      code: 'target_unavailable',
+      output: null,
+    };
+  }
+
+  // The budget target is the assignment's target: channel target uses the
+  // channel budget, task target uses the task target's budget (D3.4 step 2).
+  const attempt = tryConsumeJump(db, team.targetId);
+  if (!attempt.consumed) {
+    const reason = tFromDb(db, 'team.assignment.budgetExhausted', {
+      used: attempt.budget.used,
+      limit: attempt.budget.limit_value,
+    });
+    const assignment = insertFinalTeamAssignment(db, {
+      teamRunId: run.id,
+      targetId: team.targetId,
+      taskId: team.taskId,
+      memberId: request.member_id,
+      jumpConsumed: 0,
+      state: 'budget-exhausted',
+      reason,
+    });
+    publishTeamAssignment(assignment);
+    return {
+      ok: false,
+      assignment_id: assignment.id,
+      member_id: request.member_id,
+      state: 'budget-exhausted',
+      jump_consumed: 0,
+      reply_excerpt: null,
+      reason,
+      code: 'budget_exhausted',
+      output: null,
+    };
+  }
+
+  const assignment = startTeamAssignment(db, {
+    teamRunId: run.id,
+    targetId: team.targetId,
+    taskId: team.taskId,
+    memberId: request.member_id,
+    jumpConsumed: 1,
+  });
+
+  // The sub-round gets its own stable reply identity; it never lands a message,
+  // so this id only ever names its approval batches (D5.6).
+  const subInput = await readAssignmentRoundInput(db, {
+    team,
+    run,
+    memberId: request.member_id,
+    assignmentId: assignment.id,
+    instruction: request.instruction,
+    baseSeq: context.baseSeq,
+    reason: context.wakeReason,
+    replyId: randomUUID(),
+  });
+  const turn: Turn = { targetId: team.targetId, repeats: [], deferred: [] };
+  const ownsTurn = inFlight.get(request.member_id) === undefined;
+  if (ownsTurn) {
+    inFlight.set(request.member_id, turn);
+  }
+  let result: RoundResult;
+  let interrupted = false;
+  try {
+    const settled = await runProviderRound(provider, subInput, context.signal);
+    result = settled.result;
+    interrupted = settled.interrupted;
+  } catch (error) {
+    result = { verdict: 'failed', replies: [], detail: errorMessage(error) };
+  } finally {
+    await closeRoundMcp(subInput.mcp);
+    if (ownsTurn) {
+      inFlight.delete(request.member_id);
+    }
+  }
+
+  // A TeamAssign sub-round is a real member round, so the task's current
+  // assignee can use the same structured `transfer_task` action an ordinary
+  // task round can (D3.5). The task target is the only target that offers it;
+  // on a team channel the change wakes the leader with `team-change`.
+  const transferred = await applyAssignmentTransfer(
+    db,
+    provider,
+    inFlight,
+    team,
+    request.member_id,
+    result,
+    context.signal,
+  );
+
+  const output = result.replies.join('\n\n').trim();
+  if (!interrupted && result.verdict === 'replied' && (output.length > 0 || transferred)) {
+    const excerpt = truncateTeamAssignmentExcerpt(db, output);
+    const closed = closeTeamAssignment(db, assignment.id, 'completed', {
+      replyExcerpt: excerpt,
+      reason: null,
+    });
+    publishTeamAssignment(closed);
+    return {
+      ok: true,
+      assignment_id: assignment.id,
+      member_id: request.member_id,
+      state: 'completed',
+      jump_consumed: 1,
+      reply_excerpt: excerpt,
+      reason: null,
+      code: null,
+      output,
+    };
+  }
+
+  const reason = tFromDb(db, 'team.assignment.memberFailed', {
+    reason: assignmentFailureReason(db, result, interrupted),
+  });
+  const closed = closeTeamAssignment(db, assignment.id, 'failed', {
+    replyExcerpt: null,
+    reason,
+  });
+  publishTeamAssignment(closed);
+  return {
+    ok: false,
+    assignment_id: assignment.id,
+    member_id: request.member_id,
+    state: 'failed',
+    jump_consumed: 1,
+    reply_excerpt: null,
+    reason,
+    code: 'member_failed',
+    output: null,
+  };
+}
+
+/**
+ * Execute a `transfer_task` action returned by a TeamAssign sub-round (D3.5).
+ * The member is the task's current assignee and the task target belongs to the
+ * assignment's target; the write is the ordinary transfer path (assignee row,
+ * task-thread membership, one system change record). A team channel then
+ * delivers the `team-change` wake to the leader, deferred into the leader's
+ * in-flight round so the tool result still returns first. A refusal writes
+ * nothing and leaves the assignment's own result unchanged.
+ */
+async function applyAssignmentTransfer(
+  db: Database.Database,
+  provider: RoundProvider,
+  inFlight: InFlightRounds,
+  team: TeamTargetState,
+  actorMemberId: string,
+  result: RoundResult,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (result.verdict !== 'replied' || result.taskAction !== 'transfer_task' || team.taskId === null) {
+    return false;
+  }
+  const targetMemberId = result.taskTransferMemberId;
+  if (targetMemberId === undefined || targetMemberId.length === 0) {
+    return false;
+  }
+  const transfer = db.transaction(() =>
+    transferTaskAsMember(db, team.taskId as string, actorMemberId, targetMemberId),
+  )();
+  if (!transfer.ok) {
+    return false;
+  }
+  const state = readTeamTargetState(db, team.targetId, process.env);
+  if (state === null || actorMemberId === state.leaderMemberId) {
+    return true;
+  }
+  if (!state.available) {
+    // The transfer is a task change that should have reached the leader: an
+    // unusable leader leaves the invalid-leader run instead.
+    recordInvalidLeaderRun(db, state);
+    return true;
+  }
+  const wake: Wake = {
+    memberId: state.leaderMemberId,
+    targetId: team.targetId,
+    fromSeq: transfer.assigneeEventSeq,
+    reason: 'team-change',
+  };
+  const leaderTurn = inFlight.get(state.leaderMemberId);
+  if (leaderTurn !== undefined && leaderTurn.targetId === team.targetId) {
+    leaderTurn.deferred.push(wake);
+    return true;
+  }
+  await dispatchWakes(db, provider, [wake], inFlight, { signal });
+  return true;
+}
+
+/**
+ * The readable reason of a failed member sub-round: the adapter's own detail
+ * when it gave one, the structured verdict copy otherwise. A replied round
+ * without a committable body is its own failure, not a silent success.
+ */
+function assignmentFailureReason(
+  db: Database.Database,
+  result: RoundResult,
+  interrupted: boolean,
+): string {
+  if (interrupted) {
+    return tFromDb(db, 'round.interrupted');
+  }
+  if (result.detail !== undefined && result.detail.length > 0) {
+    return result.detail;
+  }
+  if (result.verdict === 'replied') {
+    return tFromDb(db, 'team.assignment.memberNoOutput');
+  }
+  return verdictText(db, result.verdict);
+}
+
+/**
+ * The member sub-round's input: the same member-face seam as an ordinary
+ * round, with the assignment context stated instead of a wake. It reads the
+ * target window and recalls memory (understanding only), but it is not a
+ * target round: the caller writes no message and no round outcome.
+ */
+async function readAssignmentRoundInput(
+  db: Database.Database,
+  params: {
+    team: TeamTargetState;
+    run: StartedTeamRun;
+    memberId: string;
+    assignmentId: string;
+    instruction: string;
+    baseSeq: number;
+    reason: WakeReason;
+    replyId: string;
+  },
+): Promise<RoundInput> {
+  const member = db
+    .prepare(
+      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
+         FROM member m JOIN agent_config c ON c.member_id = m.id
+        WHERE m.id = ? AND m.kind = 'agent' AND ${liveMemberClause('m')}`,
+    )
+    .get(params.memberId) as RoundMember | undefined;
+  if (member === undefined) {
+    throw new Error(`assignment member not found: ${params.memberId}`);
+  }
+  const targetKind: RoundTargetKind = params.team.targetKind;
+  const workspaceResult = await readRoundWorkspace(db, member.id, params.team.targetId, {
+    replyId: params.replyId,
+    contextKind: 'team-assignment',
+    contextId: params.assignmentId,
+  });
+  const workspace = workspaceResult.workspace;
+  const mcp = await buildRoundMcp({
+    db,
+    dataDir: readRoundDataDir(db),
+    memberId: member.id,
+    sessionId: params.replyId,
+    targetId: params.team.targetId,
+    contextKind: 'team-assignment',
+    contextId: params.assignmentId,
+    projectRoot: readTargetProjectRoot(db, params.team.targetId),
+    env: process.env,
+    stdioContainer: workspaceResult.container,
+  });
+  const messages = readContextWindow(db, params.team.targetId, 'window');
+  const memories = recallForRound(db, member.id, params.team.targetId, messages);
+  const prompt = composeSystemPrompt(db, member, targetKind, false, params.reason, memories, {
+    isLeader: false,
+    assignmentInstruction: params.instruction,
+    projectRoot: readTargetProjectRoot(db, params.team.targetId),
+  });
+  return {
+    member,
+    targetId: params.team.targetId,
+    targetKind,
+    channelMode: 'team',
+    // A TeamAssign sub-round is a team-target member round, so the four Plan
+    // tools are part of its tool set too (D4.1). MCP tools are appended after
+    // the built-ins, as `mcp:<server>/<tool>`.
+    tools: [
+      ...readRoundTools(
+        db,
+        member.id,
+        params.team.targetId,
+        targetKind,
+        false,
+        true,
+        workspace !== null,
+        shellToolAvailable(workspace),
+      ),
+      ...mcpToolNames(mcp),
+    ],
+    plan: createPlanFace(db, params.team.targetId, member.id),
+    workspace,
+    mcp,
+    team: {
+      leader_member_id:
+        params.team.leaderMemberId.length === 0 ? null : params.team.leaderMemberId,
+      is_leader: false,
+      task_id: params.team.taskId,
+      team_run_id: params.run.id,
+      assignment: { assignment_id: params.assignmentId, instruction: params.instruction },
+      assign: null,
+    },
+    replyId: params.replyId,
+    sop: null,
+    baseSeq: params.baseSeq,
+    reason: params.reason,
+    discipline: { definite: true, signal: null },
+    contextScope: 'window',
+    messages,
+    consumedSeq: readConsumedSeq(db, member.id, params.team.targetId),
+    memories,
+    systemPrompt: prompt.systemPrompt,
+    promptSections: prompt.sections,
+  };
+}
+
+/** The data directory of the one SQLite file (mcp-hosts lives beside it). */
+function readRoundDataDir(db: Database.Database): string {
+  return path.dirname(db.name);
+}
+
+/** MCP tools the adapter may call, in the stable built-in-then-MCP order. */
+function mcpToolNames(mcp: RoundInput['mcp']): string[] {
+  if (mcp === null) {
+    return [];
+  }
+  return mcp.servers.flatMap((server) =>
+    server.tools.map((tool) => `mcp:${server.name}/${tool.name}`),
+  );
+}
+
+/** One SOP step as the executor reads it (the stored definition step). */
+export interface SopRoundStep {
+  title: string;
+  description: string;
+  executor_member_id: string;
+  verifier_member_id: string;
+  max_attempts: number;
+}
+
+export interface SopRoundInputParams {
+  memberId: string;
+  runId: string;
+  definitionId: string;
+  channelId: string;
+  /** The stable identity of this internal round; it only ever names approvals. */
+  replyId: string;
+  step: SopRoundStep;
+  stepIndex: number;
+  attempt: number;
+  role: 'executor' | 'verifier';
+  /** The executor's text; `null` in an executor round. */
+  executorText: string | null;
+  /** The run's phase hook while an approval batch waits. */
+  onApprovalWait?: () => void;
+  /** The run's phase hook when the approval wait settles. */
+  onApprovalSettled?: () => void;
+}
+
+/**
+ * The input of one SOP executor / verifier round (D4.3). It is the same member
+ * face as an ordinary round, with the step / role stated instead of a wake. It
+ * reads the channel window and the member's available tool set, but it is not a
+ * target round: the caller writes no message and no round outcome.
+ *
+ * The approval identity is this round's stable `replyId`; a tool ask during the
+ * round registers `context_kind='sop'` with the run id, so the human approval
+ * face can mark the run `awaiting` while it waits.
+ */
+export async function readSopRoundInput(
+  db: Database.Database,
+  params: SopRoundInputParams,
+): Promise<RoundInput> {
+  const member = db
+    .prepare(
+      `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
+         FROM member m JOIN agent_config c ON c.member_id = m.id
+        WHERE m.id = ? AND m.kind = 'agent' AND ${liveMemberClause('m')}`,
+    )
+    .get(params.memberId) as RoundMember | undefined;
+  if (member === undefined) {
+    throw new Error(`SOP round member not found: ${params.memberId}`);
+  }
+  const channel = db
+    .prepare('SELECT mode FROM channel WHERE id = ?')
+    .get(params.channelId) as { mode: string } | undefined;
+  const channelMode: 'autonomous' | 'team' = channel?.mode === 'team' ? 'team' : 'autonomous';
+  const workspaceResult = await readRoundWorkspace(db, member.id, params.channelId, {
+    replyId: params.replyId,
+    contextKind: 'sop',
+    contextId: params.runId,
+    // A SOP approval has no target (D5.6), but the permission context still
+    // resolves from the channel the definition belongs to.
+    approvalTargetId: null,
+    onApprovalWait: params.onApprovalWait,
+    onApprovalSettled: params.onApprovalSettled,
+  });
+  const workspace = workspaceResult.workspace;
+  const mcp = await buildRoundMcp({
+    db,
+    dataDir: readRoundDataDir(db),
+    memberId: member.id,
+    sessionId: params.replyId,
+    targetId: params.channelId,
+    contextKind: 'sop',
+    contextId: params.runId,
+    projectRoot: readTargetProjectRoot(db, params.channelId),
+    env: process.env,
+    stdioContainer: workspaceResult.container,
+    approvalTargetId: null,
+    onApprovalWait: params.onApprovalWait,
+    onApprovalSettled: params.onApprovalSettled,
+  });
+  const messages = readContextWindow(db, params.channelId, 'window');
+  const prompt = composeSystemPrompt(db, member, 'channel', false, 'channel-message', [], {
+    isLeader: false,
+    assignmentInstruction: null,
+    projectRoot: readTargetProjectRoot(db, params.channelId),
+    sop: {
+      role: params.role,
+      stepTitle: params.step.title,
+      description: params.step.description,
+      stepIndex: params.stepIndex,
+      attempt: params.attempt,
+      maxAttempts: params.step.max_attempts,
+      executorText: params.executorText,
+    },
+  });
+  return {
+    member,
+    targetId: params.channelId,
+    targetKind: 'channel',
+    channelMode,
+    tools: [
+      ...readRoundTools(
+        db,
+        member.id,
+        params.channelId,
+        'channel',
+        false,
+        false,
+        workspace !== null,
+        // A SOP round is an internal member round with the same workspace face:
+        // the explicit local switch or the Docker container shell adds Bash,
+        // still behind the per-call gate.
+        shellToolAvailable(workspace),
+      ),
+      ...mcpToolNames(mcp),
+    ],
+    team: null,
+    plan: null,
+    workspace,
+    mcp,
+    replyId: params.replyId,
+    sop: {
+      run_id: params.runId,
+      definition_id: params.definitionId,
+      step_index: params.stepIndex,
+      step_title: params.step.title,
+      step_description: params.step.description,
+      role: params.role,
+      attempt: params.attempt,
+      max_attempts: params.step.max_attempts,
+      executor_text: params.executorText,
+    },
+    baseSeq: 0,
+    reason: 'channel-message',
+    discipline: { definite: false, signal: null },
+    contextScope: 'window',
+    messages,
+    consumedSeq: readConsumedSeq(db, member.id, params.channelId),
+    memories: [],
+    systemPrompt: prompt.systemPrompt,
+    promptSections: prompt.sections,
+  };
+}
+
+/** The readable copy for a zero-fallback workspace failure (D5.3 / D5.7). */
+function workspaceFailureReason(
+  db: Database.Database,
+  reason: 'workspace-root-missing' | 'docker-unavailable' | 'docker-image-missing' | 'docker-consent-missing',
+): string {
+  switch (reason) {
+    case 'docker-image-missing':
+      return tFromDb(db, 'workspace.round.dockerImageMissing');
+    case 'docker-consent-missing':
+      return tFromDb(db, 'workspace.round.dockerConsentMissing');
+    case 'docker-unavailable':
+      return tFromDb(db, 'workspace.round.dockerUnavailable');
+    case 'workspace-root-missing':
+      return tFromDb(db, 'workspace.round.rootMissing');
+  }
+}
+
+/**
+ * The round's workspace face (D5.1 / D5.3). A configured root that has
+ * disappeared and every Docker unavailability are readable round failures
+ * before the adapter runs: zero tool calls, no local fallback.
+ *
+ * The Docker branch prepares the `(member, target)` container here, on the
+ * first round that needs the workspace, and hands the same handle to the MCP
+ * assembly so stdio servers execute in that container too. A DM or a local
+ * channel / task without a root simply has no workspace face.
+ */
+interface RoundWorkspaceResult {
+  workspace: RoundWorkspaceContext | null;
+  /** The Docker container of this round; null for a local / rootless round. */
+  container: DockerContainerHandle | null;
+}
+
+async function readRoundWorkspace(
+  db: Database.Database,
+  memberId: string,
+  targetId: string,
+  approval: {
+    replyId: string;
+    contextKind: 'round' | 'team-assignment' | 'sop';
+    contextId: string | null;
+    approvalTargetId?: string | null;
+    onApprovalWait?: () => void;
+    onApprovalSettled?: () => void;
+  },
+): Promise<RoundWorkspaceResult> {
+  const binding = readTargetWorkspaceBinding(db, targetId);
+  if (binding === null || binding.targetKind === 'dm') {
+    return { workspace: null, container: null };
+  }
+  const backend = readWorkspaceBackendOverride(db, memberId) ?? binding.backend;
+  const permission = readTargetPermissionContext(db, memberId, targetId);
+  if (permission === null) {
+    throw new Error(`permission context not found: ${targetId}`);
+  }
+
+  if (backend !== 'docker' && binding.root !== null) {
+    // A configured local root that disappeared / became unreadable fails the
+    // round before the adapter runs (D5.1): zero tools, no fallback.
+    const availability = workspaceRootAvailability(binding.root);
+    if (!availability.available) {
+      throw new Error(
+        workspaceFailureReason(db, availability.reason ?? 'workspace-root-missing'),
+      );
+    }
+  }
+
+  if (backend === 'docker') {
+    const root = workspaceRootAvailability(binding.root);
+    if (!root.available) {
+      // A Docker workspace mounts the project root at /workspace; without a
+      // usable root there is no workspace to mount.
+      throw new Error(workspaceFailureReason(db, 'workspace-root-missing'));
+    }
+    const manager = getDockerWorkspaceManager();
+    if (manager === null) {
+      throw new Error(workspaceFailureReason(db, 'docker-unavailable'));
+    }
+    const projectRoot = binding.root as string;
+    const skillsHost = agentSkillsRoot(memberId);
+    const skillsRoot = existsSync(skillsHost) ? realpathSync(skillsHost) : null;
+    let container: DockerContainerHandle;
+    try {
+      container = await manager.prepare({
+        memberId,
+        targetId,
+        projectRoot,
+        memberHome: agentHomeRoot(memberId),
+        globalSkillsRoot: path.join(workspaceHomeRoot(), 'skills'),
+      });
+    } catch (error) {
+      if (error instanceof DockerWorkspaceError) {
+        throw new Error(workspaceFailureReason(db, error.reason));
+      }
+      throw error;
+    }
+    // The container shell is not the unsandboxed local shell: the same `Bash`
+    // tool executes inside the container, still behind the hard approval.
+    const dockerPermission = { ...permission, containerShell: true };
+    const gate = createToolGate({
+      db,
+      permission: dockerPermission,
+      replyId: approval.replyId,
+      contextKind: approval.contextKind,
+      contextId: approval.contextId,
+      approvalTargetId: approval.approvalTargetId,
+      onApprovalWait: approval.onApprovalWait,
+      onApprovalSettled: approval.onApprovalSettled,
+    });
+    // The MCP env_names merge point (#46 / D6.1): the names are the union of
+    // the enabled servers' declarations; values are read from the process env.
+    const envNames = readDeclaredEnvNames(db, memberId);
+    return {
+      workspace: {
+        root: projectRoot,
+        backend: 'docker',
+        permission_mode: permission.effective,
+        allow_local_shell: permission.allowLocalShell,
+        skills_root: skillsRoot,
+        permission: {
+          mode: permission.effective,
+          check: (request) => gate.check(request),
+          authorize: (request) => gate.authorize(request),
+        },
+        files: createContainerFileTools({
+          handle: container,
+          projectRoot,
+          skillsRoot,
+          envNames,
+          gate,
+        }),
+        shell: createContainerShell({
+          handle: container,
+          projectRoot,
+          envNames,
+          gate,
+        }),
+      },
+      container,
+    };
+  }
+
+  const local = readRoundWorkspaceBinding(db, memberId, targetId);
+  if (local === null) {
+    return { workspace: null, container: null };
+  }
+  const gate = createToolGate({
+    db,
+    permission,
+    replyId: approval.replyId,
+    contextKind: approval.contextKind,
+    contextId: approval.contextId,
+    approvalTargetId: approval.approvalTargetId,
+    onApprovalWait: approval.onApprovalWait,
+    onApprovalSettled: approval.onApprovalSettled,
+  });
+  return {
+    container: null,
+    workspace: {
+      root: local.root,
+      backend: 'local',
+      permission_mode: permission.effective,
+      allow_local_shell: permission.allowLocalShell,
+      skills_root: local.skillsRoot,
+      permission: {
+        mode: permission.effective,
+        check: (request) => gate.check(request),
+        authorize: (request) => gate.authorize(request),
+      },
+      files: createRoundFileTools({
+        root: local.root,
+        skillsRoot: local.skillsRoot,
+        gate,
+      }),
+      shell: createLocalShell({
+        root: local.root,
+        allowLocalShell: permission.allowLocalShell,
+        // The same per-round source the Docker path uses (D5.4 / D6.1): the
+        // member's enabled MCP servers' declared names; values are read from
+        // the process environment at spawn time.
+        envNames: readDeclaredEnvNames(db, memberId),
+        gate,
+      }),
+    },
+  };
+}
+
+/**
+ * True when this round offers `Bash`: the explicit local switch, or the Docker
+ * backend whose shell executes inside the container (D5.3 / D5.4).
+ */
+function shellToolAvailable(workspace: RoundWorkspaceContext | null): boolean {
+  return (
+    workspace !== null &&
+    (workspace.backend === 'docker' || workspace.allow_local_shell === 1)
+  );
+}
+
+/**
  * The commit of one round. The reply seq travels back with the outcome so the
  * caller can relay that message under the response budget; `null` means the
  * round landed no message (ignored, failed, or a reply with no committable
@@ -632,7 +1657,15 @@ export interface RoundOutcomeRow {
   merged: number;
 }
 
-function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
+async function readRoundInput(
+  db: Database.Database,
+  wake: Wake,
+  context: {
+    teamRun: StartedTeamRun | null;
+    assign: TeamAssignExecutor | null;
+    replyId: string;
+  },
+): Promise<RoundInput> {
   const member = db
     .prepare(
       `SELECT m.id, m.display_name, m.avatar_slot, c.role, c.model, c.system_prompt
@@ -658,10 +1691,84 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
   // (D5.2): it reads this round's input and never writes, wakes or spends
   // budget.
   const memories = recallForRound(db, member.id, wake.targetId, messages);
+
+  // 队长提示与工具集 (#39 / D3.7): the team reading is the same target state the
+  // wake surface used. The leader is the only round that carries TeamAssign;
+  // transfer_task belongs to the task's current assignee, so a leader who is
+  // not the assignee does not see it.
+  const teamState = readTeamTargetState(db, wake.targetId, process.env);
+  const isLeader =
+    teamState !== null && teamState.available && teamState.leaderMemberId === member.id;
+  // Plan tools (D4.1): a task target and any team target carry them; a DM and
+  // an autonomous channel's ordinary round do not. The subtarget's own member
+  // is the Plan owner, so the same face serves the leader and a plain member.
+  const planAvailable =
+    targetKind === 'task' || (targetKind === 'channel' && teamState !== null);
+  const workspaceResult = await readRoundWorkspace(db, member.id, wake.targetId, {
+    replyId: context.replyId,
+    contextKind: 'round',
+    contextId: null,
+  });
+  const workspace = workspaceResult.workspace;
+  const mcp = await buildRoundMcp({
+    db,
+    dataDir: readRoundDataDir(db),
+    memberId: member.id,
+    sessionId: context.replyId,
+    targetId: wake.targetId,
+    contextKind: 'round',
+    contextId: null,
+    projectRoot: readTargetProjectRoot(db, wake.targetId),
+    env: process.env,
+    stdioContainer: workspaceResult.container,
+  });
+  const tools = [
+    ...readRoundTools(
+      db,
+      member.id,
+      wake.targetId,
+      targetKind,
+      isLeader,
+      planAvailable,
+      workspace !== null,
+      shellToolAvailable(workspace),
+    ),
+    ...mcpToolNames(mcp),
+  ];
+  const plan = planAvailable ? createPlanFace(db, wake.targetId, member.id) : null;
+  const team: RoundTeamContext | null =
+    teamState === null
+      ? null
+      : {
+          leader_member_id:
+            teamState.leaderMemberId.length === 0 ? null : teamState.leaderMemberId,
+          is_leader: isLeader,
+          task_id: teamState.taskId,
+          team_run_id: context.teamRun?.id ?? null,
+          assignment: null,
+          assign: isLeader ? context.assign : null,
+        };
+  const prompt = composeSystemPrompt(
+    db,
+    member,
+    targetKind,
+    triggeredByHuman,
+    wake.reason,
+    memories,
+    { isLeader, assignmentInstruction: null, projectRoot: readTargetProjectRoot(db, wake.targetId) },
+  );
   return {
     member,
     targetId: wake.targetId,
     targetKind,
+    channelMode: teamState === null ? 'autonomous' : 'team',
+    tools,
+    team,
+    plan,
+    workspace,
+    mcp,
+    replyId: context.replyId,
+    sop: null,
     baseSeq: wake.fromSeq,
     reason: wake.reason,
     discipline,
@@ -669,8 +1776,54 @@ function readRoundInput(db: Database.Database, wake: Wake): RoundInput {
     messages,
     consumedSeq,
     memories,
-    systemPrompt: composeSystemPrompt(db, member, targetKind, triggeredByHuman, memories),
+    systemPrompt: prompt.systemPrompt,
+    promptSections: prompt.sections,
   };
+}
+
+/**
+ * The tools one round may call (D3.7). `TeamAssign` is the leader's own tool;
+ * `transfer_task` is the structured action of the task's current assignee, so
+ * it is absent from a leader round that did not take the task. The four Plan
+ * tools are appended on every task / team round (D4.1).
+ */
+function readRoundTools(
+  db: Database.Database,
+  memberId: string,
+  targetId: string,
+  targetKind: RoundTargetKind,
+  isLeader: boolean,
+  planAvailable: boolean,
+  fileToolsAvailable: boolean,
+  shellAvailable: boolean,
+): readonly string[] {
+  const tools: string[] = [];
+  if (isLeader) {
+    tools.push('TeamAssign');
+  }
+  if (targetKind === 'task') {
+    const task = db
+      .prepare('SELECT assignee_member_id FROM task WHERE target_id = ?')
+      .get(targetId) as { assignee_member_id: string | null } | undefined;
+    if (task?.assignee_member_id === memberId) {
+      tools.push('transfer_task');
+    }
+  }
+  if (planAvailable) {
+    // The tool names are product names; the adapter calls the same face under
+    // its `RoundInput.plan`.
+    tools.push('TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate');
+  }
+  if (fileToolsAvailable) {
+    // A local round with a project root gets exactly the restricted file tools.
+    tools.push('Read', 'Glob', 'Grep', 'Write', 'Edit');
+  }
+  if (shellAvailable) {
+    // The explicit switch adds the local shell to the offered set. The switch
+    // alone does not skip the per-call approval: the gate still asks (D5.4).
+    tools.push('Bash');
+  }
+  return tools;
 }
 
 /**
@@ -715,6 +1868,10 @@ function readDiscipline(
       return triggeredByHuman
         ? { definite: true, signal: 'human-message' }
         : { definite: false, signal: null };
+    case 'team-change':
+      // 队长被任务变化唤醒（建任务 / owner 改派 / Agent 转派）: a definite
+      // signal with its own copy, never the claim / mention / human-message text.
+      return { definite: true, signal: 'team-change' };
   }
 }
 
@@ -738,45 +1895,129 @@ function wokeByHuman(db: Database.Database, wake: Wake): boolean {
   return row?.kind === 'human';
 }
 
+/** The channel project root behind a target; null for a DM / no-root target. */
+function readTargetProjectRoot(db: Database.Database, targetId: string): string | null {
+  return readTargetWorkspaceBinding(db, targetId)?.root ?? null;
+}
+
 /**
- * The system prompt a round is handed: the stored Agent prompt, the target's
- * response discipline, the mandatory-answer sentence, and the memory section
- * when this round recalled cards.
+ * The system prompt a round is handed. It states its own composition (D3.7 /
+ * D5.2) as `RoundPromptSections`: the global rules base → the stored
+ * `agent_config.system_prompt` → the project supplement → the assembled skills,
+ * then the display-name identity sentence, the target's response discipline,
+ * the mandatory-answer sentences, the leader duties on a leader round, the
+ * assignment paragraph on a TeamAssign sub-round, and finally the recalled-memory
+ * section.
  *
- * A DM is stated one-to-one with an explicit mandatory answer (the glossary's
- * "一对一口径 + 显式必答句") instead of the channel rubric: a DM never claims
- * to be a multi-member channel and has no "not mentioned therefore silent"
- * case. A channel keeps the silence rubric verbatim; a human-message round
- * appends the human-message mandatory sentence as its own paragraph, and no
- * other channel round gets that copy. The memory section is appended only — it
- * never replaces the stored prompt (D5.2).
+ * The global base (the member home's `AGENTS.md`) and the project supplement
+ * (`<workspace_root>/.allibot/agents/<member_id>/AGENTS.md`) are read by the
+ * host and injected as prompt text (#43). A missing / unreadable / empty piece
+ * is absent, never an empty section, and only that piece is omitted. A DM is
+ * stated one-to-one with an explicit mandatory answer (the glossary's
+ * "一对一口径 + 显式必答句") instead of the channel rubric. The memory section
+ * is appended only — it never replaces the stored prompt (D5.2).
  */
 function composeSystemPrompt(
   db: Database.Database,
   member: RoundMember,
   targetKind: RoundTargetKind,
   triggeredByHuman: boolean,
+  reason: WakeReason,
   memories: readonly RoundMemory[],
-): string {
-  const sections = [member.system_prompt.trim()];
-  if (targetKind === 'dm') {
-    sections.push(tFromDb(db, 'prompt.dm.oneToOne'));
-    sections.push(
-      triggeredByHuman
-        ? tFromDb(db, 'prompt.humanMessage.mandatory')
-        : tFromDb(db, 'prompt.dm.mandatory'),
-    );
-  } else {
-    sections.push(tFromDb(db, 'prompt.channel.rubric'));
-    if (triggeredByHuman) {
-      sections.push(tFromDb(db, 'prompt.humanMessage.mandatory'));
+  options: {
+    isLeader: boolean;
+    assignmentInstruction: string | null;
+    /** The channel's project root; null for a DM / no-root round. */
+    projectRoot: string | null;
+    /** The SOP step / role when this is an internal executor / verifier round. */
+    sop?: {
+      role: 'executor' | 'verifier';
+      stepTitle: string;
+      description: string;
+      stepIndex: number;
+      attempt: number;
+      maxAttempts: number;
+      executorText: string | null;
+    } | null;
+  },
+): { systemPrompt: string; sections: RoundPromptSections } {
+  const sop = options.sop ?? null;
+  const targetDiscipline =
+    sop !== null
+      ? tFromDb(db, 'prompt.sop.discipline')
+      : targetKind === 'dm'
+        ? tFromDb(db, 'prompt.dm.oneToOne')
+        : tFromDb(db, 'prompt.channel.rubric');
+  const mandatory: string[] = [];
+  if (sop === null) {
+    if (targetKind === 'dm') {
+      mandatory.push(
+        triggeredByHuman
+          ? tFromDb(db, 'prompt.humanMessage.mandatory')
+          : tFromDb(db, 'prompt.dm.mandatory'),
+      );
+    } else {
+      if (triggeredByHuman) {
+        mandatory.push(tFromDb(db, 'prompt.humanMessage.mandatory'));
+      }
+      if (reason === 'team-change') {
+        mandatory.push(tFromDb(db, 'prompt.teamChange.mandatory'));
+      }
     }
   }
-  const memorySection = memoryPromptSection(db, memories);
-  if (memorySection !== null) {
-    sections.push(memorySection);
-  }
-  return sections.filter((section) => section.length > 0).join('\n\n');
+  const rules = readRoundRuleSections(member.id, options.projectRoot);
+  const sections: RoundPromptSections = {
+    rulesBase: rules.rulesBase,
+    systemPrompt: member.system_prompt.trim(),
+    projectSupplement: rules.projectSupplement,
+    skills: skillPromptSection(db, member.id),
+    identity: tFromDb(db, 'prompt.identity', { name: member.display_name }),
+    targetDiscipline,
+    mandatory,
+    leaderDuties: options.isLeader ? tFromDb(db, 'prompt.teamLeader.duties') : null,
+    assignment:
+      options.assignmentInstruction === null
+        ? null
+        : tFromDb(db, 'prompt.teamAssignment.context', {
+            instruction: options.assignmentInstruction,
+          }),
+    memory: memoryPromptSection(db, memories),
+    sop:
+      sop === null
+        ? null
+        : sop.role === 'executor'
+          ? tFromDb(db, 'prompt.sop.executor', {
+              title: sop.stepTitle,
+              step: String(sop.stepIndex + 1),
+              attempt: String(sop.attempt),
+              max_attempts: String(sop.maxAttempts),
+              description: sop.description,
+            })
+          : tFromDb(db, 'prompt.sop.verifier', {
+              title: sop.stepTitle,
+              step: String(sop.stepIndex + 1),
+              attempt: String(sop.attempt),
+              max_attempts: String(sop.maxAttempts),
+              executor: sop.executorText ?? '',
+            }),
+  };
+  const parts = [
+    sections.rulesBase,
+    sections.systemPrompt.length > 0 ? sections.systemPrompt : null,
+    sections.projectSupplement,
+    sections.skills,
+    sections.identity,
+    sections.targetDiscipline,
+    ...sections.mandatory,
+    sections.leaderDuties,
+    sections.assignment,
+    sections.sop,
+    sections.memory,
+  ];
+  return {
+    systemPrompt: parts.filter((part): part is string => part !== null && part.length > 0).join('\n\n'),
+    sections,
+  };
 }
 
 /**
@@ -795,9 +2036,9 @@ function commitRound(
   startedAt: string,
   result: RoundResult,
   roundInput: RoundInput | undefined,
-  options: { jump: number; interrupted: boolean },
+  options: { jump: number; interrupted: boolean; replyId: string },
 ): CommittedRound {
-  const { jump, interrupted } = options;
+  const { jump, interrupted, replyId } = options;
   const discipline = roundInput?.discipline ?? { definite: false, signal: null };
   const messages: WrittenMessage[] = [];
   const outcomes: RoundOutcomeRow[] = [];
@@ -807,7 +2048,7 @@ function commitRound(
     pendingWakes: Wake[];
   } => {
     const joinedSeq = interrupted ? null : commitJoin(db, wake, result, messages);
-    const reply = interrupted ? null : commitReply(db, wake, result, messages);
+    const reply = interrupted ? null : commitReply(db, wake, result, messages, replyId);
     const finishedAt = new Date().toISOString();
 
     // Long-term memory is written back deterministically at round close
@@ -868,6 +2109,7 @@ function commitRound(
             joinedSeq,
             reply?.seq ?? null,
             action?.clause ?? null,
+            roundInput?.mcp?.diagnostics.join('；') ?? null,
           ),
       merged: 0,
       startedAt,
@@ -917,11 +2159,23 @@ function commitTaskAction(
   result: RoundResult,
   written: WrittenMessage[],
 ): { clause: string; wake: Wake | null } | null {
+  if (result.taskAction === 'transfer_task') {
+    return commitTransferAction(db, wake, roundInput, result);
+  }
   if (result.taskAction !== 'continue_task' || roundInput === undefined) {
     return null;
   }
   if (roundInput.targetKind !== 'task') {
     return null;
+  }
+  // 自动续跑在 team 任务线程不提供（D3.5）: the leader-only wake rule is not
+  // reopened by a structured action, and the refusal is readable in the round
+  // reason. It starts no round, writes no continue record and charges no jump.
+  if (readTeamTargetState(db, wake.targetId, process.env) !== null) {
+    return {
+      clause: tFromDb(db, 'round.continue.teamDisabled'),
+      wake: null,
+    };
   }
   const task = db
     .prepare('SELECT title, assignee_member_id FROM task WHERE target_id = ?')
@@ -969,6 +2223,71 @@ function commitTaskAction(
       fromSeq: record.seq,
       reason: 'continue',
     },
+  };
+}
+
+/**
+ * Handle one round's structured `transfer_task` action (转派, D3.5).
+ *
+ * Only the task's current assignee can transfer it, only to another live Agent
+ * member of the same channel. The assignee change and the system change record
+ * share the round's transaction; a refusal writes nothing and is readable in
+ * the round reason. 人类世代 does not open here, and no message body is
+ * written. On a team channel the change wakes the leader with `team-change`
+ * (from_seq = the system record) unless the leader is the actor; an autonomous
+ * channel adds no wake.
+ */
+function commitTransferAction(
+  db: Database.Database,
+  wake: Wake,
+  roundInput: RoundInput | undefined,
+  result: RoundResult,
+): { clause: string; wake: Wake | null } | null {
+  if (roundInput === undefined || roundInput.targetKind !== 'task') {
+    return null;
+  }
+  if (result.taskTransferMemberId === undefined || result.taskTransferMemberId.length === 0) {
+    return {
+      clause: tFromDb(db, 'round.transfer.rejected', {
+        reason: tFromDb(db, 'round.transfer.noTarget'),
+      }),
+      wake: null,
+    };
+  }
+  const task = db
+    .prepare('SELECT id FROM task WHERE target_id = ?')
+    .get(wake.targetId) as { id: string } | undefined;
+  if (task === undefined) {
+    return null;
+  }
+  // Imported lazily at module scope would be a cycle: tasks.ts already knows
+  // this write path, and this module only formats the outcome.
+  const transfer = transferTaskAsMember(db, task.id, wake.memberId, result.taskTransferMemberId);
+  if (!transfer.ok) {
+    return {
+      clause: tFromDb(db, 'round.transfer.rejected', { reason: transfer.reason }),
+      wake: null,
+    };
+  }
+  const team = readTeamTargetState(db, wake.targetId, process.env);
+  let nextWake: Wake | null = null;
+  if (team !== null && wake.memberId !== team.leaderMemberId) {
+    if (team.available) {
+      nextWake = {
+        memberId: team.leaderMemberId,
+        targetId: wake.targetId,
+        fromSeq: transfer.assigneeEventSeq,
+        reason: 'team-change',
+      };
+    } else {
+      // The transfer itself is a task change that should have reached the
+      // leader: an unusable leader leaves the invalid-leader run instead.
+      recordInvalidLeaderRun(db, team);
+    }
+  }
+  return {
+    clause: tFromDb(db, 'round.transfer.done', { assignee: transfer.assigneeName }),
+    wake: nextWake,
   };
 }
 
@@ -1209,6 +2528,7 @@ function commitReply(
   wake: Wake,
   result: RoundResult,
   written: WrittenMessage[],
+  replyId: string,
 ): { id: string; seq: number; body: string } | null {  if (result.verdict !== 'replied' || !hasBody(result)) {
     return null;
   }
@@ -1219,7 +2539,10 @@ function commitReply(
   if (body === undefined || body.length === 0) {
     return null;
   }
-  const reply = { ...insertMessage(db, wake.targetId, 'agent', wake.memberId, body), body };
+  const reply = {
+    ...insertMessage(db, wake.targetId, 'agent', wake.memberId, body, replyId),
+    body,
+  };
   written.push(reply);
   return reply;
 }
@@ -1255,8 +2578,9 @@ function insertMessage(
   kind: 'agent' | 'system',
   authorMemberId: string,
   body: string,
+  id?: string,
 ): { id: string; seq: number } {
-  return insertMessageRow(db, { targetId, kind, authorMemberId, body });
+  return insertMessageRow(db, { id, targetId, kind, authorMemberId, body });
 }
 
 /**
@@ -1275,6 +2599,7 @@ function roundReason(
   joinedSeq: number | null,
   replySeq: number | null,
   taskActionClause: string | null,
+  mcpDiagnostic: string | null,
 ): string {
   const parts: string[] = [wakeText(db, wake.reason)];
   if (result.verdict === 'replied' && replySeq === null) {
@@ -1304,6 +2629,11 @@ function roundReason(
   }
   if (taskActionClause !== null) {
     parts.push(taskActionClause);
+  }
+  if (mcpDiagnostic !== null && mcpDiagnostic.length > 0) {
+    // 文件非法 / 未确认远端 / 连接失败: only the readable diagnostic enters the
+    // round outcome; it never fabricates half a tool set.
+    parts.push(mcpDiagnostic);
   }
   return parts.join('；');
 }

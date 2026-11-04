@@ -1,6 +1,8 @@
 import { t } from '@allibot/shared';
 import type { Server } from 'node:http';
 import { parseCliArgs, type CliOptions } from './args.js';
+import { expirePendingApprovals, setApprovalTimeoutMs } from './approvals.js';
+import { setClock } from './clock.js';
 import { tFromDb } from './copy.js';
 import { databasePath, resolveDataDir } from './data-dir.js';
 import {
@@ -9,12 +11,23 @@ import {
   migrateDataDir,
   openDatabase,
 } from './db.js';
+import { createDockerCliRuntime } from './docker-runtime.js';
+import {
+  DockerWorkspaceManager,
+  dockerImageRef,
+  setDockerWorkspaceManager,
+} from './docker-workspace.js';
 import { HOST, startHttpServer, type OrchestrationRuntime } from './http.js';
 import { acquireDataDirLock } from './lock.js';
+import { runMcpExport } from './mcp-export.js';
+import { runSkillMigration } from './skill-migrate.js';
 import { createModelProvider } from './model-provider.js';
+import { hasDockerConsent } from './providers.js';
 import { startReminderScheduler } from './reminders.js';
 import { createInFlightRounds } from './rounds.js';
 import { createScriptedProvider } from './scripted-provider.js';
+import { closeInterruptedSopRuns } from './sop-executor.js';
+import { closeInterruptedTeamRuns } from './team-runs.js';
 
 const SHUTDOWN_GRACE_MS = 5_000;
 
@@ -36,6 +49,20 @@ export async function main(argv: readonly string[]): Promise<number> {
 
 async function run(argv: readonly string[]): Promise<number> {
   const options = parseCliArgs(argv);
+  // 全局层根 (#43 / D5.2): `--home-dir` is the process-level override and wins
+  // over `allibot_HOME_DIR`. Exporting it into the process environment keeps one
+  // derivation (`workspaceHomeRoot`) for rules, Agent homes and the skills
+  // second root; nothing writes this value to the database.
+  if (options.homeDir !== undefined) {
+    process.env.allibot_HOME_DIR = options.homeDir;
+  }
+  if (options.fixedClock !== undefined) {
+    // 固定时钟 injection: one process-wide instant, selected at startup like
+    // the scripted adapter. Production keeps the wall clock.
+    const instant = options.fixedClock;
+    setClock(() => new Date(instant));
+  }
+  setApprovalTimeoutMs(options.approvalTimeoutMs);
   const { command, port } = options;
   const resolution = resolveDataDir(options.dataDir);
   if (resolution.origin === 'legacy') {
@@ -75,6 +102,60 @@ async function run(argv: readonly string[]): Promise<number> {
     }
   }
 
+  if (command === 'export-mcp') {
+    if (!databaseExists(resolution.dataDir)) {
+      throw new Error(
+        t('zh-CN', 'cli.serve.databaseMissing', {
+          path: databasePath(resolution.dataDir),
+          data_dir: resolution.dataDir,
+        }),
+      );
+    }
+    assertServeableSchemaVersion(resolution.dataDir);
+    const lock = await acquireDataDirLock(resolution.dataDir);
+    const db = openDatabase(resolution.dataDir);
+    try {
+      const outcome = runMcpExport(db, process.env, {
+        apply: options.apply,
+        yes: options.yes,
+      });
+      for (const line of outcome.lines) {
+        console.log(line);
+      }
+      return outcome.exitCode;
+    } finally {
+      db.close();
+      await lock.release();
+    }
+  }
+
+  if (command === 'migrate-skills') {
+    if (!databaseExists(resolution.dataDir)) {
+      throw new Error(
+        t('zh-CN', 'cli.serve.databaseMissing', {
+          path: databasePath(resolution.dataDir),
+          data_dir: resolution.dataDir,
+        }),
+      );
+    }
+    assertServeableSchemaVersion(resolution.dataDir);
+    const lock = await acquireDataDirLock(resolution.dataDir);
+    const db = openDatabase(resolution.dataDir);
+    try {
+      const outcome = runSkillMigration(db, resolution.dataDir, process.env, {
+        apply: options.apply,
+        yes: options.yes,
+      });
+      for (const line of outcome.lines) {
+        console.log(line);
+      }
+      return outcome.exitCode;
+    } finally {
+      db.close();
+      await lock.release();
+    }
+  }
+
   if (!databaseExists(resolution.dataDir)) {
     throw new Error(
       t('zh-CN', 'cli.serve.databaseMissing', {
@@ -88,9 +169,35 @@ async function run(argv: readonly string[]): Promise<number> {
 
   const lock = await acquireDataDirLock(resolution.dataDir);
   const db = openDatabase(resolution.dataDir);
+  // Docker 工作区 (#49 / D5.3): one process manager owns the (member, target)
+  // containers, the availability snapshot and the startup residual cleanup.
+  // The image is the process-level `allibot_DOCKER_IMAGE`; the pull consent is
+  // the v21 `('docker', image_ref)` row.
+  const dockerWorkspace = new DockerWorkspaceManager({
+    runtime: createDockerCliRuntime({ command: options.dockerCommand }),
+    image: dockerImageRef(process.env),
+    dataDir: resolution.dataDir,
+    hasImageConsent: (imageRef) => hasDockerConsent(db, imageRef),
+  });
+  setDockerWorkspaceManager(dockerWorkspace);
+  // 运行记录 (#38 / D3.3): a residual `running` run belongs to a round the
+  // previous process never concluded. It closes as failed/interrupted before
+  // the server accepts work; nothing is replayed or refunded.
+  closeInterruptedTeamRuns(db);
+  // SOP 重启收口 (D4.3): a running / awaiting run (and a pending one whose
+  // scheduled worker died with the old process) closes failed/interrupted; no
+  // step is replayed across a restart.
+  closeInterruptedSopRuns(db);
+  // 审批重启收口 (D5.6): a pending approval belongs to a round the previous
+  // process never concluded. It closes `expired`; no waiter survives a restart.
+  expirePendingApprovals(db);
   // 提醒到点 is a backend fact, not a request: the process ticks on its own.
   // The first pass runs now, so a restart catches up overdue reminders.
   const stopReminders = startReminderScheduler(db, options.reminderTickMs);
+  // A missing daemon is a readable `workspace_runtime` fact, not a startup
+  // failure; residual containers carrying this application's marker are
+  // removed before the process accepts work.
+  await dockerWorkspace.initialize();
   try {
     const orchestration = createOrchestration(options, db);
     // The adapter line precedes the listening line: a caller that waits for
@@ -110,6 +217,10 @@ async function run(argv: readonly string[]): Promise<number> {
     return await waitForShutdown(server);
   } finally {
     stopReminders();
+    // 进程退出停删容器 (D5.3): containers are not persistent workspaces and
+    // never outlive the process that created them.
+    await dockerWorkspace.shutdown();
+    setDockerWorkspaceManager(null);
     db.close();
     await lock.release();
   }
@@ -136,6 +247,13 @@ function createOrchestration(
           echoPrompt: options.scriptedEchoPrompt,
           reportContext: options.scriptedReportContext,
           reportCalls: options.scriptedReportCalls,
+          reportTeam: options.scriptedReportTeam,
+          teamAssignMemberIds: options.scriptedTeamAssignMemberIds,
+          teamAssignInstruction: options.scriptedTeamAssignInstruction,
+          teamMemberFail: options.scriptedTeamMemberFail,
+          teamMemberTransferId: options.scriptedTeamMemberTransferId,
+          transferMemberId: options.scriptedTransferMemberId,
+          shellCommands: options.scriptedShellCommands,
         });
   return { provider, inFlight: createInFlightRounds() };
 }

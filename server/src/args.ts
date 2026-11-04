@@ -1,9 +1,11 @@
+import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from './approvals.js';
 import { DEFAULT_SSE_LIFETIME_MS } from './events.js';
 import { DEFAULT_REMINDER_TICK_MS } from './reminders.js';
 import { SCRIPTED_BEHAVIORS, type ScriptedBehavior } from './scripted-provider.js';
 
-export type CliCommand = 'serve' | 'migrate';
+export type CliCommand = 'serve' | 'migrate' | 'export-mcp' | 'migrate-skills';
 
 /**
  * The member-face adapter the server runs. `model` is the production default:
@@ -18,6 +20,13 @@ export type ProviderMode = 'scripted' | 'model';
 export interface CliOptions {
   command: CliCommand;
   dataDir: string | undefined;
+  /**
+   * The process-level global layer root override (D5.2): `--home-dir <path>`
+   * or the `allibot_HOME_DIR` environment variable. The flag wins. The default
+   * is `~/.allibot/`; the value is never stored in the database and has no
+   * HTTP write entry.
+   */
+  homeDir: string | undefined;
   port: number;
   /**
    * Which member-face adapter is live. The real model adapter is the default;
@@ -59,6 +68,39 @@ export interface CliOptions {
    */
   scriptedReportCalls: boolean;
   /**
+   * Have the scripted reply carry the team reading (prompt composition order,
+   * tool set, assignment context). Like the other reports it is an adapter
+   * capability a test uses to observe the round's input, never a production
+   * branch.
+   */
+  scriptedReportTeam: boolean;
+  /**
+   * The member a scripted `transfer-task` round hands the task to. Like every
+   * `--scripted-*` value it only configures the test double, never production.
+   */
+  scriptedTransferMemberId: string | undefined;
+  /**
+   * The members a scripted `team-assign` leader call assigns, in call order.
+   * Like every `--scripted-*` value it only configures the test double.
+   */
+  scriptedTeamAssignMemberIds: readonly string[];
+  /** The instruction a scripted TeamAssign call sends. */
+  scriptedTeamAssignInstruction: string | undefined;
+  /** Make the doubled member sub-round fail (a TeamAssign failure case). */
+  scriptedTeamMemberFail: boolean;
+  /**
+   * The member an injected TeamAssign sub-round hands a task to. It is the
+   * `transfer_task` action (D3.5) inside a leader's assignment, which is the
+   * only HTTP-observable delivery surface for an Agent transfer in a team task
+   * thread; a test injection like every other `--scripted-*` value.
+   */
+  scriptedTeamMemberTransferId: string | undefined;
+  /**
+   * The commands a scripted `shell` round asks the production shell face to
+   * run. Like every `--scripted-*` value it only configures the test double.
+   */
+  scriptedShellCommands: readonly string[];
+  /**
    * How long one `/api/events` connection lives before the server sends the
    * rotate frame and closes it. Production keeps the 30-minute default; a test
    * injects a short value instead of waiting.
@@ -69,9 +111,35 @@ export interface CliOptions {
    * 30-second default; a test injects a short interval instead of waiting.
    */
   reminderTickMs: number;
+  /**
+   * A fixed instant for the process clock (`--fixed-clock <ISO>`), or
+   * undefined for the wall clock. It is a test injection: retention windows and
+   * Plan occurrence timestamps become deterministic without waiting 30 days.
+   */
+  fixedClock: string | undefined;
+  /**
+   * How long one approval batch waits for a human decision. Production keeps
+   * the spec's 600 seconds; a test injects a short value exactly like the SSE
+   * lifetime / reminder tick injections.
+   */
+  approvalTimeoutMs: number;
+  /**
+   * `export-mcp` write switch. Writing requires both `--apply` and `--yes`;
+   * the command defaults to a dry run (D6.2).
+   */
+  apply: boolean;
+  yes: boolean;
+  /**
+   * The Docker CLI executable the workspace backend spawns (#49). Production
+   * uses `docker`; automation injects the fake runtime fixture here, so the
+   * container lifecycle is observed without a real daemon.
+   */
+  dockerCommand: string;
 }
 
 const DEFAULT_PORT = 3000;
+/** The Docker CLI production default; `--docker-command` overrides it. */
+const DEFAULT_DOCKER_COMMAND = 'docker';
 /**
  * The production default is the real model adapter. The scripted double is a
  * test injection: `--provider scripted` (or any `--scripted-*` option, which
@@ -83,12 +151,18 @@ const PROVIDER_MODES: readonly ProviderMode[] = ['scripted', 'model'];
 const DEFAULT_SCRIPTED_PROVIDER: ScriptedBehavior = 'ignore';
 const DEFAULT_SCRIPTED_DELAY_MS = 1500;
 const USAGE =
-  'usage: allibot <serve|--migrate> [--data-dir <path>] [--port <port>] ' +
+  'usage: allibot <serve|--migrate|export-mcp|migrate-skills> [--data-dir <path>] [--home-dir <path>] ' +
+  '[--port <port>] [--apply] [--yes] ' +
   '[--provider <scripted|model>] ' +
-  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task>] ' +
+  '[--scripted-provider <reply|ignore|fail|delay|silent|no-body|iteration-limit|continue-task|transfer-task|team-assign|team-budget|plan|sop-create|sop-start|sop-executor|sop-verifier|sop-approval|workspace|permission|mcp-approval|mcp|team-approval|shell>] ' +
   '[--scripted-delay-ms <ms>] ' +
   '[--scripted-reply <body>] [--scripted-echo-prompt] [--scripted-report-context] ' +
-  '[--scripted-report-calls] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>]';
+  '[--scripted-report-calls] [--scripted-report-team] [--scripted-transfer-member <member-id>] ' +
+  '[--scripted-team-assign-member <member-id>] [--scripted-team-assign-instruction <text>] ' +
+  '[--scripted-team-member-fail] [--scripted-team-member-transfer <member-id>] ' +
+  '[--scripted-shell-command <command>] ' +
+  '[--fixed-clock <ISO-8601>] [--sse-lifetime-ms <ms>] [--reminder-tick-ms <ms>] ' +
+  '[--approval-timeout-ms <ms>] [--docker-command <path>]';
 
 export function parseCliArgs(
   argv: readonly string[],
@@ -98,6 +172,7 @@ export function parseCliArgs(
     args: [...argv],
     options: {
       'data-dir': { type: 'string' },
+      'home-dir': { type: 'string' },
       port: { type: 'string' },
       migrate: { type: 'boolean' },
       provider: { type: 'string' },
@@ -107,8 +182,20 @@ export function parseCliArgs(
       'scripted-echo-prompt': { type: 'boolean' },
       'scripted-report-context': { type: 'boolean' },
       'scripted-report-calls': { type: 'boolean' },
+      'scripted-report-team': { type: 'boolean' },
+      'scripted-transfer-member': { type: 'string' },
+      'scripted-team-assign-member': { type: 'string', multiple: true },
+      'scripted-team-assign-instruction': { type: 'string' },
+      'scripted-team-member-fail': { type: 'boolean' },
+      'scripted-team-member-transfer': { type: 'string' },
+      'scripted-shell-command': { type: 'string', multiple: true },
       'sse-lifetime-ms': { type: 'string' },
       'reminder-tick-ms': { type: 'string' },
+      'fixed-clock': { type: 'string' },
+      'approval-timeout-ms': { type: 'string' },
+      apply: { type: 'boolean' },
+      yes: { type: 'boolean' },
+      'docker-command': { type: 'string' },
     },
     strict: true,
     allowPositionals: true,
@@ -121,6 +208,7 @@ export function parseCliArgs(
   return {
     command: resolveCommand(values.migrate === true, positionals[0]),
     dataDir: values['data-dir'] ?? env.allibot_DATA_DIR,
+    homeDir: parseHomeDir(values['home-dir']),
     port: parsePort(values.port ?? String(DEFAULT_PORT)),
     providerMode: parseProviderMode(
       values.provider,
@@ -129,7 +217,14 @@ export function parseCliArgs(
         values['scripted-reply'] !== undefined ||
         values['scripted-echo-prompt'] === true ||
         values['scripted-report-context'] === true ||
-        values['scripted-report-calls'] === true,
+        values['scripted-report-calls'] === true ||
+        values['scripted-report-team'] === true ||
+        values['scripted-transfer-member'] !== undefined ||
+        values['scripted-team-assign-member'] !== undefined ||
+        values['scripted-team-assign-instruction'] !== undefined ||
+        values['scripted-team-member-fail'] === true ||
+        values['scripted-team-member-transfer'] !== undefined ||
+        values['scripted-shell-command'] !== undefined,
     ),
     scriptedProvider: parseScriptedProvider(values['scripted-provider']),
     scriptedDelayMs: parseDelayMs(values['scripted-delay-ms']),
@@ -137,8 +232,26 @@ export function parseCliArgs(
     scriptedEchoPrompt: values['scripted-echo-prompt'] === true,
     scriptedReportContext: values['scripted-report-context'] === true,
     scriptedReportCalls: values['scripted-report-calls'] === true,
+    scriptedReportTeam: values['scripted-report-team'] === true,
+    scriptedTransferMemberId: parseScriptedTransferMember(values['scripted-transfer-member']),
+    scriptedTeamAssignMemberIds: parseScriptedTeamAssignMembers(
+      values['scripted-team-assign-member'],
+    ),
+    scriptedTeamAssignInstruction: parseScriptedTeamAssignInstruction(
+      values['scripted-team-assign-instruction'],
+    ),
+    scriptedTeamMemberFail: values['scripted-team-member-fail'] === true,
+    scriptedTeamMemberTransferId: parseScriptedTransferMember(
+      values['scripted-team-member-transfer'],
+    ),
+    scriptedShellCommands: parseScriptedShellCommands(values['scripted-shell-command']),
     sseLifetimeMs: parseSseLifetimeMs(values['sse-lifetime-ms']),
     reminderTickMs: parseReminderTickMs(values['reminder-tick-ms']),
+    fixedClock: parseFixedClock(values['fixed-clock']),
+    approvalTimeoutMs: parseApprovalTimeoutMs(values['approval-timeout-ms']),
+    apply: values.apply === true,
+    yes: values.yes === true,
+    dockerCommand: parseDockerCommand(values['docker-command']),
   };
 }
 
@@ -167,10 +280,34 @@ function resolveCommand(migrate: boolean, positional: string | undefined): CliCo
   if (positional === 'serve') {
     return 'serve';
   }
+  if (positional === 'export-mcp') {
+    return 'export-mcp';
+  }
+  if (positional === 'migrate-skills') {
+    return 'migrate-skills';
+  }
+  if (positional === 'migrate-mcp') {
+    throw new Error('migrate-mcp 已退役；请使用 export-mcp（默认 dry-run）。');
+  }
   if (positional === undefined) {
     throw new Error(USAGE);
   }
   throw new Error(`unknown command: ${positional}; ${USAGE}`);
+}
+
+/**
+ * The global layer root override is a real path or absent. The default is
+ * resolved later from HOME, so an absent flag stays `undefined` rather than
+ * baking this process's HOME into an option value.
+ */
+function parseHomeDir(raw: string | undefined): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw.trim().length === 0) {
+    throw new Error('invalid --home-dir value: a path must not be empty');
+  }
+  return path.resolve(raw);
 }
 
 function parsePort(raw: string): number {
@@ -210,6 +347,71 @@ function parseScriptedReplies(raw: readonly string[] | undefined): readonly stri
   return raw;
 }
 
+function parseScriptedTransferMember(raw: string | undefined): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw.trim().length === 0) {
+    throw new Error('invalid --scripted-transfer-member value: a member id must not be empty');
+  }
+  return raw.trim();
+}
+
+function parseScriptedTeamAssignMembers(
+  raw: readonly string[] | undefined,
+): readonly string[] {
+  if (raw === undefined) {
+    return [];
+  }
+  if (raw.some((memberId) => memberId.trim().length === 0)) {
+    throw new Error('invalid --scripted-team-assign-member value: a member id must not be empty');
+  }
+  return raw.map((memberId) => memberId.trim());
+}
+
+function parseScriptedShellCommands(raw: readonly string[] | undefined): readonly string[] {
+  if (raw === undefined) {
+    return [];
+  }
+  if (raw.some((command) => command.trim().length === 0)) {
+    throw new Error('invalid --scripted-shell-command value: a command must not be empty');
+  }
+  return raw;
+}
+
+/** The Docker CLI path: a non-empty executable name or absolute path. */
+function parseDockerCommand(raw: string | undefined): string {
+  if (raw === undefined) {
+    return DEFAULT_DOCKER_COMMAND;
+  }
+  if (raw.trim().length === 0) {
+    throw new Error('invalid --docker-command value: a path must not be empty');
+  }
+  return raw;
+}
+
+function parseScriptedTeamAssignInstruction(raw: string | undefined): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw.trim().length === 0) {
+    throw new Error('invalid --scripted-team-assign-instruction value: an instruction must not be empty');
+  }
+  return raw;
+}
+
+/** A fixed clock is one valid instant; it is stored normalized so ISO comparison is stable. */
+function parseFixedClock(raw: string | undefined): string | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const instant = new Date(raw);
+  if (!Number.isFinite(instant.getTime())) {
+    throw new Error(`invalid --fixed-clock value: ${raw}; expected an ISO 8601 instant`);
+  }
+  return instant.toISOString();
+}
+
 function parseDelayMs(raw: string | undefined): number {
   if (raw === undefined) {
     return DEFAULT_SCRIPTED_DELAY_MS;
@@ -227,6 +429,17 @@ function parseReminderTickMs(raw: string | undefined): number {
   }
   if (!/^\d+$/.test(raw) || Number(raw) === 0) {
     throw new Error(`invalid --reminder-tick-ms value: ${raw}`);
+  }
+  return Number(raw);
+}
+
+/** An approval wait is a positive integer; 0 would time out every ask instantly. */
+function parseApprovalTimeoutMs(raw: string | undefined): number {
+  if (raw === undefined) {
+    return DEFAULT_APPROVAL_TIMEOUT_MS;
+  }
+  if (!/^\d+$/.test(raw) || Number(raw) === 0) {
+    throw new Error(`invalid --approval-timeout-ms value: ${raw}`);
   }
   return Number(raw);
 }

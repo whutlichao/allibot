@@ -7,12 +7,16 @@ import { LOCK_FILENAME } from './lock.js';
  * migration start time. The lock file is runtime state rather than data, so
  * it is dropped from the copy; everything else (database, attachment bytes,
  * audit ledger) is copied byte for byte.
+ *
+ * `label` distinguishes a non-schema migration (`migrate-skills` uses
+ * `skills`) from the schema runner's default name.
  */
-export function createDataDirBackup(dataDir: string, startedAt: string): string {
+export function createDataDirBackup(dataDir: string, startedAt: string, label?: string): string {
   const stamp = startedAt.replaceAll(':', '-').replaceAll('.', '-');
+  const suffix = label === undefined ? '' : `${label}-`;
   const backupPath = path.join(
     path.dirname(dataDir),
-    `${path.basename(dataDir)}.backup-${stamp}`,
+    `${path.basename(dataDir)}.backup-${suffix}${stamp}`,
   );
 
   if (existsSync(backupPath)) {
