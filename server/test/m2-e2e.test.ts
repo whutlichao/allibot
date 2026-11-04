@@ -765,6 +765,14 @@ test('team tasks: create, owner reassignment and an Agent transfer wake the lead
         db.close();
       }
 
+      assert.equal(
+        (await listMessages(fixture.base, taskTargetId)).filter(
+          (row) => row['kind'] === 'agent' && row['author_member_id'] === leaderId,
+        ).length,
+        3,
+        'each of the three leader wakes landed one final leader reply',
+      );
+
       // The run snapshot nests the assignments; the panel and the frames agree.
       const snapshot = (await getJson(fixture.base, `/api/targets/${taskTargetId}/team-runs`))[
         'team_runs'
@@ -866,6 +874,25 @@ test('Plan tools in a task and a team round publish plan_update and persist one 
     ] as Record<string, unknown>[];
     assert.equal(tasks.length, 1);
     assert.equal(tasks[0]?.['status'], 'todo');
+    const db = openDatabase(fixture.dataDir);
+    try {
+      assert.equal(
+        queryOne<{ total: number }>(db, 'SELECT count(*) AS total FROM plan_run')?.total,
+        1,
+      );
+      assert.deepEqual(
+        queryAll<{ title: string; status: string; position: number }>(
+          db,
+          'SELECT title, status, position FROM plan_task ORDER BY position',
+        ).map((row) => [row.title, row.status, row.position]),
+        [
+          ['PLAN-ITEM-ONE-UPDATED', 'in_progress', 0],
+          ['PLAN-ITEM-TWO', 'pending', 1],
+        ],
+      );
+    } finally {
+      db.close();
+    }
 
     // A team channel's ordinary leader round also has the Plan face.
     const teamChannel = await createChannel(fixture.base, 'M2 Plan 团队频道');
