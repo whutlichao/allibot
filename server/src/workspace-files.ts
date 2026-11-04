@@ -71,6 +71,8 @@ export interface RoundFileGate {
     pattern: string;
     arguments: Record<string, unknown>;
     root_internal_write?: boolean;
+    /** A stable adapter / model call id; the shell face passes one. */
+    tool_call_id?: string;
   }): Promise<'allow' | 'denied'>;
 }
 
@@ -404,7 +406,7 @@ function walkFiles(dir: string): string[] {
  * `/`, `**` crosses directories, `?` is one non-slash character. A trailing
  * `**` matches everything below.
  */
-function globMatcher(pattern: string): (relative: string) => boolean {
+export function globMatcher(pattern: string): (relative: string) => boolean {
   let source = '';
   for (let index = 0; index < pattern.length; index += 1) {
     const character = pattern[index]!;

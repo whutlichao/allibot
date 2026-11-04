@@ -109,6 +109,9 @@ function workspace(): WorkspaceView {
     unread_by_target: { [TEAM_CHANNEL_ID]: 0, [TASK_TARGET_ID]: 0 },
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
     status_points: {},
+    workspace_runtime: {
+      docker: { available: false, image: 'node:22-bookworm-slim', reason: 'docker-unavailable' },
+    },
   };
 }
 

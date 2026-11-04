@@ -220,6 +220,14 @@ export interface TargetPermissionContext {
   /** The mode this target context resolves to. */
   effective: PermissionMode;
   allowLocalShell: 0 | 1;
+  /**
+   * The shell runs inside the Docker workspace container (#49 / D5.3) rather
+   * than on the host. It is the same `Bash` tool and still needs the hard
+   * approval, but the host-local shell switch does not gate it: that switch is
+   * the explicit opt-in for the unsandboxed local shell. A local context leaves
+   * this absent / false, so the switch semantics are unchanged.
+   */
+  containerShell?: boolean;
 }
 
 /**
@@ -371,7 +379,7 @@ export function checkPermission(
 
   // 1. Hard boundaries, before any rule can speak.
   if (reading.tool_class === 'execute' && request.tool_name === 'Bash') {
-    if (context.allowLocalShell !== 1) {
+    if (context.allowLocalShell !== 1 && context.containerShell !== true) {
       return { decision: 'deny', reason: 'shell-disabled' };
     }
   }
@@ -386,9 +394,9 @@ export function checkPermission(
     return { decision: 'deny', reason: 'rule-deny' };
   }
   if (request.tool_name === 'Bash') {
-    // 4. Hard approval: an enabled local shell always asks, except that a
-    //    deny rule above already won. allow rules and the mode cannot make it
-    //    automatic.
+    // 4. Hard approval: an enabled shell (local host or Docker workspace)
+    //    always asks, except that a deny rule above already won. allow rules
+    //    and the mode cannot make it automatic.
     return { decision: 'ask', reason: 'shell-approval' };
   }
   if (merged === 'ask') {

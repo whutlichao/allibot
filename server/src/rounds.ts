@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import type {
@@ -35,7 +36,13 @@ import {
 import { readRoundRuleSections } from './agent-home.js';
 import { skillPromptSection } from './skills.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
-import { buildRoundMcp, closeRoundMcp } from './mcp-runtime.js';
+import { buildRoundMcp, closeRoundMcp, readDeclaredEnvNames } from './mcp-runtime.js';
+import {
+  DockerWorkspaceError,
+  getDockerWorkspaceManager,
+  type DockerContainerHandle,
+} from './docker-workspace.js';
+import { createContainerFileTools, createContainerShell } from './docker-files.js';
 import { createPlanFace } from './plans.js';
 import { insertMessageRow } from './message-store.js';
 import { liveMemberClause, readOwnerId } from './members.js';
@@ -45,9 +52,14 @@ import { createToolGate } from './tool-gate.js';
 import { readTargetPermissionContext } from './permissions.js';
 import { createRoundFileTools } from './workspace-files.js';
 import {
+  agentHomeRoot,
+  agentSkillsRoot,
   readRoundWorkspaceBinding,
   readRoundWorkspaceFailure,
   readTargetWorkspaceBinding,
+  readWorkspaceBackendOverride,
+  workspaceHomeRoot,
+  workspaceRootAvailability,
 } from './workspace-root.js';
 import {
   readTeamMemberAvailability,
@@ -903,7 +915,7 @@ async function executeTeamAssignment(
 
   const workspaceFailure = readRoundWorkspaceFailure(db, request.member_id, team.targetId);
   if (workspaceFailure !== null) {
-    const reason = workspaceFailureReason(db, workspaceFailure.backend);
+    const reason = workspaceFailureReason(db, workspaceFailure.reason);
     const assignment = insertFinalTeamAssignment(db, {
       teamRunId: run.id,
       targetId: team.targetId,
@@ -1122,11 +1134,12 @@ async function readAssignmentRoundInput(
     throw new Error(`assignment member not found: ${params.memberId}`);
   }
   const targetKind: RoundTargetKind = params.team.targetKind;
-  const workspace = readRoundWorkspace(db, member.id, params.team.targetId, {
+  const workspaceResult = await readRoundWorkspace(db, member.id, params.team.targetId, {
     replyId: params.replyId,
     contextKind: 'team-assignment',
     contextId: params.assignmentId,
   });
+  const workspace = workspaceResult.workspace;
   const mcp = await buildRoundMcp({
     db,
     dataDir: readRoundDataDir(db),
@@ -1137,6 +1150,7 @@ async function readAssignmentRoundInput(
     contextId: params.assignmentId,
     projectRoot: readTargetProjectRoot(db, params.team.targetId),
     env: process.env,
+    stdioContainer: workspaceResult.container,
   });
   const messages = readContextWindow(db, params.team.targetId, 'window');
   const memories = recallForRound(db, member.id, params.team.targetId, messages);
@@ -1162,7 +1176,7 @@ async function readAssignmentRoundInput(
         false,
         true,
         workspace !== null,
-        workspace?.allow_local_shell === 1,
+        shellToolAvailable(workspace),
       ),
       ...mcpToolNames(mcp),
     ],
@@ -1263,7 +1277,7 @@ export async function readSopRoundInput(
     .prepare('SELECT mode FROM channel WHERE id = ?')
     .get(params.channelId) as { mode: string } | undefined;
   const channelMode: 'autonomous' | 'team' = channel?.mode === 'team' ? 'team' : 'autonomous';
-  const workspace = readRoundWorkspace(db, member.id, params.channelId, {
+  const workspaceResult = await readRoundWorkspace(db, member.id, params.channelId, {
     replyId: params.replyId,
     contextKind: 'sop',
     contextId: params.runId,
@@ -1273,6 +1287,7 @@ export async function readSopRoundInput(
     onApprovalWait: params.onApprovalWait,
     onApprovalSettled: params.onApprovalSettled,
   });
+  const workspace = workspaceResult.workspace;
   const mcp = await buildRoundMcp({
     db,
     dataDir: readRoundDataDir(db),
@@ -1283,6 +1298,7 @@ export async function readSopRoundInput(
     contextId: params.runId,
     projectRoot: readTargetProjectRoot(db, params.channelId),
     env: process.env,
+    stdioContainer: workspaceResult.container,
     approvalTargetId: null,
     onApprovalWait: params.onApprovalWait,
     onApprovalSettled: params.onApprovalSettled,
@@ -1317,8 +1333,9 @@ export async function readSopRoundInput(
         false,
         workspace !== null,
         // A SOP round is an internal member round with the same workspace face:
-        // the explicit shell switch adds Bash, still behind the per-call gate.
-        workspace?.allow_local_shell === 1,
+        // the explicit local switch or the Docker container shell adds Bash,
+        // still behind the per-call gate.
+        shellToolAvailable(workspace),
       ),
       ...mcpToolNames(mcp),
     ],
@@ -1351,20 +1368,39 @@ export async function readSopRoundInput(
 }
 
 /** The readable copy for a zero-fallback workspace failure (D5.3 / D5.7). */
-function workspaceFailureReason(db: Database.Database, backend: string): string {
-  if (backend === 'docker') {
-    return tFromDb(db, 'workspace.round.dockerUnavailable');
+function workspaceFailureReason(
+  db: Database.Database,
+  reason: 'workspace-root-missing' | 'docker-unavailable' | 'docker-image-missing' | 'docker-consent-missing',
+): string {
+  switch (reason) {
+    case 'docker-image-missing':
+      return tFromDb(db, 'workspace.round.dockerImageMissing');
+    case 'docker-consent-missing':
+      return tFromDb(db, 'workspace.round.dockerConsentMissing');
+    case 'docker-unavailable':
+      return tFromDb(db, 'workspace.round.dockerUnavailable');
+    case 'workspace-root-missing':
+      return tFromDb(db, 'workspace.round.rootMissing');
   }
-  return tFromDb(db, 'workspace.round.rootMissing');
 }
 
 /**
- * The round's local workspace face (D5.1 / D5.3). A configured root that has
- * disappeared and the docker backend are readable round failures before the
- * adapter runs: zero tool calls, no local fallback. A DM or a local channel /
- * task without a root simply has no workspace face.
+ * The round's workspace face (D5.1 / D5.3). A configured root that has
+ * disappeared and every Docker unavailability are readable round failures
+ * before the adapter runs: zero tool calls, no local fallback.
+ *
+ * The Docker branch prepares the `(member, target)` container here, on the
+ * first round that needs the workspace, and hands the same handle to the MCP
+ * assembly so stdio servers execute in that container too. A DM or a local
+ * channel / task without a root simply has no workspace face.
  */
-function readRoundWorkspace(
+interface RoundWorkspaceResult {
+  workspace: RoundWorkspaceContext | null;
+  /** The Docker container of this round; null for a local / rootless round. */
+  container: DockerContainerHandle | null;
+}
+
+async function readRoundWorkspace(
   db: Database.Database,
   memberId: string,
   targetId: string,
@@ -1376,18 +1412,106 @@ function readRoundWorkspace(
     onApprovalWait?: () => void;
     onApprovalSettled?: () => void;
   },
-): RoundWorkspaceContext | null {
-  const failure = readRoundWorkspaceFailure(db, memberId, targetId);
-  if (failure !== null) {
-    throw new Error(workspaceFailureReason(db, failure.backend));
+): Promise<RoundWorkspaceResult> {
+  const binding = readTargetWorkspaceBinding(db, targetId);
+  if (binding === null || binding.targetKind === 'dm') {
+    return { workspace: null, container: null };
   }
-  const binding = readRoundWorkspaceBinding(db, memberId, targetId);
-  if (binding === null) {
-    return null;
-  }
+  const backend = readWorkspaceBackendOverride(db, memberId) ?? binding.backend;
   const permission = readTargetPermissionContext(db, memberId, targetId);
   if (permission === null) {
     throw new Error(`permission context not found: ${targetId}`);
+  }
+
+  if (backend !== 'docker' && binding.root !== null) {
+    // A configured local root that disappeared / became unreadable fails the
+    // round before the adapter runs (D5.1): zero tools, no fallback.
+    const availability = workspaceRootAvailability(binding.root);
+    if (!availability.available) {
+      throw new Error(
+        workspaceFailureReason(db, availability.reason ?? 'workspace-root-missing'),
+      );
+    }
+  }
+
+  if (backend === 'docker') {
+    const root = workspaceRootAvailability(binding.root);
+    if (!root.available) {
+      // A Docker workspace mounts the project root at /workspace; without a
+      // usable root there is no workspace to mount.
+      throw new Error(workspaceFailureReason(db, 'workspace-root-missing'));
+    }
+    const manager = getDockerWorkspaceManager();
+    if (manager === null) {
+      throw new Error(workspaceFailureReason(db, 'docker-unavailable'));
+    }
+    const projectRoot = binding.root as string;
+    const skillsHost = agentSkillsRoot(memberId);
+    const skillsRoot = existsSync(skillsHost) ? realpathSync(skillsHost) : null;
+    let container: DockerContainerHandle;
+    try {
+      container = await manager.prepare({
+        memberId,
+        targetId,
+        projectRoot,
+        memberHome: agentHomeRoot(memberId),
+        globalSkillsRoot: path.join(workspaceHomeRoot(), 'skills'),
+      });
+    } catch (error) {
+      if (error instanceof DockerWorkspaceError) {
+        throw new Error(workspaceFailureReason(db, error.reason));
+      }
+      throw error;
+    }
+    // The container shell is not the unsandboxed local shell: the same `Bash`
+    // tool executes inside the container, still behind the hard approval.
+    const dockerPermission = { ...permission, containerShell: true };
+    const gate = createToolGate({
+      db,
+      permission: dockerPermission,
+      replyId: approval.replyId,
+      contextKind: approval.contextKind,
+      contextId: approval.contextId,
+      approvalTargetId: approval.approvalTargetId,
+      onApprovalWait: approval.onApprovalWait,
+      onApprovalSettled: approval.onApprovalSettled,
+    });
+    // The MCP env_names merge point (#46 / D6.1): the names are the union of
+    // the enabled servers' declarations; values are read from the process env.
+    const envNames = readDeclaredEnvNames(memberId);
+    return {
+      workspace: {
+        root: projectRoot,
+        backend: 'docker',
+        permission_mode: permission.effective,
+        allow_local_shell: permission.allowLocalShell,
+        skills_root: skillsRoot,
+        permission: {
+          mode: permission.effective,
+          check: (request) => gate.check(request),
+          authorize: (request) => gate.authorize(request),
+        },
+        files: createContainerFileTools({
+          handle: container,
+          projectRoot,
+          skillsRoot,
+          envNames,
+          gate,
+        }),
+        shell: createContainerShell({
+          handle: container,
+          projectRoot,
+          envNames,
+          gate,
+        }),
+      },
+      container,
+    };
+  }
+
+  const local = readRoundWorkspaceBinding(db, memberId, targetId);
+  if (local === null) {
+    return { workspace: null, container: null };
   }
   const gate = createToolGate({
     db,
@@ -1400,30 +1524,44 @@ function readRoundWorkspace(
     onApprovalSettled: approval.onApprovalSettled,
   });
   return {
-    root: binding.root,
-    backend: 'local',
-    permission_mode: permission.effective,
-    allow_local_shell: permission.allowLocalShell,
-    skills_root: binding.skillsRoot,
-    permission: {
-      mode: permission.effective,
-      check: (request) => gate.check(request),
-      authorize: (request) => gate.authorize(request),
+    container: null,
+    workspace: {
+      root: local.root,
+      backend: 'local',
+      permission_mode: permission.effective,
+      allow_local_shell: permission.allowLocalShell,
+      skills_root: local.skillsRoot,
+      permission: {
+        mode: permission.effective,
+        check: (request) => gate.check(request),
+        authorize: (request) => gate.authorize(request),
+      },
+      files: createRoundFileTools({
+        root: local.root,
+        skillsRoot: local.skillsRoot,
+        gate,
+      }),
+      shell: createLocalShell({
+        root: local.root,
+        allowLocalShell: permission.allowLocalShell,
+        // #47 replaces this process-level list with the member's enabled MCP
+        // servers' `env_names`; the shell face itself already merges per round.
+        envNames: getShellEnvNames(),
+        gate,
+      }),
     },
-    files: createRoundFileTools({
-      root: binding.root,
-      skillsRoot: binding.skillsRoot,
-      gate,
-    }),
-    shell: createLocalShell({
-      root: binding.root,
-      allowLocalShell: permission.allowLocalShell,
-      // #47 replaces this process-level list with the member's enabled MCP
-      // servers' `env_names`; the shell face itself already merges per round.
-      envNames: getShellEnvNames(),
-      gate,
-    }),
   };
+}
+
+/**
+ * True when this round offers `Bash`: the explicit local switch, or the Docker
+ * backend whose shell executes inside the container (D5.3 / D5.4).
+ */
+function shellToolAvailable(workspace: RoundWorkspaceContext | null): boolean {
+  return (
+    workspace !== null &&
+    (workspace.backend === 'docker' || workspace.allow_local_shell === 1)
+  );
 }
 
 /**
@@ -1494,11 +1632,12 @@ async function readRoundInput(
   // is the Plan owner, so the same face serves the leader and a plain member.
   const planAvailable =
     targetKind === 'task' || (targetKind === 'channel' && teamState !== null);
-  const workspace = readRoundWorkspace(db, member.id, wake.targetId, {
+  const workspaceResult = await readRoundWorkspace(db, member.id, wake.targetId, {
     replyId: context.replyId,
     contextKind: 'round',
     contextId: null,
   });
+  const workspace = workspaceResult.workspace;
   const mcp = await buildRoundMcp({
     db,
     dataDir: readRoundDataDir(db),
@@ -1509,6 +1648,7 @@ async function readRoundInput(
     contextId: null,
     projectRoot: readTargetProjectRoot(db, wake.targetId),
     env: process.env,
+    stdioContainer: workspaceResult.container,
   });
   const tools = [
     ...readRoundTools(
@@ -1519,7 +1659,7 @@ async function readRoundInput(
       isLeader,
       planAvailable,
       workspace !== null,
-      workspace?.allow_local_shell === 1,
+      shellToolAvailable(workspace),
     ),
     ...mcpToolNames(mcp),
   ];

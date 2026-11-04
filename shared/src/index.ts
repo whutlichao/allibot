@@ -339,7 +339,12 @@ export type WorkspaceBackend = (typeof WORKSPACE_BACKENDS)[number];
  * Why a target context's workspace is unavailable. The reason is a stable code
  * the human face can render; the readable copy is the catalog's job.
  */
-export const WORKSPACE_STATUS_REASONS = ['workspace-root-missing', 'docker-unavailable'] as const;
+export const WORKSPACE_STATUS_REASONS = [
+  'workspace-root-missing',
+  'docker-unavailable',
+  'docker-image-missing',
+  'docker-consent-missing',
+] as const;
 export type WorkspaceStatusReason = (typeof WORKSPACE_STATUS_REASONS)[number];
 
 /**
@@ -363,6 +368,23 @@ export interface WorkspaceStatusView {
   backend: WorkspaceBackend;
   available: boolean;
   reason: WorkspaceStatusReason | null;
+}
+
+/**
+ * The process-level Docker reading (#49 / D2.2): whether the daemon is
+ * reachable and the configured image is local, and the image reference. It is
+ * not a credential reading — registry credentials are out of M2 scope — and it
+ * is not a per-target fact.
+ */
+export interface DockerRuntimeView {
+  available: boolean;
+  image: string;
+  reason: WorkspaceStatusReason | null;
+}
+
+/** `GET /api/workspace.workspace_runtime` (D2.2). */
+export interface WorkspaceRuntimeView {
+  docker: DockerRuntimeView;
 }
 
 /**
@@ -1004,6 +1026,8 @@ export interface WorkspaceView extends WorkspaceUnreadView {
   status_points: Record<string, StatusPointView>;
   /** The number of `pending` approval requests (D5.6). */
   pending_approvals: number;
+  /** The process-level Docker availability + image reference (D2.2 / D5.3). */
+  workspace_runtime: WorkspaceRuntimeView;
 }
 
 export {

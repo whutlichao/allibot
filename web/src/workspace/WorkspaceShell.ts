@@ -136,6 +136,10 @@ export interface WorkspaceShellProps {
   ) => void | Promise<void>;
   /** The raw Agent permission-mode override write (null = follow). */
   onAgentPermissionModeChange?: (agentId: string, mode: string | null) => void | Promise<void>;
+  onAgentWorkspaceBackendChange?: (
+    agentId: string,
+    backend: string | null,
+  ) => void | Promise<void>;
   /** Read the Agent's effective rules for the open detail; the host fetches. */
   onAgentRulesNeeded?: (agentId: string, channelId: string | null) => void;
   saveFailed?: boolean;
@@ -202,6 +206,7 @@ export function WorkspaceShell({
   onApprovalDecision,
   onPermissionRulesChange,
   onAgentPermissionModeChange,
+  onAgentWorkspaceBackendChange,
   agentRules,
   onAgentRulesNeeded,
   agentMcp,
@@ -529,6 +534,10 @@ export function WorkspaceShell({
               onAgentPermissionModeChange === undefined
                 ? undefined
                 : (mode) => onAgentPermissionModeChange(selectedAgent.id, mode),
+            onWorkspaceBackendChange:
+              onAgentWorkspaceBackendChange === undefined
+                ? undefined
+                : (backend) => onAgentWorkspaceBackendChange(selectedAgent.id, backend),
           });
   } else if (drawer === 'approvals') {
     drawerBody = createElement(ApprovalPanel, {

@@ -14,6 +14,10 @@ import {
   type McpClient,
 } from './mcp-client.js';
 import { hasMcpConsent, mcpFilePath, readMcpFile } from './mcp-file.js';
+import {
+  containerToolEnvironment,
+  type DockerContainerHandle,
+} from './docker-workspace.js';
 import { stableJson } from './permissions.js';
 import { createToolGate } from './tool-gate.js';
 import { readTargetPermissionContext } from './permissions.js';
@@ -54,6 +58,12 @@ export interface BuildRoundMcpOptions {
   /** The usable project root, or null for a DM / rootless target. */
   projectRoot: string | null;
   env: NodeJS.ProcessEnv;
+  /**
+   * The Docker round's container (#49): stdio servers run inside it via
+   * `docker exec -i` with cwd `/workspace`; http / sse servers are always
+   * connected by the host process and ignore this handle.
+   */
+  stdioContainer?: DockerContainerHandle | null;
   timeoutMs?: number;
   /** A SOP approval has no target; ordinary / team rounds keep the target. */
   approvalTargetId?: string | null;
@@ -204,15 +214,38 @@ function createClient(
   options: BuildRoundMcpOptions,
 ): McpClient {
   if (entry.transport === 'stdio') {
+    const command = entry.command ?? '';
+    const args = entry.args ?? [];
+    const envNames = entry.env_names ?? [];
+    const container = options.stdioContainer ?? null;
+    if (container !== null) {
+      // Docker backend: the stdio server is a process inside the Agent
+      // container, not a host child. Only the allowlist + declared env_names
+      // reach it; the container environment is built by the manager.
+      return createStdioMcpClient({
+        command,
+        args,
+        cwd: '/workspace',
+        env: options.env,
+        envNames,
+        timeoutMs: options.timeoutMs,
+        label: `${entry.name} (container)`,
+        spawnProcess: () =>
+          container.spawn([command, ...args], {
+            workdir: '/workspace',
+            env: containerToolEnvironment(options.env, envNames, '/workspace'),
+          }),
+      });
+    }
     if (hostRoot === null) {
       throw new Error('no MCP host directory');
     }
     return createStdioMcpClient({
-      command: entry.command ?? '',
-      args: entry.args ?? [],
+      command,
+      args,
       cwd: hostRoot,
       env: options.env,
-      envNames: entry.env_names ?? [],
+      envNames,
       timeoutMs: options.timeoutMs,
     });
   }
@@ -220,6 +253,31 @@ function createClient(
   return entry.transport === 'http'
     ? createHttpMcpClient({ url, timeoutMs: options.timeoutMs })
     : createSseMcpClient({ url, timeoutMs: options.timeoutMs });
+}
+
+/**
+ * The union of the enabled servers' declared `env_names` (D6.1). The names come
+ * from the one mcp.json; a missing or invalid file declares nothing. The shell
+ * and file-tool processes get exactly these names on top of the allowlist.
+ */
+export function readDeclaredEnvNames(
+  memberId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const file = readMcpFile(mcpFilePath(memberId, env));
+  if (!file.present || file.diagnostic !== null) {
+    return [];
+  }
+  const names = new Set<string>();
+  for (const entry of file.entries) {
+    if (!entry.enabled) {
+      continue;
+    }
+    for (const name of entry.env_names ?? []) {
+      names.add(name);
+    }
+  }
+  return [...names];
 }
 
 function diagnosticOnlyContext(diagnostic: string): RoundMcpContext {

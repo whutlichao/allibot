@@ -159,6 +159,9 @@ function workspace(): WorkspaceView {
     ],
     settings: { locale: 'zh-CN', density: 'comfortable', theme: 'system' },
     status_points: {},
+    workspace_runtime: {
+      docker: { available: false, image: 'node:22-bookworm-slim', reason: 'docker-unavailable' },
+    },
     pending_approvals: 0,
     unread_total: 0,
     unread_by_target: { [CHANNEL_ID]: 0, [DM_ID]: 0 },

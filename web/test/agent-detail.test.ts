@@ -125,6 +125,9 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
       [NOT_JOINED_ID]: { status: 'online', offline_reason: null },
       [OFFLINE_ID]: { status: 'offline', offline_reason: 'credential-missing' },
     },
+    workspace_runtime: {
+      docker: { available: false, image: 'node:22-bookworm-slim', reason: 'docker-unavailable' },
+    },
     ...overrides,
   };
 }

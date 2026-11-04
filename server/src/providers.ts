@@ -233,6 +233,21 @@ export function parseConsentScope(body: unknown): {
   return { scopeKind, scopeId };
 }
 
+/**
+ * One `('docker', image_ref)` confirmation (D5.3 / D6.1). The row is the only
+ * fact that allows pulling an image that is not local; it stores the scope and
+ * the confirmation time only, never a registry credential.
+ */
+export function hasDockerConsent(db: Database.Database, imageRef: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 AS ok FROM remote_consent_scope
+        WHERE scope_kind = 'docker' AND scope_id = ?`,
+    )
+    .get(imageRef) as { ok: number } | undefined;
+  return row !== undefined;
+}
+
 /** Every confirmed row of one kind, scope + time only. */
 export function readConsentScopes(
   db: Database.Database,

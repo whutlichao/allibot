@@ -15,6 +15,7 @@ import {
   type WorkspaceStatusView,
 } from '@allibot/shared';
 import { ApiFailure } from './api-error.js';
+import { getDockerWorkspaceManager } from './docker-workspace.js';
 import { readTargetKind } from './sql.js';
 
 /**
@@ -206,18 +207,32 @@ export function readWorkspaceBackendOverride(
 /**
  * The target-context workspace status for one member (D5.7): an Agent override
  * replaces the channel default; the availability reason is the same for every
- * member sharing the target's root.
+ * member sharing the target's root. Docker availability is read from the
+ * process manager's snapshot plus this target's recorded failure — never from
+ * a global status point, so the same Agent can be available in one channel and
+ * unavailable in another.
  */
 export function readWorkspaceStatus(
   binding: TargetWorkspaceBinding,
   member: { id: string; kind: string },
   db: Database.Database,
+  targetId: string,
 ): WorkspaceStatusView {
   const override =
     member.kind === 'agent' ? readWorkspaceBackendOverride(db, member.id) : null;
   const backend = override ?? binding.backend;
   if (backend === 'docker') {
-    return { backend, available: false, reason: 'docker-unavailable' };
+    // A Docker workspace mounts the project root at /workspace, so a missing
+    // root is the root reason, not a Docker daemon reason.
+    const root = workspaceRootAvailability(binding.root);
+    if (!root.available) {
+      return { backend, available: false, reason: 'workspace-root-missing' };
+    }
+    const status = getDockerWorkspaceManager()?.statusFor({
+      memberId: member.id,
+      targetId,
+    }) ?? { available: false, reason: 'docker-unavailable' as const };
+    return { backend, available: status.available, reason: status.reason };
   }
   const root = workspaceRootAvailability(binding.root);
   return { backend, available: root.available, reason: root.reason };
@@ -243,7 +258,22 @@ export function readRoundWorkspaceFailure(
   const override = readWorkspaceBackendOverride(db, memberId);
   const backend = override ?? binding.backend;
   if (backend === 'docker') {
-    return { backend, reason: 'docker-unavailable' };
+    // Docker mounts the project root at /workspace; a missing root is the root
+    // reason, not a daemon reason. When the root is usable, the manager's
+    // snapshot answers daemon / image / consent, and the round's `prepare`
+    // answers container creation.
+    const root = workspaceRootAvailability(binding.root);
+    if (!root.available) {
+      return { backend, reason: 'workspace-root-missing' };
+    }
+    const status = getDockerWorkspaceManager()?.statusFor({
+      memberId,
+      targetId,
+    }) ?? { available: false, reason: 'docker-unavailable' as const };
+    if (status.available) {
+      return null;
+    }
+    return { backend, reason: status.reason ?? 'docker-unavailable' };
   }
   if (binding.root === null) {
     return null;

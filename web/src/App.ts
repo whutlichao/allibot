@@ -86,6 +86,10 @@ export interface AppProps {
     rules: PermissionRuleInput[],
   ) => void | Promise<void>;
   onAgentPermissionModeChange?: (agentId: string, mode: string | null) => void | Promise<void>;
+  onAgentWorkspaceBackendChange?: (
+    agentId: string,
+    backend: string | null,
+  ) => void | Promise<void>;
   onLiveEvent?: (event: LiveEvent) => void;
 }
 
@@ -137,6 +141,7 @@ export function App({
   onApprovalDecision,
   onPermissionRulesChange,
   onAgentPermissionModeChange,
+  onAgentWorkspaceBackendChange,
   onLiveEvent,
 }: AppProps) {
   if (workspace !== undefined) {
@@ -179,6 +184,7 @@ export function App({
       onApprovalDecision,
       onPermissionRulesChange,
       onAgentPermissionModeChange,
+      onAgentWorkspaceBackendChange,
       saveFailed,
       onLiveEvent,
     });

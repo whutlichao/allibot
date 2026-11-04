@@ -94,7 +94,7 @@ function readTargetMembers(db: Database.Database, targetId: string): TargetMembe
     kind: row.kind,
     display_name: row.display_name,
     avatar_slot: row.avatar_slot,
-    workspace_status: readWorkspaceStatus(binding, row, db),
+    workspace_status: readWorkspaceStatus(binding, row, db, targetId),
     allow_local_shell: binding.allowLocalShell,
     permission_mode:
       readTargetPermissionContext(db, row.id, targetId)?.effective ?? DEFAULT_PERMISSION_MODE,

@@ -15,6 +15,19 @@ export const MIGRATION_FIXTURE = path.join(
   'fixtures',
   'migrate-steps.mjs',
 );
+/**
+ * Every server a test starts gets the fake Docker CLI (#49) unless it injects
+ * its own: with no state file the fake reports a missing daemon, so automation
+ * never touches a real Docker daemon and the default workspace reading is
+ * deterministic.
+ */
+export const FAKE_DOCKER_FIXTURE = path.join(
+  REPO_ROOT,
+  'server',
+  'test',
+  'fixtures',
+  'fake-docker.mjs',
+);
 
 const STARTUP_TIMEOUT_MS = 10_000;
 const EXIT_TIMEOUT_MS = 10_000;
@@ -123,10 +136,13 @@ export async function startServer(
   // `--scripted-*` option — gets `--provider scripted` unless it selected a
   // provider itself.
   const requested = options.args ?? [];
-  const args =
+  const withProvider =
     options.useProductionProvider === true || requested.includes('--provider')
       ? requested
       : ['--provider', 'scripted', ...requested];
+  const args = withProvider.includes('--docker-command')
+    ? withProvider
+    : ['--docker-command', FAKE_DOCKER_FIXTURE, ...withProvider];
   const child = spawn(
     process.execPath,
     [CLI_ENTRY, 'serve', '--data-dir', dataDir, '--port', String(port), ...args],
