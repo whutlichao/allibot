@@ -21,7 +21,7 @@ export function apiOrigin(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /** 代理转发的路径前缀：后端路由本身就是 `/api/...`，所以路径原样转发。 */
-export const API_PREFIX = '/api';
+const API_PREFIX = '/api';
 
 export default defineConfig({
   plugins: [react()],

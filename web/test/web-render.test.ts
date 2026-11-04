@@ -735,10 +735,9 @@ test('a failed settings write renders the save-failure copy', () => {
 test('the dev server sends every /api face to the backend through one rule', async () => {
   const config = await import('../vite.config.ts');
   const proxy = config.default.server?.proxy ?? {};
-  assert.deepEqual(Object.keys(proxy), [config.API_PREFIX], 'one prefix rule covers all three faces');
-  assert.equal(config.API_PREFIX, '/api');
+  assert.deepEqual(Object.keys(proxy), ['/api'], 'one /api prefix rule covers all three faces');
 
-  const rule = proxy[config.API_PREFIX];
+  const rule = proxy['/api'];
   assert.equal(typeof rule === 'object' ? rule.target : rule, 'http://127.0.0.1:3000');
   assert.ok(
     typeof rule === 'object' && rule.rewrite === undefined,
