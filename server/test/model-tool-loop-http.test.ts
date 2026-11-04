@@ -908,6 +908,70 @@ for (const provider of PROVIDER_ROWS) {
     }
   });
 
+  test(`[${provider.label}] a Grep whose path is the member skills root reads it, and the same call outside the roots is refused`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-skills-grep-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      assert.ok(round.project !== null);
+      const skillsRoot = path.join(fixture.home, '.allibot', 'agents', round.agentId, 'skills');
+      mkdirSync(path.join(skillsRoot, 'demo'), { recursive: true });
+      writeFileSync(path.join(skillsRoot, 'demo', 'SKILL.md'), 'SKILL-NEEDLE\nskill body\n');
+      const outsideRoot = path.join(fixture.tmp, 'outside-skills');
+      mkdirSync(outsideRoot, { recursive: true });
+      writeFileSync(path.join(outsideRoot, 'secret.txt'), 'OUTSIDE-SECRET\n');
+
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([
+          { id: 'call-skills-root', name: 'Grep', input: { pattern: 'SKILL-NEEDLE', path: skillsRoot } },
+          { id: 'call-outside', name: 'Grep', input: { pattern: 'OUTSIDE', path: outsideRoot } },
+        ]),
+        provider.text('skills 第二根能搜到，根外那条不算'),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 搜一下 skills');
+
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.deepEqual(
+        results.map((result) => [result.id, result.isError]),
+        [
+          ['call-skills-root', false],
+          ['call-outside', true],
+        ],
+        'the read-only skills second root answers, a path outside both roots is a tool error',
+      );
+      assert.ok(
+        (results[0]?.content ?? '').includes('SKILL-NEEDLE'),
+        `the skills second root reached the file face: ${results[0]?.content ?? ''}`,
+      );
+      assert.ok(
+        (results[0]?.content ?? '').includes('root: skills'),
+        `the result names the root it searched: ${results[0]?.content ?? ''}`,
+      );
+      assert.ok(
+        (results[1]?.content ?? '').includes('outside-root'),
+        `a path outside the readable roots keeps the stable code: ${results[1]?.content ?? ''}`,
+      );
+      assert.equal(
+        (results[1]?.content ?? '').includes('OUTSIDE-SECRET'),
+        false,
+        'the refused call never carries the outside file body',
+      );
+      assert.deepEqual(
+        (await messages(fixture, round.channelId)).map((message) => [message['kind'], message['body']]),
+        [
+          ['human', '@读文件的成员 搜一下 skills'],
+          ['agent', 'skills 第二根能搜到，根外那条不算'],
+        ],
+        'a refused base is a result, not a round failure',
+      );
+      const outcome = roundOutcome(fixture);
+      assert.equal(outcome.status, 'replied');
+      assert.equal(outcome.finished_reason, ZH_CN['round.finished.completed'].text);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   test(`[${provider.label}] a round with no project root asks for zero tools and answers in one call`, async () => {
     const fixture = await startFixture(`allibot-tool-loop-rootless-${provider.label}-`, provider);
     try {
@@ -973,6 +1037,42 @@ for (const provider of PROVIDER_ROWS) {
           ['agent', '那条路径越界了，我在根内换一个'],
         ],
         'a tool error is a result, not a round failure',
+      );
+      const outcome = roundOutcome(fixture);
+      assert.equal(outcome.status, 'replied');
+      assert.equal(outcome.finished_reason, ZH_CN['round.finished.completed'].text);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a Read of a file that does not exist comes back as a not-found tool error and the round answers`, async () => {
+    const fixture = await startFixture(`allibot-tool-loop-not-found-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, { prefix: 'project', withRoot: true });
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([{ id: 'call-missing', name: 'Read', input: { path: 'missing.txt' } }]),
+        provider.text('这个文件不存在，我按现有的文件回答'),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@读文件的成员 读 missing.txt');
+
+      assert.equal(fixture.endpoint.requests.length, 2, 'a failed tool call still feeds one result back');
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.id, 'call-missing');
+      assert.equal(results[0]?.isError, true, 'a missing file is a tool error result');
+      assert.ok(
+        (results[0]?.content ?? '').includes('not-found'),
+        `the stable not-found code reaches the model: ${results[0]?.content ?? ''}`,
+      );
+      assert.deepEqual(
+        (await messages(fixture, round.channelId)).map((message) => [message['kind'], message['body']]),
+        [
+          ['human', '@读文件的成员 读 missing.txt'],
+          ['agent', '这个文件不存在，我按现有的文件回答'],
+        ],
+        'a missing file is a result, not a round failure: the final text still lands',
       );
       const outcome = roundOutcome(fixture);
       assert.equal(outcome.status, 'replied');
