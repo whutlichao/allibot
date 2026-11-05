@@ -55,7 +55,7 @@ interface ChannelWriteInput {
   workspaceRoot?: string | null;
   workspaceBackend?: WorkspaceBackend;
   permissionMode?: import('@allibot/shared').PermissionMode;
-  /** `web_access` was present in the body; an explicit null clears it. */
+  /** The raw tier; `null` un-configures it (an omitted field is `undefined`). */
   webAccess?: WebAccessTier | null;
   allowLocalShell?: 0 | 1;
 }

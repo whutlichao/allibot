@@ -572,8 +572,9 @@ export interface ChannelView {
    */
   permission_mode: PermissionMode;
   /**
-   * The raw channel 联网档 (D1). `null` is unconfigured and reads as the
-   * `search` default; it is never resolved into a tier on this face.
+   * The raw channel 联网档 (D1). This face republishes the stored value, so
+   * `null` reads as `null`; the `search` fallback happens in
+   * `resolveWebAccessTier`, where an Agent override and a channel value meet.
    */
   web_access: WebAccessTier | null;
   /**
