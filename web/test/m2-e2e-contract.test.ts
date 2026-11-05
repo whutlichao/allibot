@@ -74,6 +74,8 @@ function agent(overrides: Partial<AgentView> = {}): AgentView {
     workspace_backend: 'docker',
     permission_mode: 'read-only',
     effective_permission_mode: 'read-only',
+    web_access: null,
+    effective_web_access: 'search',
     home_path: '/tmp/allibot-home/agents/agent-m2-1',
     status: 'online',
     offline_reason: null,

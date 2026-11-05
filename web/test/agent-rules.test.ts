@@ -52,6 +52,8 @@ function agent(overrides: Partial<AgentView> = {}): AgentView {
     workspace_backend: null,
     permission_mode: null,
     effective_permission_mode: 'ask-writes',
+    web_access: null,
+    effective_web_access: 'search',
     home_path: HOME,
     ...overrides,
   };
@@ -138,6 +140,8 @@ function workspace(): WorkspaceView {
         team: { leader_member_id: null, status: 'valid', reason: null },
         workspace: { root: '/tmp/project', backend: 'local', allow_local_shell: 0 },
         permission_mode: 'ask-writes',
+        web_access: null,
+        docker_egress: 0,
         response_budget_limit: 3,
         archived_at: null,
         deleted_at: null,
