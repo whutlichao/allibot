@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { readChannelEgressHosts } from '../dist/docker-egress.js';
 import {
   REPO_ROOT,
   removeTempDir,
@@ -1257,8 +1258,12 @@ test('docker_egress=0 creates the container with --network none; a local round h
     const dockerChannel = await createChannel(fixture, 'Docker 网络边界');
     await joinChannel(fixture, dockerChannel, agentId);
     await configureDockerChannel(fixture, dockerChannel, fixture.project);
+    await putChannelRules(fixture, dockerChannel, [
+      { tool_name: 'fetch', pattern: 'docs.example.com', behavior: 'allow' },
+    ]);
 
-    // The default switch is 0: no network until the channel asks for it.
+    // The default switch is 0: no network until the channel asks for it, even
+    // though the channel already names an explicit host.
     await sendMessage(fixture, dockerChannel, '跑一轮');
     assert.equal(createdNetwork(fixture), 'none');
 
@@ -1349,6 +1354,136 @@ test('PATCH accepts docker_egress 0 | 1 and rejects every other value with 400 a
       backend: 'local',
       allow_local_shell: 1,
     });
+  } finally {
+    await fixture.stop();
+  }
+});
+
+async function putJson(fixture: Fixture, route: string, body: unknown): Promise<Response> {
+  return await fetch(`${fixture.base}${route}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+async function putChannelRules(
+  fixture: Fixture,
+  channelId: string,
+  rules: unknown[],
+): Promise<void> {
+  const response = await putJson(fixture, `/api/channels/${channelId}/permission-rules`, rules);
+  assert.equal(response.status, 200, await response.clone().text());
+}
+
+test('docker_egress=1 with an explicit host fetch allow rule joins the default network', async () => {
+  const fixture = await startFixture('allibot-docker-egress-allow-', {
+    scriptedProvider: 'reply',
+  });
+  try {
+    const agentId = await createAgent(fixture);
+    const channelId = await createChannel(fixture, 'Docker 出网白名单');
+    await joinChannel(fixture, channelId, agentId);
+    await configureDockerChannel(fixture, channelId, fixture.project);
+    await putChannelRules(fixture, channelId, [
+      { tool_name: 'fetch', pattern: 'docs.example.com', behavior: 'allow' },
+    ]);
+    const enabled = await patchJson(fixture, `/api/channels/${channelId}`, { docker_egress: 1 });
+    assert.equal(enabled.status, 200, await enabled.clone().text());
+
+    await sendMessage(fixture, channelId, '联网一轮');
+    assert.equal(
+      createdNetwork(fixture),
+      null,
+      'the container joins Docker default network: no --network none in the create argv',
+    );
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('an open switch with only an empty-pattern fetch allow still creates --network none', async () => {
+  const fixture = await startFixture('allibot-docker-egress-empty-', {
+    scriptedProvider: 'reply',
+  });
+  try {
+    const agentId = await createAgent(fixture);
+    const channelId = await createChannel(fixture, 'Docker 空白名单');
+    await joinChannel(fixture, channelId, agentId);
+    await configureDockerChannel(fixture, channelId, fixture.project);
+    // The empty pattern allows every `fetch` call but names no host, so the
+    // container gets no network at all (D5).
+    await putChannelRules(fixture, channelId, [
+      { tool_name: 'fetch', pattern: '', behavior: 'allow' },
+    ]);
+    const enabled = await patchJson(fixture, `/api/channels/${channelId}`, { docker_egress: 1 });
+    assert.equal(enabled.status, 200, await enabled.clone().text());
+
+    await sendMessage(fixture, channelId, '空白名单一轮');
+    assert.equal(createdNetwork(fixture), 'none');
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('deny and ask fetch rules never grant container egress', async () => {
+  const fixture = await startFixture('allibot-docker-egress-deny-', {
+    scriptedProvider: 'reply',
+  });
+  try {
+    const agentId = await createAgent(fixture);
+    const channelId = await createChannel(fixture, 'Docker 拒绝规则');
+    await joinChannel(fixture, channelId, agentId);
+    await configureDockerChannel(fixture, channelId, fixture.project);
+    await putChannelRules(fixture, channelId, [
+      { tool_name: 'fetch', pattern: 'denied.example.net', behavior: 'deny' },
+      { tool_name: 'fetch', pattern: 'ask.example.org', behavior: 'ask' },
+    ]);
+    const enabled = await patchJson(fixture, `/api/channels/${channelId}`, { docker_egress: 1 });
+    assert.equal(enabled.status, 200, await enabled.clone().text());
+
+    await sendMessage(fixture, channelId, '拒绝规则一轮');
+    assert.equal(
+      createdNetwork(fixture),
+      'none',
+      'only fetch allow rules name hosts; deny / ask never open the network',
+    );
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('the container host allowlist is exactly the explicit hosts of the fetch allow rules', async () => {
+  const fixture = await startFixture('allibot-docker-egress-hosts-', {
+    scriptedProvider: 'reply',
+  });
+  try {
+    const agentId = await createAgent(fixture);
+    const channelId = await createChannel(fixture, 'Docker 白名单集合');
+    await joinChannel(fixture, channelId, agentId);
+    await putChannelRules(fixture, channelId, [
+      { tool_name: 'fetch', pattern: 'docs.example.com', behavior: 'allow' },
+      // An empty pattern allows the tool call, not a host.
+      { tool_name: 'fetch', pattern: '', behavior: 'allow' },
+      // A URL with a path / query, a glob and a regex are not explicit hosts.
+      { tool_name: 'fetch', pattern: 'https://docs.example.com/v1?token=1', behavior: 'allow' },
+      { tool_name: 'fetch', pattern: '*.example.net', behavior: 'allow' },
+      { tool_name: 'fetch', pattern: '^api\\.example\\.org$', behavior: 'allow' },
+      { tool_name: 'fetch', pattern: 'denied.example.net', behavior: 'deny' },
+      { tool_name: 'fetch', pattern: 'ask.example.org', behavior: 'ask' },
+      // A second explicit host.
+      { tool_name: 'fetch', pattern: 'api.example.com', behavior: 'allow' },
+    ]);
+
+    const db = new Database(path.join(fixture.dataDir, 'allibot.db'), { readonly: true });
+    try {
+      assert.deepEqual(readChannelEgressHosts(db, channelId), [
+        'docs.example.com',
+        'api.example.com',
+      ]);
+    } finally {
+      db.close();
+    }
   } finally {
     await fixture.stop();
   }
