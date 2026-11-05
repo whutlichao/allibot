@@ -39,6 +39,7 @@ import { readRoundRuleSections } from './agent-home.js';
 import { skillPromptSection } from './skills.js';
 import { memoryPromptSection, recallForRound, writeRoundMemoryCard } from './memory.js';
 import { buildRoundMcp, closeRoundMcp, readDeclaredEnvNames } from './mcp-runtime.js';
+import { readChannelEgress } from './docker-egress.js';
 import {
   DockerWorkspaceError,
   getDockerWorkspaceManager,
@@ -1642,6 +1643,9 @@ async function readRoundWorkspace(
         projectRoot,
         memberHome: agentHomeRoot(memberId),
         globalSkillsRoot: path.join(workspaceHomeRoot(), 'skills'),
+        // The egress facts are the channel's switch plus the hosts its `fetch`
+        // allow rules name (#71 / D5); a task target reads its channel.
+        egress: readChannelEgress(db, permission.channelId),
       });
     } catch (error) {
       if (error instanceof DockerWorkspaceError) {

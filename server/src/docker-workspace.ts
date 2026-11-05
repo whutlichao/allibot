@@ -3,10 +3,12 @@ import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { WorkspaceFailureReason } from '@allibot/shared';
+import { containerNetwork, type ChannelEgress } from './docker-egress.js';
 import type {
   DockerContainerSpec,
   DockerExecResult,
   DockerMount,
+  DockerNetwork,
   DockerRuntime,
 } from './docker-runtime.js';
 
@@ -226,6 +228,10 @@ export class DockerWorkspaceManager {
    * project root recreates the container because `/workspace` is a fixed mount.
    * A failure is recorded per target and becomes that target's
    * `workspace_status` reason; there is no local fallback.
+   *
+   * The network is fixed at creation: a container that is already running is
+   * not hot-reconfigured when `docker_egress` or a `fetch` allow rule changes,
+   * so the new egress facts apply to the next container this process creates.
    */
   async prepare(options: {
     memberId: string;
@@ -233,6 +239,7 @@ export class DockerWorkspaceManager {
     projectRoot: string;
     memberHome: string;
     globalSkillsRoot: string;
+    egress: ChannelEgress;
   }): Promise<DockerContainerHandle> {
     const key = this.keyOf(options);
     const root = canonicalPath(options.projectRoot);
@@ -276,6 +283,7 @@ export class DockerWorkspaceManager {
       projectRoot: root,
       memberHome: canonicalPath(options.memberHome),
       globalSkillsRoot: canonicalPath(options.globalSkillsRoot),
+      network: containerNetwork(options.egress),
     });
     const created = await this.runtime.createContainer(spec);
     if (!created.ok || created.id === null) {
@@ -447,6 +455,7 @@ export function dockerContainerSpec(options: {
   projectRoot: string;
   memberHome: string;
   globalSkillsRoot: string;
+  network: DockerNetwork;
 }): DockerContainerSpec {
   return {
     name: options.name,
@@ -457,6 +466,7 @@ export function dockerContainerSpec(options: {
       'allibot.target': options.targetId,
     },
     mounts: dockerMounts(options),
+    network: options.network,
     // M2 does not build images: the image only needs a long-lived `/bin/sh`
     // compatible process so the container stays up between execs.
     command: ['sleep', 'infinity'],
