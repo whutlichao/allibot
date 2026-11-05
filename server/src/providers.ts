@@ -33,13 +33,13 @@ export const PROVIDER_CREDENTIAL_ENV: Readonly<Record<AgentProvider, string>> = 
  * `openai` provider）；Anthropic 的同名覆盖不是规格条文，是实现注记里记下的
  * 测试与自托管入口。
  */
-export const PROVIDER_BASE_URL_ENV: Readonly<Record<AgentProvider, string>> = {
+const PROVIDER_BASE_URL_ENV: Readonly<Record<AgentProvider, string>> = {
   anthropic: 'ANTHROPIC_BASE_URL',
   openai: 'OPENAI_BASE_URL',
 };
 
 /** 未覆盖端点时 provider 的默认接收方。 */
-export const PROVIDER_DEFAULT_BASE_URL: Readonly<Record<AgentProvider, string>> = {
+const PROVIDER_DEFAULT_BASE_URL: Readonly<Record<AgentProvider, string>> = {
   anthropic: 'https://api.anthropic.com',
   openai: 'https://api.openai.com/v1',
 };
