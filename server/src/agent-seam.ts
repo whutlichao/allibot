@@ -513,9 +513,10 @@ export interface RoundWebSearchHit {
 /**
  * Why a `web_search` call came back failed. `unavailable` is absent on purpose:
  * no usable provider / consent at the call point is not a tool result but a
- * readable throw that closes the round failed (D8).
+ * readable throw that closes the round failed (D8). `denied` is the tool gate's
+ * answer (D3): the call never reached a provider.
  */
-export type WebSearchErrorCode = 'provider-error' | 'mcp-error';
+export type WebSearchErrorCode = 'provider-error' | 'mcp-error' | 'denied';
 
 /**
  * One `web_search` result. A provider answer carries `hits`; the credential-free
@@ -558,7 +559,7 @@ export interface RoundWebFetchResult {
 
 /**
  * 联网工具面 (#70 / D10): the round's effective 联网档, the `web_search` and
- * `fetch` calls, and the tool gate `fetch` asks before it opens a socket.
+ * `fetch` calls, and the tool gate both of them ask before they open a socket.
  *
  * The gate lives here, not on `RoundWorkspaceContext`, because a DM / rootless
  * round has no workspace but still has a permission context: the same

@@ -23,6 +23,10 @@ import { resolveWebSearch, type WebSearchResolution } from './web-providers.js';
  *
  * Two disciplines keep the boundaries from the spec:
  *
+ * - both calls pass the one tool gate **before any socket** (ADR 0007): a
+ *   `permission_rule` row on `web_search` or `fetch` is never inert, an `ask`
+ *   waits for the human in the usual 600-second batch, and a denial is a tool
+ *   result, not a round failure;
  * - `fetch` carries **no provider key and no credential header of any kind**: it
  *   is a plain GET of the scheme + host + path the model asked for. Only
  *   `web_search` resolves a provider.
@@ -31,8 +35,11 @@ import { resolveWebSearch, type WebSearchResolution } from './web-providers.js';
  *   lives no longer than the request that carries it. Provider echoes are masked
  *   before they land in a result, and a result never contains the key.
  *
- * `fetch`'s gate subject is the URL's **host** (host + port), never path or
- * query, so a `?token=…` can never reach an approval record (D5 / D14).
+ * Both gate subjects are the same spelling: `fetch` names the URL's bare
+ * **hostname** (the host `permission_rule.pattern` and `readChannelEgressHosts`
+ * read, never path, query or port), and `web_search` has no subject at all, so
+ * it uses the empty pattern — the existing "every call of that tool" semantic
+ * (D5 / D14).
  */
 
 /** The hit-count cap: past it a result states `capped: 'hits'` (D13). */
@@ -329,11 +336,12 @@ function redirectLocation(response: Response): string | null {
  * One `fetch`: gate on the host, then GET it from the host process with no
  * credential of any kind.
  *
- * A same-host redirect is followed (at most `MAX_REDIRECTS`); a redirect to a
- * different host is a failure result and is **not** followed (2026-11-05
- * decision): the approved subject was the host in the gate, so silently reading
- * another one would widen it. A completed response is a result whatever its
- * status code.
+ * A redirect whose bare hostname is the one the gate approved is followed (at
+ * most `MAX_REDIRECTS`), after the same URL guard the initial target passed; a
+ * redirect to a different host is a failure result and is **not** followed
+ * (2026-11-05 decision): the approved subject was the host in the gate, so
+ * silently reading another one would widen it. A completed response is a result
+ * whatever its status code.
  */
 async function fetchPage(
   request: WebFetchRequest,
@@ -392,16 +400,34 @@ async function fetchPage(
           message: 'the redirect names a URL this process cannot parse',
         };
       }
-      if (next.host !== target.host) {
+      // Every redirect target passes the same guard as the initial URL before
+      // it is followed: `Location: http://user:pw@same-host/` would otherwise
+      // make `fetch` send a credential header for a host the gate never
+      // approved one for, and the host comparison alone would let it through.
+      const guarded = httpUrl(next.href);
+      if (guarded === null) {
+        return {
+          ok: false,
+          error: 'invalid-url',
+          host,
+          status: response.status,
+          message:
+            'the redirect names a URL this call never requests: only absolute http / https URLs without user info are fetched',
+        };
+      }
+      // The comparison is the spelling the gate authorized — the bare hostname
+      // — so a redirect can never carry the call to a host the approval did not
+      // name (D5 / D14).
+      if (guarded.hostname !== host) {
         return {
           ok: false,
           error: 'cross-host-redirect',
           host,
           status: response.status,
-          message: `redirected to another host (${next.hostname}); a cross-host redirect is never followed`,
+          message: `redirected to another host (${guarded.hostname}); a cross-host redirect is never followed`,
         };
       }
-      current = next;
+      current = guarded;
       continue;
     }
     try {
@@ -432,9 +458,10 @@ export interface RoundWebOptions {
 }
 
 /**
- * The round's web face. `search` resolves the one provider order per call; an
- * unusable resolution throws `WebToolUnavailableError` (D8) and an unusable
- * `fetch` is impossible by construction — it needs no provider at all.
+ * The round's web face. Both calls ask the round's tool gate first; `search`
+ * then resolves the one provider order per call (an unusable resolution throws
+ * `WebToolUnavailableError`, D8) and an unusable `fetch` is impossible by
+ * construction — it needs no provider at all.
  */
 export function createRoundWebFace(options: RoundWebOptions): RoundWebFace {
   const doFetch = options.fetch ?? fetch;
@@ -447,6 +474,23 @@ export function createRoundWebFace(options: RoundWebOptions): RoundWebFace {
     tier: options.tier,
     permission,
     async search(request: WebSearchRequest): Promise<RoundWebSearchResult> {
+      // D3 / D5.5: `web_search` is a tool like every other one, so it asks the
+      // same gate before anything leaves this process. An `ask` blocks here for
+      // the human exactly like a file or shell call; a denial is a result and
+      // never reaches the resolution at all.
+      const authorized = await options.gate.authorize({
+        tool_name: 'web_search',
+        pattern: '',
+        arguments: { query: request.query },
+      });
+      if (authorized === 'denied') {
+        return {
+          ok: false,
+          source: 'tool-gate',
+          error: 'denied',
+          message: 'the tool gate denied this web_search; nothing was requested',
+        };
+      }
       const resolution = resolveWebSearch(options.db, options.env, options.mcp);
       if (resolution.kind === 'unusable') {
         throw new WebToolUnavailableError(unavailableReason(resolution));
