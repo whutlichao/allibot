@@ -1,14 +1,23 @@
-import type { MessageKey, MessageValues, PlanTaskView } from '@allibot/shared';
+import {
+  PLAN_TASK_STATUSES,
+  type MessageKey,
+  type MessageValues,
+  type PlanTaskStatus,
+  type PlanTaskView,
+} from '@allibot/shared';
 import type {
   EditFileRequest,
   GlobFileRequest,
   GrepFileRequest,
+  PlanTaskUpdateRequest,
   RoundFileToolResult,
   RoundFileTools,
   RoundInput,
   RoundPlanFace,
   RoundShell,
   RoundShellResult,
+  TeamAssignRequest,
+  TeamAssignToolResult,
   WriteFileRequest,
 } from './agent-seam.js';
 import { MAX_GREP_FILES } from './docker-files.js';
@@ -63,9 +72,12 @@ export function capToolResultContent(content: string, t: ToolCopy): string {
  * The batch's scope grew with its tickets: `Read` / `Glob` / `Grep` over the
  * round's file face and `TaskList` / `TaskGet` over its Plan face (#59);
  * `Write` / `Edit` over the same file face, behind the tool gate that face
- * itself applies (#74); and `Bash` over the round's shell face (#75). The
- * orchestration tools arrive with a later batch; a name without a spec here is
- * not offered, even when `RoundInput.tools` lists it.
+ * itself applies (#74); `Bash` over the round's shell face (#75); and the
+ * orchestration tools with the structured channel (#77): `TaskCreate` /
+ * `TaskUpdate` over the Plan face, `TeamAssign` over the leader's assignment
+ * face, `transfer_task` as the task action the write path already honours, and
+ * `SopVerdict` as the verifier round's own conclusion. A name without a spec
+ * here is not offered, even when `RoundInput.tools` lists it.
  */
 
 /** One argument a tool accepts, in the order the model sees it. */
@@ -73,6 +85,13 @@ export interface ToolArgument {
   name: string;
   description: string;
   required: boolean;
+  /**
+   * The closed set of values the argument accepts (取值域), stated in the tool's
+   * schema and checked before the face runs. An argument without it is any
+   * string; one with it refuses every other value as an `invalid-arguments`
+   * tool result, never as a round failure.
+   */
+  values?: readonly string[];
 }
 
 /**
@@ -88,7 +107,27 @@ export interface RoundToolContext {
   files(): RoundFileTools;
   plan(): RoundPlanFace;
   shell(): RoundShell;
+  assign(): (request: TeamAssignRequest) => Promise<TeamAssignToolResult>;
   copy: ToolCopy;
+}
+
+/**
+ * The structured facts a dedicated tool call states (D11). They are the round's
+ * own conclusion, not text for the model: the loop collects them off the
+ * executed calls and the adapter maps them onto `RoundResult`'s existing fields
+ * (`sopVerdict`, `taskAction`, `taskTransferMemberId`), never onto a new one
+ * (D12). A tool that states nothing carries no facts.
+ */
+export interface ToolFacts {
+  /** The verifier round's conclusion; `SopVerdict` is its only source. */
+  sopVerdict?: 'pass' | 'fail';
+  /**
+   * The structured task action this round takes. `transfer_task` is the one
+   * action with a tool name; `continue_task` has none yet and stays scripted.
+   */
+  taskAction?: 'transfer_task';
+  /** The member a `transfer_task` action names. */
+  taskTransferMemberId?: string;
 }
 
 /**
@@ -97,10 +136,15 @@ export interface RoundToolContext {
  * A failure states its stable code (`outside-root`, `not-found`, `denied`, …)
  * on its content's first line — the model is the one reader of that code, so
  * the answer carries no second, structured copy of it.
+ *
+ * `facts` is the round's channel, not the model's: a tool that states a
+ * structured conclusion (D11) puts it here, and the loop hands it to the
+ * adapter. Content and facts never duplicate each other.
  */
 export interface ToolAnswer {
   ok: boolean;
   content: string;
+  facts?: ToolFacts;
 }
 
 /** One tool as this round may offer it. */
@@ -110,10 +154,15 @@ export interface RoundToolSpec {
   arguments: readonly ToolArgument[];
   /**
    * Whether this round has the face the tool runs against (D2). `Read` / `Glob`
-   * / `Grep` need the project file face, `TaskList` / `TaskGet` need the Plan
-   * face, `Bash` needs the shell face: no face, no tool. Which rounds are handed
-   * `Bash` at all is the round assembly's rule (`RoundInput.tools`), not this
+   * / `Grep` / `Write` / `Edit` need the project file face, the four Plan tools
+   * need the Plan face, `Bash` needs the shell face, `TeamAssign` needs the
+   * leader's assignment face: no face, no tool. Which rounds are handed `Bash`
+   * at all is the round assembly's rule (`RoundInput.tools`), not this
    * accessor's: this only states that the face it would call exists.
+   *
+   * `transfer_task` and `SopVerdict` run against no face — the first is the
+   * round write path's structured action, the second a conclusion the adapter
+   * records — so nothing has to be present for them.
    */
   available(input: RoundInput): boolean;
   /**
@@ -279,6 +328,130 @@ const TASK_GET: RoundToolSpec = {
   },
 };
 
+const TASK_CREATE: RoundToolSpec = {
+  name: 'TaskCreate',
+  description:
+    "Append one item to this round's own Plan run — the work list this member keeps in this " +
+    'target — and answer with the item it created. `title` is the item title. It touches only ' +
+    'the current run: it writes no message, unread count or budget.',
+  arguments: [
+    { name: 'title', description: 'The title of the new Plan item.', required: true },
+  ],
+  available: (input) => input.plan !== null,
+  async execute(input, context) {
+    return shapeTaskCreate(context.plan().TaskCreate({ title: input['title']! }));
+  },
+};
+
+const TASK_UPDATE: RoundToolSpec = {
+  name: 'TaskUpdate',
+  description:
+    "Change one item of this round's own Plan run: a new `title`, a new `status`, or both. " +
+    `\`status\` is one of ${PLAN_TASK_STATUSES.join(' / ')}; any other value is refused before ` +
+    'the Plan face runs. An id the current run does not hold comes back as a `not-found` error ' +
+    'result; it never ends the round.',
+  arguments: [
+    { name: 'id', description: 'The Plan item id.', required: true },
+    { name: 'title', description: 'The new title; omit it to keep the current one.', required: false },
+    {
+      name: 'status',
+      description: `The new status: one of ${PLAN_TASK_STATUSES.join(' / ')}.`,
+      required: false,
+      values: PLAN_TASK_STATUSES,
+    },
+  ],
+  available: (input) => input.plan !== null,
+  async execute(input, context) {
+    const title = input['title'];
+    const status = input['status'];
+    const request: PlanTaskUpdateRequest = {
+      id: input['id']!,
+      ...(title === undefined ? {} : { title }),
+      // The shape check already proved the value is one of the three words.
+      ...(status === undefined ? {} : { status: status as PlanTaskStatus }),
+    };
+    return shapeTaskUpdate(request, context.plan().TaskUpdate(request));
+  },
+};
+
+const TEAM_ASSIGN: RoundToolSpec = {
+  name: 'TeamAssign',
+  description:
+    "Assign one piece of work to a member of this team and read its answer as this call's " +
+    'result. `member_id` is the member to assign the work to and `instruction` is what it has to ' +
+    'do. The member runs inside this same round, so its output comes back here and never lands ' +
+    'as a channel message. A member that cannot be assigned to — this round is not a leader ' +
+    'round, the member is this round itself, the member is unavailable, the budget is used up — ' +
+    'comes back as an error result with a stable code; the round continues.',
+  arguments: [
+    { name: 'member_id', description: 'The member to assign the work to.', required: true },
+    { name: 'instruction', description: 'What that member has to do.', required: true },
+  ],
+  available: (input) => input.team?.assign != null,
+  async execute(input, context) {
+    const request: TeamAssignRequest = {
+      member_id: input['member_id']!,
+      instruction: input['instruction']!,
+    };
+    return shapeTeamAssign(request, await context.assign()(request));
+  },
+};
+
+const TRANSFER_TASK: RoundToolSpec = {
+  name: 'transfer_task',
+  description:
+    'Hand the task of this thread to another member: `member_id` becomes its assignee. The ' +
+    "transfer is this round's structured task action, so the text you write does not move the " +
+    'task. The write path validates the target (another live Agent member of this channel) and ' +
+    'records the change itself; a refusal writes nothing and the round still ends with what you ' +
+    'wrote.',
+  arguments: [
+    { name: 'member_id', description: 'The member to hand the task to.', required: true },
+  ],
+  available: () => true,
+  async execute(input) {
+    const memberId = input['member_id']!;
+    return {
+      ok: true,
+      content: [
+        '[transfer_task] ok',
+        `member_id: ${memberId}`,
+        'message: this round now reports the transfer as its structured task action',
+      ].join('\n'),
+      facts: { taskAction: 'transfer_task', taskTransferMemberId: memberId },
+    };
+  },
+};
+
+/** The verifier's two conclusions (D11): the tool's whole vocabulary. */
+const SOP_VERDICTS = ['pass', 'fail'] as const;
+
+const SOP_VERDICT: RoundToolSpec = {
+  name: 'SopVerdict',
+  description:
+    "State this verifier round's conclusion: `pass` when the step's work is accepted, `fail` " +
+    'when it has to be done again. The verdict is this call, not the text you write — a body ' +
+    'that says pass decides nothing. Call it once, then write why the step is accepted or sent ' +
+    'back.',
+  arguments: [
+    {
+      name: 'verdict',
+      description: 'pass accepts the step; fail sends it back to the executor.',
+      required: true,
+      values: SOP_VERDICTS,
+    },
+  ],
+  available: () => true,
+  async execute(input) {
+    const verdict = input['verdict'] === 'pass' ? 'pass' : 'fail';
+    return {
+      ok: true,
+      content: ['[SopVerdict] ok', `verdict: ${verdict}`].join('\n'),
+      facts: { sopVerdict: verdict },
+    };
+  },
+};
+
 const BASH: RoundToolSpec = {
   name: 'Bash',
   description:
@@ -311,14 +484,26 @@ const BATCH_TOOLS: readonly RoundToolSpec[] = [
   EDIT,
   TASK_LIST,
   TASK_GET,
+  TASK_CREATE,
+  TASK_UPDATE,
+  TEAM_ASSIGN,
+  TRANSFER_TASK,
+  SOP_VERDICT,
   BASH,
 ];
 
 /**
  * The `internal` tools this batch offers although their class is not `read`:
- * the two Plan tools that only read the current run.
+ * the four Plan tools over the current run and the two team / task actions.
  */
-const READ_ONLY_INTERNAL_TOOLS: readonly string[] = ['TaskList', 'TaskGet'];
+const BATCH_INTERNAL_TOOLS: readonly string[] = [
+  'TaskList',
+  'TaskGet',
+  'TaskCreate',
+  'TaskUpdate',
+  'TeamAssign',
+  'transfer_task',
+];
 
 /**
  * The `execute` tools this batch offers. `Bash` is the one execution tool here;
@@ -342,22 +527,33 @@ function inBatchScope(name: string): boolean {
   return (
     reading.tool_class === 'read' ||
     reading.tool_class === 'write' ||
-    (reading.tool_class === 'internal' && READ_ONLY_INTERNAL_TOOLS.includes(reading.tool_name)) ||
+    (reading.tool_class === 'internal' && BATCH_INTERNAL_TOOLS.includes(reading.tool_name)) ||
     (reading.tool_class === 'execute' && BATCH_EXECUTE_TOOLS.includes(reading.tool_name))
   );
 }
 
 /**
+ * Whether this round offers the tool (D2). The round's own availability
+ * calculation — `RoundInput.tools`, narrowed to the batch's classes — is that
+ * list for every tool but one: `SopVerdict` is the verifier round's own channel
+ * (D11), and no round lists it in `RoundInput.tools` (the product's tool-name
+ * vocabulary is the gate's, and an internal tool never passes the gate).
+ */
+function offeredInRound(spec: RoundToolSpec, input: RoundInput): boolean {
+  return spec.name === SOP_VERDICT.name
+    ? input.sop?.role === 'verifier'
+    : input.tools.includes(spec.name) && inBatchScope(spec.name);
+}
+
+/**
  * The tool specs this round's model may call: this batch's registry, filtered to
- * the names the round's own availability calculation offers (`RoundInput.tools`)
- * and to the batch's classes, in the registry's order. An empty list is a round
- * with no tool face at all — a DM or a rootless autonomous round — and its
- * provider request carries no tool definitions.
+ * the tools this round offers (`offeredInRound`) and to the faces it actually
+ * has, in the registry's order. An empty list is a round with no tool face at
+ * all — a DM or a rootless autonomous round — and its provider request carries
+ * no tool definitions.
  */
 export function roundToolSpecs(input: RoundInput): RoundToolSpec[] {
-  return BATCH_TOOLS.filter(
-    (spec) => input.tools.includes(spec.name) && inBatchScope(spec.name) && spec.available(input),
-  );
+  return BATCH_TOOLS.filter((spec) => spec.available(input) && offeredInRound(spec, input));
 }
 
 /**
@@ -387,6 +583,13 @@ export function roundToolContext(input: RoundInput, copy: ToolCopy): RoundToolCo
       }
       return shell;
     },
+    assign(): (request: TeamAssignRequest) => Promise<TeamAssignToolResult> {
+      const assign = input.team?.assign;
+      if (assign == null) {
+        throw new Error('tool face missing: this round has no TeamAssign face');
+      }
+      return assign;
+    },
     copy,
   };
 }
@@ -401,7 +604,11 @@ export function toolInputSchema(spec: RoundToolSpec): Record<string, unknown> {
     properties: Object.fromEntries(
       spec.arguments.map((argument) => [
         argument.name,
-        { type: 'string', description: argument.description },
+        {
+          type: 'string',
+          description: argument.description,
+          ...(argument.values === undefined ? {} : { enum: [...argument.values] }),
+        },
       ]),
     ),
     required: spec.arguments.filter((argument) => argument.required).map((argument) => argument.name),
@@ -416,8 +623,9 @@ export type ToolArgumentCheck =
 
 /**
  * Check the model's arguments against the tool's declared shape (D4) before the
- * face runs: a missing required argument, a wrong type and an extra argument are
- * all refusals the model receives as a tool result, never a round error.
+ * face runs: a missing required argument, a wrong type, an extra argument and a
+ * value outside a closed set are all refusals the model receives as a tool
+ * result, never a round error.
  */
 export function checkToolArguments(spec: RoundToolSpec, input: unknown): ToolArgumentCheck {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
@@ -435,6 +643,12 @@ export function checkToolArguments(spec: RoundToolSpec, input: unknown): ToolArg
     }
     if (typeof value !== 'string') {
       return { ok: false, message: `argument ${argument.name} must be a string` };
+    }
+    if (argument.values !== undefined && !argument.values.includes(value)) {
+      return {
+        ok: false,
+        message: `argument ${argument.name} must be one of: ${argument.values.join(', ')}`,
+      };
     }
     values[argument.name] = value;
   }
@@ -601,14 +815,73 @@ function shapeTaskGet(requested: string, task: PlanTaskView | null): ToolAnswer 
       ].join('\n'),
     };
   }
+  return { ok: true, content: planTaskLines('TaskGet', task) };
+}
+
+/** One `TaskCreate` result: the item the call appended at the end of the run. */
+function shapeTaskCreate(task: PlanTaskView): ToolAnswer {
+  return { ok: true, content: planTaskLines('TaskCreate', task) };
+}
+
+/** One `TaskUpdate` result: the item as it now reads, or the stable `not-found` code. */
+function shapeTaskUpdate(requested: PlanTaskUpdateRequest, task: PlanTaskView | null): ToolAnswer {
+  if (task === null) {
+    return {
+      ok: false,
+      content: [
+        '[TaskUpdate] error: not-found',
+        `id: ${requested.id}`,
+        "message: this id is not an item of this round's plan run",
+      ].join('\n'),
+    };
+  }
+  return { ok: true, content: planTaskLines('TaskUpdate', task) };
+}
+
+/** One Plan item as the model reads it: the call's own state line, then its fields. */
+function planTaskLines(name: string, task: PlanTaskView): string {
+  return [
+    `[${name}] ok`,
+    `id: ${task.id}`,
+    `title: ${task.title}`,
+    `status: ${task.status}`,
+    `position: ${task.position}`,
+  ].join('\n');
+}
+
+/**
+ * One `TeamAssign` result: the request, then the assignment's own facts and the
+ * member's output. The output is the only place a sub-round's answer reaches the
+ * leader — it is never persisted as a message — so the re-feed cap applies to it
+ * like to any other result.
+ */
+function shapeTeamAssign(requested: TeamAssignRequest, result: TeamAssignToolResult): ToolAnswer {
+  const request = [
+    `member_id: ${requested.member_id}`,
+    `instruction: ${requested.instruction}`,
+  ];
+  if (!result.ok) {
+    return {
+      ok: false,
+      content: [
+        `[TeamAssign] error: ${result.code ?? 'member_failed'}`,
+        ...request,
+        `state: ${result.state ?? 'none'}`,
+        ...(result.reason === null ? [] : [`message: ${result.reason}`]),
+      ].join('\n'),
+    };
+  }
   return {
     ok: true,
     content: [
-      '[TaskGet] ok',
-      `id: ${task.id}`,
-      `title: ${task.title}`,
-      `status: ${task.status}`,
-      `position: ${task.position}`,
+      '[TeamAssign] ok',
+      ...request,
+      `assignment-id: ${result.assignment_id ?? 'none'}`,
+      `state: ${result.state ?? 'none'}`,
+      `jump-consumed: ${result.jump_consumed}`,
+      ...(result.reply_excerpt === null ? [] : [`excerpt: ${result.reply_excerpt}`]),
+      'output:',
+      result.output ?? '',
     ].join('\n'),
   };
 }
