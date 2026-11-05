@@ -790,8 +790,8 @@ for (const provider of PROVIDER_ROWS) {
       const first = provider.toolDefinitions(requestPayload(fixture.endpoint.requests[0]!));
       assert.deepEqual(
         first.map((definition) => definition.name),
-        ['Read', 'Glob', 'Grep'],
-        "the request carries exactly the batch's read tools this round offers",
+        ['Read', 'Glob', 'Grep', 'Write', 'Edit'],
+        "the request carries exactly the file tools this round offers",
       );
       const schema = first[0]?.schema ?? {};
       assert.deepEqual(schema['required'], ['path'], 'the schema names the one required argument');
@@ -1703,7 +1703,7 @@ for (const provider of PROVIDER_ROWS) {
         .map((definition) => definition.name);
       assert.deepEqual(
         names,
-        ['Read', 'Glob', 'Grep'],
+        ['Read', 'Glob', 'Grep', 'Write', 'Edit'],
         'an autonomous channel round carries the file tools only',
       );
       assert.deepEqual(
@@ -1921,7 +1921,7 @@ for (const provider of PROVIDER_ROWS) {
         provider
           .toolDefinitions(requestPayload(fixture.endpoint.requests[0]!))
           .map((definition) => definition.name),
-        ['Read', 'Glob', 'Grep', 'TaskList', 'TaskGet'],
+        ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'TaskList', 'TaskGet'],
         'a task round with a project root is handed the whole batch',
       );
 

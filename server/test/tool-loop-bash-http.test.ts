@@ -420,7 +420,7 @@ test('a Bash call is approved, runs in the project root, and its output is the t
     const definitions = toolDefinitions(requestPayload(fixture.endpoint.requests[0]!));
     assert.deepEqual(
       definitions.map((definition) => definition.name),
-      ['Read', 'Glob', 'Grep', 'Bash'],
+      ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'Bash'],
       'a round with a root and the local shell switch on is handed the execution tool',
     );
     const bash = definitions.find((definition) => definition.name === 'Bash');
@@ -737,7 +737,7 @@ test('allow_local_shell=0 hands the model no Bash at all', async () => {
     const definitions = toolDefinitions(requestPayload(fixture.endpoint.requests[0]!));
     assert.deepEqual(
       definitions.map((definition) => definition.name),
-      ['Read', 'Glob', 'Grep'],
+      ['Read', 'Glob', 'Grep', 'Write', 'Edit'],
       'a round with the shell switch off is handed the file tools and no Bash',
     );
     assert.equal(
