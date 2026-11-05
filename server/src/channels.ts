@@ -16,7 +16,12 @@ import {
   assertAssignableTeamLeader,
   readTeamView,
 } from './team.js';
-import { requirePermissionMode, DEFAULT_PERMISSION_MODE, requireWebAccessTier } from './permissions.js';
+import {
+  DEFAULT_PERMISSION_MODE,
+  isWebAccessTier,
+  requirePermissionMode,
+  requireWebAccessTier,
+} from './permissions.js';
 import { validateWorkspaceRoot } from './workspace-root.js';
 
 /** The allowed response budget upper bounds; the default is 3. */
@@ -588,8 +593,7 @@ function toChannelView(
       typeof row.permission_mode === 'string'
         ? (row.permission_mode as ChannelView['permission_mode'])
         : DEFAULT_PERMISSION_MODE,
-    web_access:
-      typeof row.web_access === 'string' ? (row.web_access as WebAccessTier) : null,
+    web_access: isWebAccessTier(row.web_access) ? row.web_access : null,
     docker_egress: row.docker_egress === 1 ? 1 : 0,
     response_budget_limit: row.response_budget_limit,
     archived_at: row.archived_at,
