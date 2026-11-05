@@ -108,6 +108,27 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
   - 输出在 shell 侧按每条流 1 MiB 封顶（`MAX_SHELL_OUTPUT_BYTES`）；被截断时回灌结果在
     **两段正文之前**写明「输出已截断：…超过 1048576 字节上限，超出部分未捕获」。这条事实
     必须排在正文之前，因为 20000 字的回灌上限会在正文头部切一刀，尾部提示会先被切掉。
+- `mcp:<server>/<tool>`：执行类，名字是契约（D3）——它同时是模型可见的工具名、
+  `permission_rule.tool_name` 与审批载荷里的那个字符串，改名等于三处一起改。工具集**不是**
+  硬编码清单，而是本轮实际装配出来的 server 用 `tools/list` 答出的工具，按
+  「内置工具在前、MCP 在后」的固定顺序追加：
+  - `mcp.json` 是唯一正本（M2 D6.1）：文件缺失 = 零 MCP 工具、不报错；文件非法 = 整份不
+    装配（连合法的兄弟条目也不连）；启用但未做 `('mcp', server)` 一次性远端确认的 http /
+    sse server 零连接（`/api/remote-data-flow/consent`，`scope_kind = 'mcp'`，stdio 不需要）；
+    server 连不上或 `tools/list` 取不到 = 零该 server 的工具。以上任一情况轮次都照常用剩下
+    的工具跑完，不报轮次错，可读诊断只进 `RoundOutcome.reason` 与 MCP 管理面。
+  - 参数形状由 server 自己声明：本轮不持有那份 schema（`RoundMcpTool` 只有名字与描述），
+    所以请求里的工具定义是开放式对象（`type: object` + `additionalProperties: true`），模型
+    给的对象**原样转交**给 server，不套用文件工具那套扁平字符串检查；被 server 自己拒绝的
+    参数是工具结果，不是轮次失败。
+  - 每次调用都过 M2 的 execute 闸门：`permission_rule(  mcp:<server>/<tool>, <pattern> )`，
+    pattern 匹配的是参数的 stable JSON（键递归排序后的 JSON，`*` 匹配任意内容，空 pattern
+    匹配该工具的所有调用）。`deny` 与 read-only 硬顶不询问直接 `DENIED`；`ask` 在循环内
+    **阻塞**进 600 秒审批批次：批准即调用，拒绝回 `DENIED` 工具结果、轮次继续，等满超时
+    收口 `failed`。
+  - server 返回 `isError`、连接中断、server 未装配都是工具结果（`error: tool-error` /
+    `connection` / `unavailable`），轮次继续；回灌内容是 `[mcp:<server>/<tool>] ok` 或
+    `error: <code>` + `server` / `tool` + server 正文，同样受 20000 字回灌上限约束。
 - 两家 provider（`anthropic` 与 `openai:<模型>`）行为一致：工具定义与工具结果各按自己的
   wire shape 序列化（`tools[].input_schema` + `tool_use` / `tools[].function.parameters` +
   `tool_calls`），循环、上限与收口完全一致。
@@ -119,14 +140,14 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
 以下工具名在轮次可用集里，但本批没有给模型提供规格，因此真实模型调不到，只有脚本化
 provider（`--scripted-provider`）能驱动：
 
-- MCP 工具 `mcp:<server>/<tool>`。
 - 编排类：`TeamAssign` / `transfer_task` / Plan 的写工具 `TaskCreate` / `TaskUpdate`。
 - `SopVerdict` 的结构化判定通道：通道已定（一个专用 `internal` 类工具映射到既有
   `sopVerdict`），本批未实现；`RoundResult.taskAction` 用的同一条通道同理。
 
-接入真实模型不等于 team 分派、Plan 写、SOP 判定或 MCP 工具可用；本版本不能这样宣传。
-写类与执行类已进循环，但边界仍是真实的：写只在项目根内；`Bash` 是本机明文 shell +
-逐次审批 + 项目根工作目录，没有沙箱。
+接入真实模型不等于 team 分派、Plan 写或 SOP 判定可用；本版本不能这样宣传。写类、执行类与
+MCP 工具已进循环，但边界仍是真实的：写只在项目根内；`Bash` 是本机明文 shell + 逐次审批 +
+项目根工作目录，没有沙箱；MCP 工具只在 `mcp.json` 正本、远端一次性确认与实际连上的 server
+上可用，零 server 就是零 MCP 工具。
 
 ### 上限语义
 

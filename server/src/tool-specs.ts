@@ -6,6 +6,9 @@ import type {
   RoundFileToolResult,
   RoundFileTools,
   RoundInput,
+  RoundMcpCallResult,
+  RoundMcpContext,
+  RoundMcpTool,
   RoundPlanFace,
   RoundShell,
   RoundShellResult,
@@ -63,9 +66,13 @@ export function capToolResultContent(content: string, t: ToolCopy): string {
  * The batch's scope grew with its tickets: `Read` / `Glob` / `Grep` over the
  * round's file face and `TaskList` / `TaskGet` over its Plan face (#59);
  * `Write` / `Edit` over the same file face, behind the tool gate that face
- * itself applies (#74); and `Bash` over the round's shell face (#75). The
- * orchestration tools arrive with a later batch; a name without a spec here is
- * not offered, even when `RoundInput.tools` lists it.
+ * itself applies (#74); `Bash` over the round's shell face (#75); and the
+ * dynamic `mcp:<server>/<tool>` set of every server this round connected
+ * (#76), which is the one part of the registry that is not a constant: it is
+ * derived per round from the tools those servers actually listed, so a server
+ * that is missing, invalid, unconfirmed or unreachable contributes no spec at
+ * all. The orchestration tools arrive with a later batch; a name without a spec
+ * here is not offered, even when `RoundInput.tools` lists it.
  */
 
 /** One argument a tool accepts, in the order the model sees it. */
@@ -88,6 +95,12 @@ export interface RoundToolContext {
   files(): RoundFileTools;
   plan(): RoundPlanFace;
   shell(): RoundShell;
+  /**
+   * The round's MCP assembly (D6.1): the servers it connected and the one gated
+   * tool-call face. A spec reaches this only for a tool this round's own
+   * context listed, so an empty assembly is a registry bug here, not a state.
+   */
+  mcp(): RoundMcpContext;
   copy: ToolCopy;
 }
 
@@ -103,11 +116,27 @@ export interface ToolAnswer {
   content: string;
 }
 
+/**
+ * The arguments a spec's own shape check accepted, as `execute` receives them.
+ * A declared-shape tool proves every argument is a string and narrows to that
+ * proof; an MCP tool ships a schema this process does not hold, so its check
+ * proves only "one JSON object" and hands the whole object over. The weaker
+ * type states the part both paths share.
+ */
+export type ToolArguments = Readonly<Record<string, unknown>>;
+
 /** One tool as this round may offer it. */
 export interface RoundToolSpec {
   name: string;
   description: string;
   arguments: readonly ToolArgument[];
+  /**
+   * `true` for a tool whose arguments the round does not shape: an MCP tool is
+   * described by its own server, so the offered schema stays open and the shape
+   * check proves only that the model sent one JSON object. Absent (false) for
+   * every tool declared here, which keeps their strict check.
+   */
+  rawArguments?: boolean;
   /**
    * Whether this round has the face the tool runs against (D2). `Read` / `Glob`
    * / `Grep` need the project file face, `TaskList` / `TaskGet` need the Plan
@@ -120,10 +149,7 @@ export interface RoundToolSpec {
    * Run one call whose arguments the shape check accepted. This spec's
    * `available` already held for this round, so the context carries the face.
    */
-  execute(
-    input: Readonly<Record<string, string>>,
-    context: RoundToolContext,
-  ): Promise<ToolAnswer>;
+  execute(input: ToolArguments, context: RoundToolContext): Promise<ToolAnswer>;
 }
 
 const READ: RoundToolSpec = {
@@ -136,8 +162,8 @@ const READ: RoundToolSpec = {
   arguments: [{ name: 'path', description: 'The file to read.', required: true }],
   available: (input) => input.workspace !== null,
   async execute(input, context) {
-    // The shape check proved the required argument present.
-    const requested = input['path']!;
+    // The shape check proved the required argument present and a string.
+    const requested = input['path'] as string;
     return shapeRead(requested, await context.files().Read({ path: requested }));
   },
 };
@@ -164,8 +190,8 @@ const GLOB: RoundToolSpec = {
   ],
   available: (input) => input.workspace !== null,
   async execute(input, context) {
-    const pattern = input['pattern']!;
-    const base = input['path'];
+    const pattern = input['pattern'] as string;
+    const base = input['path'] as string | undefined;
     const request: GlobFileRequest = { pattern, ...(base === undefined ? {} : { path: base }) };
     return shapeGlob(request, await context.files().Glob(request));
   },
@@ -194,8 +220,8 @@ const GREP: RoundToolSpec = {
   ],
   available: (input) => input.workspace !== null,
   async execute(input, context) {
-    const pattern = input['pattern']!;
-    const base = input['path'];
+    const pattern = input['pattern'] as string;
+    const base = input['path'] as string | undefined;
     const request: GrepFileRequest = { pattern, ...(base === undefined ? {} : { path: base }) };
     return shapeGrep(request, await context.files().Grep(request), context.copy);
   },
@@ -216,8 +242,11 @@ const WRITE: RoundToolSpec = {
   ],
   available: (input) => input.workspace !== null,
   async execute(input, context) {
-    // The shape check proved both required arguments present.
-    const request: WriteFileRequest = { path: input['path']!, content: input['content']! };
+    // The shape check proved both required arguments present and strings.
+    const request: WriteFileRequest = {
+      path: input['path'] as string,
+      content: input['content'] as string,
+    };
     return shapeWrite(request, await context.files().Write(request));
   },
 };
@@ -244,9 +273,9 @@ const EDIT: RoundToolSpec = {
   available: (input) => input.workspace !== null,
   async execute(input, context) {
     const request: EditFileRequest = {
-      path: input['path']!,
-      old_string: input['old_string']!,
-      new_string: input['new_string']!,
+      path: input['path'] as string,
+      old_string: input['old_string'] as string,
+      new_string: input['new_string'] as string,
     };
     return shapeEdit(request, await context.files().Edit(request));
   },
@@ -274,7 +303,7 @@ const TASK_GET: RoundToolSpec = {
   arguments: [{ name: 'id', description: 'The Plan item id.', required: true }],
   available: (input) => input.plan !== null,
   async execute(input, context) {
-    const requested = input['id']!;
+    const requested = input['id'] as string;
     return shapeTaskGet(requested, context.plan().TaskGet({ id: requested }));
   },
 };
@@ -297,7 +326,7 @@ const BASH: RoundToolSpec = {
   ],
   available: (input) => input.workspace !== null,
   async execute(input, context) {
-    const command = input['command']!;
+    const command = input['command'] as string;
     return shapeShell(command, await context.shell().run({ command }), context.copy);
   },
 };
@@ -315,16 +344,72 @@ const BATCH_TOOLS: readonly RoundToolSpec[] = [
 ];
 
 /**
+ * One MCP tool as this round may offer it (D3). The name is the product's own
+ * `mcp:<server>/<tool>` — the same string as the `permission_rule.tool_name`,
+ * the approval payload and this round's `RoundInput.tools` — and the
+ * description is the server's, taken from the list the round's connection
+ * actually returned rather than from anything declared here.
+ *
+ * MCP carries its own input schema, which `RoundMcpTool` does not hand over, so
+ * the round offers an open object and passes the model's arguments through
+ * untouched: the server that declared the tool is the one that checks them.
+ * Every call still goes through the round's MCP face, i.e. the #44 gate
+ * (execution class, stable-JSON pattern): an `ask` blocks inside the round and
+ * a `deny` comes back as a `DENIED` result, never as a round error.
+ */
+function mcpToolSpec(server: string, tool: RoundMcpTool): RoundToolSpec {
+  const name = `mcp:${server}/${tool.name}`;
+  return {
+    name,
+    description:
+      tool.description ??
+      `The MCP tool ${tool.name} of the connected server ${server}; that server defines its arguments.`,
+    arguments: [],
+    rawArguments: true,
+    // The spec exists only while this round's assembly lists the tool, so the
+    // face it calls is always there: an unavailable server contributes no spec
+    // at all (no `mcp.json`, an invalid file, an unconfirmed remote, a failed
+    // connection), which is the assembly's answer, not this accessor's.
+    available: (input) => input.mcp !== null,
+    async execute(args, context) {
+      return shapeMcpCall(server, tool.name, await context.mcp().callTool(server, tool.name, args));
+    },
+  };
+}
+
+/**
+ * The MCP specs this round may offer, in `RoundInput.tools`' own order: the
+ * servers it actually connected, each followed by the tools that server listed.
+ * Every one of them is dynamic — a server contributes only what it answered
+ * with this round — so an empty assembly is zero specs and zero tools, never a
+ * round error.
+ */
+function mcpToolSpecs(input: RoundInput): RoundToolSpec[] {
+  const mcp = input.mcp;
+  if (mcp === null) {
+    return [];
+  }
+  return mcp.servers.flatMap((server) =>
+    server.tools.map((tool) => mcpToolSpec(server.name, tool)),
+  );
+}
+
+/**
  * The `internal` tools this batch offers although their class is not `read`:
  * the two Plan tools that only read the current run.
  */
 const READ_ONLY_INTERNAL_TOOLS: readonly string[] = ['TaskList', 'TaskGet'];
 
 /**
- * The `execute` tools this batch offers. `Bash` is the one execution tool here;
- * MCP tools are `execute` too and are a later batch's subject.
+ * The `execute` tools this batch offers as constants. `Bash` is the one built-in
+ * execution tool here; the `mcp:` namespace is execution class too and is
+ * offered per round, through the dynamic specs the round's own assembly
+ * produced.
  */
 const BATCH_EXECUTE_TOOLS: readonly string[] = ['Bash'];
+
+/** The one namespace whose tools this batch offers dynamically (D3). */
+const MCP_TOOL_PREFIX = 'mcp:';
 
 /**
  * Whether a tool belongs to this batch's scope by its own class (D2): the `read`
@@ -343,19 +428,23 @@ function inBatchScope(name: string): boolean {
     reading.tool_class === 'read' ||
     reading.tool_class === 'write' ||
     (reading.tool_class === 'internal' && READ_ONLY_INTERNAL_TOOLS.includes(reading.tool_name)) ||
-    (reading.tool_class === 'execute' && BATCH_EXECUTE_TOOLS.includes(reading.tool_name))
+    (reading.tool_class === 'execute' &&
+      (BATCH_EXECUTE_TOOLS.includes(reading.tool_name) ||
+        reading.tool_name.startsWith(MCP_TOOL_PREFIX)))
   );
 }
 
 /**
- * The tool specs this round's model may call: this batch's registry, filtered to
- * the names the round's own availability calculation offers (`RoundInput.tools`)
- * and to the batch's classes, in the registry's order. An empty list is a round
- * with no tool face at all — a DM or a rootless autonomous round — and its
- * provider request carries no tool definitions.
+ * The tool specs this round's model may call: this batch's registry, then the
+ * MCP specs this round's assembly produced, filtered to the names the round's
+ * own availability calculation offers (`RoundInput.tools`) and to the batch's
+ * classes, in that order — which is the same built-ins-then-MCP order
+ * `RoundInput.tools` already states. An empty list is a round with no tool face
+ * at all — a DM or a rootless autonomous round, or one whose `mcp.json`
+ * assembled nothing — and its provider request carries no tool definitions.
  */
 export function roundToolSpecs(input: RoundInput): RoundToolSpec[] {
-  return BATCH_TOOLS.filter(
+  return [...BATCH_TOOLS, ...mcpToolSpecs(input)].filter(
     (spec) => input.tools.includes(spec.name) && inBatchScope(spec.name) && spec.available(input),
   );
 }
@@ -387,6 +476,12 @@ export function roundToolContext(input: RoundInput, copy: ToolCopy): RoundToolCo
       }
       return shell;
     },
+    mcp(): RoundMcpContext {
+      if (input.mcp === null) {
+        throw new Error('tool face missing: this round assembled no MCP context');
+      }
+      return input.mcp;
+    },
     copy,
   };
 }
@@ -396,6 +491,12 @@ export function roundToolContext(input: RoundInput, copy: ToolCopy): RoundToolCo
  * (Anthropic `input_schema`, OpenAI-compatible `function.parameters`).
  */
 export function toolInputSchema(spec: RoundToolSpec): Record<string, unknown> {
+  if (spec.rawArguments === true) {
+    // The tool's own server declares its schema; this round holds no copy of
+    // it, so the offered object stays open. The server rejects what it cannot
+    // accept, and that refusal is a tool result like any other.
+    return { type: 'object', properties: {}, additionalProperties: true };
+  }
   return {
     type: 'object',
     properties: Object.fromEntries(
@@ -411,19 +512,27 @@ export function toolInputSchema(spec: RoundToolSpec): Record<string, unknown> {
 
 /** The argument shape check's answer: the values the face accepts, or why not. */
 export type ToolArgumentCheck =
-  | { ok: true; values: Readonly<Record<string, string>> }
+  | { ok: true; values: ToolArguments }
   | { ok: false; message: string };
 
 /**
  * Check the model's arguments against the tool's declared shape (D4) before the
  * face runs: a missing required argument, a wrong type and an extra argument are
  * all refusals the model receives as a tool result, never a round error.
+ *
+ * A tool that declares no shape here (an MCP tool) is checked only for being
+ * one JSON object: the server that declared it is the one that validates its
+ * arguments, and this process mirroring that schema would be a second source of
+ * truth for it.
  */
 export function checkToolArguments(spec: RoundToolSpec, input: unknown): ToolArgumentCheck {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     return { ok: false, message: 'arguments must be a JSON object' };
   }
   const supplied = input as Record<string, unknown>;
+  if (spec.rawArguments === true) {
+    return { ok: true, values: supplied };
+  }
   const values: Record<string, string> = {};
   for (const argument of spec.arguments) {
     const value = supplied[argument.name];
@@ -610,6 +719,40 @@ function shapeTaskGet(requested: string, task: PlanTaskView | null): ToolAnswer 
       `status: ${task.status}`,
       `position: ${task.position}`,
     ].join('\n'),
+  };
+}
+
+/**
+ * One MCP tool result as the model reads it: the tool's product name, the call
+ * it answers, and — when the call failed — the stable code the round's own face
+ * produced (`denied`, `tool-error`, `connection`, `unavailable`, …).
+ *
+ * A denial is a result here, exactly as it is for every other tool: the round
+ * continues with what the model makes of `DENIED`. The server's own body is
+ * kept whole rather than summarized — it is the tool's answer, and the re-feed
+ * cap is what bounds its size (D6).
+ */
+function shapeMcpCall(
+  server: string,
+  tool: string,
+  result: RoundMcpCallResult,
+): ToolAnswer {
+  const name = `mcp:${server}/${tool}`;
+  const call = [`server: ${server}`, `tool: ${tool}`];
+  if (!result.ok) {
+    return {
+      ok: false,
+      content: [
+        `[${name}] error: ${result.error ?? 'tool-error'}`,
+        ...call,
+        ...(result.message === undefined ? [] : [`message: ${result.message}`]),
+        ...(result.content === undefined ? [] : ['content:', result.content]),
+      ].join('\n'),
+    };
+  }
+  return {
+    ok: true,
+    content: [`[${name}] ok`, ...call, 'content:', result.content ?? ''].join('\n'),
   };
 }
 
