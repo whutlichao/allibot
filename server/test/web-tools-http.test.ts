@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { createServer, type IncomingHttpHeaders } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -710,6 +710,138 @@ test('web_search calls the stored provider with the DB key, shapes its hits, and
   }
 });
 
+test('a deny rule stops web_search at the gate with zero provider requests; with no rule the same call runs', async () => {
+  const provider = PROVIDER_ROWS[0]!;
+  const fixture = await startFixture('allibot-web-search-gate-', provider);
+  try {
+    const agentId = await createAgent(fixture, provider);
+    await confirmRemoteDataFlow(fixture, provider);
+    const channelId = await createChannel(fixture, { agentId, webAccess: 'search' });
+    const storedKey = 'gate-key-0123456789abcdef';
+    await storeCredential(fixture, 'brave', storedKey);
+
+    fixture.webProvider.respondWith(() =>
+      braveAnswer([
+        { title: 'HIT-GATE', url: 'https://example.com/gate', description: 'GATE-SNIPPET' },
+      ]),
+    );
+    queueReplies(fixture.endpoint, [
+      provider.toolCalls([
+        { id: 'call-denied', name: 'web_search', input: { query: 'blocked query' } },
+      ]),
+      provider.text('被规则拦下来了'),
+      provider.toolCalls([
+        { id: 'call-allowed', name: 'web_search', input: { query: 'allowed query' } },
+      ]),
+      provider.text('搜到了'),
+    ]);
+
+    // D3 / D14: `web_search` is a tool like every other one, so the empty
+    // pattern — the existing "every call of this tool" subject — reaches it.
+    await putRules(fixture, channelId, [
+      { tool_name: 'web_search', pattern: '', behavior: 'deny' },
+    ]);
+    const deniedRound = await sendMessage(fixture, channelId, '@联网成员 搜 blocked query');
+    assert.equal(deniedRound.status, 201, await deniedRound.clone().text());
+    assert.equal(
+      fixture.webProvider.requests.length,
+      0,
+      'a denied web_search opens zero provider sockets',
+    );
+    const denied = toolResults(provider, lastModelRequest(fixture))[0];
+    assert.equal(denied?.isError, true, 'a denial is a tool error result');
+    assert.ok(
+      (denied?.content ?? '').includes('[web_search] error: denied'),
+      `the refusal states its stable code: ${denied?.content ?? ''}`,
+    );
+    assert.ok((denied?.content ?? '').includes('query: blocked query'), denied?.content ?? '');
+    assertNoSecret(denied?.content ?? '', storedKey, 'the denied result');
+    assert.deepEqual(await listApprovals(fixture), [], 'a deny rule never asks');
+    assert.equal(
+      latestOutcome(fixture).status,
+      'replied',
+      'a denial is a tool result and never closes the round',
+    );
+
+    // The default tier with no rule still allows the very same call: web_search
+    // is a read tool, so nothing has to ask or exempt it (D3).
+    await putRules(fixture, channelId, []);
+    const allowedRound = await sendMessage(fixture, channelId, '@联网成员 搜 allowed query');
+    assert.equal(allowedRound.status, 201, await allowedRound.clone().text());
+    assert.equal(
+      fixture.webProvider.requests.length,
+      1,
+      'with the deny rule gone the call reaches the provider exactly once',
+    );
+    const allowed = toolResults(provider, lastModelRequest(fixture))[0];
+    assert.equal(allowed?.isError, false);
+    assert.ok((allowed?.content ?? '').includes('HIT-GATE'), allowed?.content ?? '');
+    assert.deepEqual(await listApprovals(fixture), [], 'the default tier needs no approval');
+    assert.equal(latestOutcome(fixture).status, 'replied');
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('an ask rule makes web_search wait for the human, with the query in the payload, and no socket before the answer', async () => {
+  const provider = PROVIDER_ROWS[0]!;
+  const fixture = await startFixture('allibot-web-search-ask-', provider);
+  try {
+    const agentId = await createAgent(fixture, provider);
+    await confirmRemoteDataFlow(fixture, provider);
+    const channelId = await createChannel(fixture, { agentId, webAccess: 'search' });
+    await storeCredential(fixture, 'brave', 'ask-key-0123456789');
+
+    fixture.webProvider.respondWith(() =>
+      braveAnswer([
+        { title: 'HIT-ASKED', url: 'https://example.com/asked', description: 'ASKED-SNIPPET' },
+      ]),
+    );
+    queueReplies(fixture.endpoint, [
+      provider.toolCalls([
+        { id: 'call-asked', name: 'web_search', input: { query: 'ASKED-QUERY' } },
+      ]),
+      provider.text('批准后搜到了'),
+    ]);
+    await putRules(fixture, channelId, [
+      { tool_name: 'web_search', pattern: '', behavior: 'ask' },
+    ]);
+
+    const askedRound = sendMessage(fixture, channelId, '@联网成员 搜一下 ASKED-QUERY');
+    const pending = await waitForPending(fixture);
+    assert.equal(pending.tool_calls.length, 1);
+    const call = pending.tool_calls[0]!;
+    assert.equal(call.tool_name, 'web_search');
+    assert.equal(call.pattern, '', 'the empty pattern is the "every call of this tool" subject');
+    assert.deepEqual(
+      call.arguments,
+      { tool_name: 'web_search', query: 'ASKED-QUERY' },
+      'the approval payload carries the query and nothing else',
+    );
+    assert.equal(
+      fixture.webProvider.requests.length,
+      0,
+      'an asked web_search waits for the human before it opens a socket',
+    );
+
+    const approved = await postJson(fixture, `/api/approvals/${pending.reply_id}`, {
+      tool_call_id: call.tool_call_id,
+      confirmed: true,
+    });
+    assert.equal(approved.status, 200, await approved.clone().text());
+    const answered = await askedRound;
+    assert.equal(answered.status, 201, await answered.clone().text());
+
+    assert.equal(fixture.webProvider.requests.length, 1, 'the confirmed call proceeds exactly once');
+    const result = toolResults(provider, lastModelRequest(fixture))[0];
+    assert.equal(result?.isError, false);
+    assert.ok((result?.content ?? '').includes('HIT-ASKED'), result?.content ?? '');
+    assert.equal(latestOutcome(fixture).status, 'replied');
+  } finally {
+    await fixture.stop();
+  }
+});
+
 test('search+fetch with no provider at all: fetch is a direct host GET with no credential header', async () => {
   const provider = PROVIDER_ROWS[0]!;
   const fixture = await startFixture('allibot-web-fetch-', provider);
@@ -791,17 +923,24 @@ test('search+fetch with no provider at all: fetch is a direct host GET with no c
 /**
  * A target host that can answer a redirect (the recorded endpoint cannot set a
  * `Location` header): `/same` redirects to `/final` on the same host, `/cross`
- * redirects to another host, anything else is a fixed page.
+ * redirects to another host, `/userinfo-redirect` redirects to the same host
+ * with `user:pass@` in front of it, anything else is a fixed page. Every
+ * request's headers are recorded, because a credential header `fetch` must
+ * never send is only visible here.
  */
 async function startRedirectTarget(): Promise<{
   port: number;
   baseUrl: string;
-  requests: { method: string; path: string }[];
+  requests: { method: string; path: string; headers: IncomingHttpHeaders }[];
   stop: () => Promise<void>;
 }> {
-  const requests: { method: string; path: string }[] = [];
+  const requests: { method: string; path: string; headers: IncomingHttpHeaders }[] = [];
   const server = createServer((request, response) => {
-    requests.push({ method: request.method ?? 'GET', path: request.url ?? '/' });
+    requests.push({
+      method: request.method ?? 'GET',
+      path: request.url ?? '/',
+      headers: request.headers,
+    });
     if (request.url === '/same') {
       response.writeHead(302, { location: '/final' });
       response.end();
@@ -809,6 +948,16 @@ async function startRedirectTarget(): Promise<{
     }
     if (request.url === '/cross') {
       response.writeHead(302, { location: 'http://cross-host.example/x' });
+      response.end();
+      return;
+    }
+    if (request.url === '/userinfo-redirect') {
+      // The same host, and the same port: only the user info differs, so a
+      // host comparison alone would follow it and `fetch` would send an
+      // `Authorization` header the host-only gate never saw.
+      response.writeHead(302, {
+        location: `http://user:pw@${request.headers.host ?? ''}/leaked`,
+      });
       response.end();
       return;
     }
@@ -844,7 +993,7 @@ async function startRedirectTarget(): Promise<{
   };
 }
 
-test('fetch follows a same-host redirect and refuses a cross-host redirect and a non-http URL', async () => {
+test('fetch follows a same-host redirect and refuses a cross-host redirect, a credential-carrying redirect and a non-http URL', async () => {
   const provider = PROVIDER_ROWS[0]!;
   const fixture = await startFixture('allibot-web-fetch-redirect-', provider);
   const target = await startRedirectTarget();
@@ -864,6 +1013,11 @@ test('fetch follows a same-host redirect and refuses a cross-host redirect and a
             name: 'fetch',
             input: { url: `http://user:pass@127.0.0.1:${target.port}/basic` },
           },
+          {
+            id: 'call-userinfo-redirect',
+            name: 'fetch',
+            input: { url: `${target.baseUrl}/userinfo-redirect` },
+          },
           { id: 'call-missing', name: 'fetch', input: { url: `${target.baseUrl}/missing` } },
         ],
         '先读这三处',
@@ -882,6 +1036,7 @@ test('fetch follows a same-host redirect and refuses a cross-host redirect and a
         ['call-cross', true],
         ['call-ftp', true],
         ['call-userinfo', true],
+        ['call-userinfo-redirect', true],
         ['call-missing', false],
       ],
       'a followed redirect and a 404 are pages; a cross-host redirect and a URL carrying user info are tool errors',
@@ -903,13 +1058,32 @@ test('fetch follows a same-host redirect and refuses a cross-host redirect and a
       (results[3]?.content ?? '').includes('invalid-url'),
       `a URL carrying user info is refused before any header exists: ${results[3]?.content ?? ''}`,
     );
-    assert.ok((results[4]?.content ?? '').includes('status: 404'), results[4]?.content ?? '');
-    assert.ok((results[4]?.content ?? '').includes('NOT-FOUND-BODY'), results[4]?.content ?? '');
+    assert.ok(
+      (results[4]?.content ?? '').includes('invalid-url'),
+      `a redirect carrying user info is refused by the URL guard before it is followed: ${results[4]?.content ?? ''}`,
+    );
+    // The guard, not the HTTP client's own refusal, has to be the reason: the
+    // client is injectable (`RoundWebOptions.fetch`), so depending on undici's
+    // `Request` rejecting credential URLs would leave a different client free
+    // to send the header instead.
+    assert.ok(
+      (results[4]?.content ?? '').includes('redirect'),
+      `the refusal names the redirect as its cause: ${results[4]?.content ?? ''}`,
+    );
+    assert.ok((results[5]?.content ?? '').includes('status: 404'), results[5]?.content ?? '');
+    assert.ok((results[5]?.content ?? '').includes('NOT-FOUND-BODY'), results[5]?.content ?? '');
     assert.deepEqual(
       target.requests.map((request) => request.path),
-      ['/same', '/final', '/cross', '/missing'],
+      ['/same', '/final', '/cross', '/userinfo-redirect', '/missing'],
       'only the same-host redirect was followed; the cross-host and credential-carrying URLs were never requested',
     );
+    for (const request of target.requests) {
+      assert.equal(
+        request.headers.authorization,
+        undefined,
+        `fetch never sends an Authorization header, not even for a redirect target (${request.path})`,
+      );
+    }
     assert.equal(latestOutcome(fixture).status, 'replied');
   } finally {
     await target.stop();
