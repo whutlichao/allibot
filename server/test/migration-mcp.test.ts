@@ -14,13 +14,14 @@ import {
 /**
  * Schema 步骤 21 (#47 / T19): `mcp_server` (history / migration source only),
  * `skill` (metadata only; installation is #48), and the `remote_consent_scope`
- * rebuild that widens the consent vocabulary to model / mcp / docker.
+ * rebuild that widens the consent vocabulary to model / mcp / docker (v25
+ * adds `web`).
  *
  * Everything is read from the data directory the CLI wrote: the strict +1
  * chain, the rebuilt table's shape and existing rows, the two new tables'
  * UNIQUE constraints, the sibling backup, the audit ledger and the empty
  * database path. The v20 baseline is the real #37-#44 shape, so this is the
- * production v20 -> 21 migration.
+ * production v20 -> 25 migration.
  */
 
 const SEEDED_AT = '2026-10-01T08:00:00.000Z';
@@ -140,7 +141,7 @@ function seedV20(dataDir: string): void {
   }
 }
 
-test('a v20 data directory migrates to 21; mcp_server / skill exist and model consents survive', async () => {
+test('a v20 data directory migrates to 25; mcp_server / skill exist and model consents survive', async () => {
   const tmp = await makeTempDir('allibot-migration-mcp-');
   const dataDir = path.join(tmp, 'data');
   const snapshot = path.join(tmp, 'snapshot');
@@ -150,8 +151,8 @@ test('a v20 data directory migrates to 21; mcp_server / skill exist and model co
 
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
-    assert.equal(readSchemaVersion(dataDir), 21);
-    assert.match(result.output, /Schema 版本 21/);
+    assert.equal(readSchemaVersion(dataDir), 25);
+    assert.match(result.output, /Schema 版本 25/);
 
     // One sibling backup, byte-identical to the pre-migration snapshot.
     const backups = readdirSync(tmp).filter((entry) => entry.startsWith('data.backup-'));
@@ -160,10 +161,10 @@ test('a v20 data directory migrates to 21; mcp_server / skill exist and model co
     const diff = spawnSync('diff', ['-r', snapshot, backupDir], { encoding: 'utf8' });
     assert.equal(diff.status, 0, `the backup equals the pre-migration snapshot: ${diff.stdout}`);
 
-    // One ledger line for this run, from 20 to 21.
+    // One ledger line for this run, from 20 to 25.
     const ledger = readLedger(dataDir);
-    const lines = ledger.filter((line) => line['to'] === 21);
-    assert.equal(lines.length, 1, `one from=20/to=21 line; ledger: ${JSON.stringify(ledger)}`);
+    const lines = ledger.filter((line) => line['to'] === 25);
+    assert.equal(lines.length, 1, `one from=20/to=25 line; ledger: ${JSON.stringify(ledger)}`);
     assert.equal(lines[0]!['from'], 20);
     assert.equal(lines[0]!['result'], 'ok');
     assert.equal(typeof lines[0]!['backup_path'], 'string');
@@ -235,10 +236,13 @@ test('a v20 data directory migrates to 21; mcp_server / skill exist and model co
         () => insertConsent.run('model', 'anthropic', SEEDED_AT),
         /UNIQUE constraint failed/i,
       );
+      // v25 (#67) widens the vocabulary once more: a web provider is a remote
+      // data flow like a model, an MCP server and a container.
+      insertConsent.run('web', 'exa', SEEDED_AT);
       assert.throws(
-        () => insertConsent.run('web', 'exa', SEEDED_AT),
+        () => insertConsent.run('skill', 'demo', SEEDED_AT),
         /CHECK constraint failed/i,
-        'the consent vocabulary is exactly model / mcp / docker',
+        'the consent vocabulary is exactly model / mcp / docker / web',
       );
       assert.throws(
         () => insertConsent.run('mcp', '', SEEDED_AT),
@@ -415,19 +419,19 @@ test('a v20 data directory migrates to 21; mcp_server / skill exist and model co
   }
 });
 
-test('an empty data directory migrates straight to 21 with no backup', async () => {
+test('an empty data directory migrates straight to 25 with no backup', async () => {
   const tmp = await makeTempDir('allibot-migration-mcp-empty-');
   const dataDir = path.join(tmp, 'data');
   try {
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
-    assert.match(result.output, /Schema 版本 21/);
-    assert.equal(readSchemaVersion(dataDir), 21);
+    assert.match(result.output, /Schema 版本 25/);
+    assert.equal(readSchemaVersion(dataDir), 25);
 
     const ledger = readLedger(dataDir);
     assert.equal(ledger.length, 1);
     assert.equal(ledger[0]!['from'], null);
-    assert.equal(ledger[0]!['to'], 21);
+    assert.equal(ledger[0]!['to'], 25);
     assert.equal(ledger[0]!['result'], 'ok');
     assert.equal(ledger[0]!['backup_path'], null);
     assert.equal(foreignKeyViolations(dataDir).length, 0);

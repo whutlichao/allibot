@@ -116,6 +116,7 @@ test('migrating an empty data dir creates member and agent_config with exactly o
         'auto_claim',
         'workspace_backend',
         'permission_mode',
+        'web_access',
       ],
     );
 

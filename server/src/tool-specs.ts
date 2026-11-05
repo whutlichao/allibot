@@ -15,6 +15,7 @@ import type {
   RoundMcpTool,
   RoundPlanFace,
   RoundShell,
+  RoundWebFace,
   TeamAssignRequest,
   TeamAssignToolResult,
   WriteFileRequest,
@@ -22,6 +23,7 @@ import type {
 import { classifyToolName } from './permissions.js';
 import {
   shapeEdit,
+  shapeFetch,
   shapeGlob,
   shapeGrep,
   shapeMcpCall,
@@ -32,6 +34,7 @@ import {
   shapeTaskList,
   shapeTaskUpdate,
   shapeTeamAssign,
+  shapeWebSearch,
   shapeWrite,
 } from './tool-result-shaping.js';
 
@@ -134,6 +137,7 @@ export interface RoundToolContext {
    * context listed, so an empty assembly is a registry bug here, not a state.
    */
   mcp(): RoundMcpContext;
+  web(): RoundWebFace;
   assign(): (request: TeamAssignRequest) => Promise<TeamAssignToolResult>;
   copy: ToolCopy;
 }
@@ -519,6 +523,57 @@ const BASH: RoundToolSpec = {
   },
 };
 
+/**
+ * `web_search` (D2 / D8 / D13): the round's one remote read. It runs against the
+ * round's web face, i.e. the one provider resolution, so the model never names a
+ * provider, an endpoint or a credential. The spec exists only while this round
+ * assembled the tool; a call that arrives with no usable provider — a stale
+ * assembly or a rule-direct call — throws and closes the round failed with the
+ * missing fact named. Results come back shaped like any other read.
+ */
+const WEB_SEARCH: RoundToolSpec = {
+  name: 'web_search',
+  description:
+    'Search the web for one query. `query` is the search text. The round fixes which provider answers, ' +
+    'so results come back as one source line, the hit count and one numbered title / url / snippet ' +
+    'block per hit; a provider error is an error result and never ends the round. A round with no ' +
+    'usable provider fails this call instead of silently answering nothing.',
+  arguments: [
+    { name: 'query', description: 'The search query.', required: true },
+  ],
+  available: (input) => input.web !== null,
+  async execute(input, context) {
+    // The shape check proved the required argument present and a string.
+    const query = input['query'] as string;
+    return shapeWebSearch(query, await context.web().search({ query }));
+  },
+};
+
+/**
+ * `fetch` (D2 / D5 / D10 / D14): the round's one remote read of a specific page.
+ * The call passes the round's permission gate first, with the URL's **host** as
+ * the subject — the query string never reaches an approval record. A denial is a
+ * `DENIED` result, a cross-host redirect is a refusal result, and a completed
+ * response is a result whatever its status code.
+ */
+const FETCH: RoundToolSpec = {
+  name: 'fetch',
+  description:
+    'Fetch one web page this round may read. `url` must be an absolute http or https URL. The call ' +
+    "passes this round's permission gate first: a denial comes back as `denied` and nothing is " +
+    'requested, and the gate subject is the host, not the URL. A redirect to another host is ' +
+    'refused rather than followed; a same-host redirect is followed. The response body comes back ' +
+    'as the result body.',
+  arguments: [
+    { name: 'url', description: 'The absolute http or https URL to GET.', required: true },
+  ],
+  available: (input) => input.web !== null,
+  async execute(input, context) {
+    const url = input['url'] as string;
+    return shapeFetch(await context.web().fetch({ url }));
+  },
+};
+
 /** The tools this batch puts in the loop, in the order the model sees them. */
 const BATCH_TOOLS: readonly RoundToolSpec[] = [
   READ,
@@ -534,6 +589,8 @@ const BATCH_TOOLS: readonly RoundToolSpec[] = [
   TRANSFER_TASK,
   SOP_VERDICT,
   BASH,
+  WEB_SEARCH,
+  FETCH,
 ];
 
 /**
@@ -607,7 +664,7 @@ const BATCH_INTERNAL_TOOLS: readonly string[] = [
  * offered per round, through the dynamic specs the round's own assembly
  * produced.
  */
-const BATCH_EXECUTE_TOOLS: readonly string[] = ['Bash'];
+const BATCH_EXECUTE_TOOLS: readonly string[] = ['Bash', 'fetch'];
 
 /** The one namespace whose tools this batch offers dynamically (D3). */
 const MCP_TOOL_PREFIX = 'mcp:';
@@ -680,6 +737,7 @@ export function roundToolContext(input: RoundInput, copy: ToolCopy): RoundToolCo
     plan: () => requiredFace(input.plan, 'Plan face'),
     shell: () => requiredFace(input.workspace?.shell, 'local shell face'),
     mcp: () => requiredFace(input.mcp, 'MCP context'),
+    web: () => requiredFace(input.web, 'web face'),
     assign: () => requiredFace(input.team?.assign, 'TeamAssign face'),
     copy,
   };

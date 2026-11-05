@@ -7,7 +7,7 @@ import { createDataDirBackup } from './backup.js';
 import { databasePath } from './data-dir.js';
 import { LOCK_FILENAME } from './lock.js';
 
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 25;
 
 export interface MigrationStep {
   readonly to: number;
@@ -1014,6 +1014,88 @@ export const MIGRATION_STEPS: readonly MigrationStep[] = [
           SELECT scope_kind, scope_id, confirmed_at FROM remote_consent_scope;
         DROP TABLE remote_consent_scope;
         ALTER TABLE remote_consent_scope_v21 RENAME TO remote_consent_scope;
+      `);
+    },
+  },
+  {
+    // The web-access ticket (#67 / T1 of the M3 graph) lands the channel tier
+    // and the container egress switch. `web_access` is nullable with no
+    // default, following `agent_config.workspace_backend`: NULL means
+    // unconfigured and the read path falls back to `search`, so the column is
+    // deliberately not the NOT NULL + DEFAULT shape of
+    // `channel.workspace_backend`. `docker_egress` follows `allow_local_shell`:
+    // the container has no network unless the owner turns it on.
+    to: 22,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE channel ADD COLUMN web_access TEXT
+          CHECK (web_access IS NULL OR web_access IN ('off', 'search', 'search+fetch'));
+        ALTER TABLE channel ADD COLUMN docker_egress INTEGER NOT NULL DEFAULT 0
+          CHECK (docker_egress IN (0, 1));
+      `);
+    },
+  },
+  {
+    // The Agent-level tier: NULL means "follow the channel", the same nullable
+    // override shape as `agent_config.permission_mode` and
+    // `agent_config.workspace_backend`.
+    to: 23,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE agent_config ADD COLUMN web_access TEXT
+          CHECK (web_access IS NULL OR web_access IN ('off', 'search', 'search+fetch'));
+      `);
+    },
+  },
+  {
+    // 联网 provider 凭据 (#67 / D6, ADR 0010). This is the one table in the
+    // repository that stores a plaintext secret: the five credential
+    // providers each get one key, and ADR 0010 limits the exception to this
+    // table (model keys still live in the process environment only).
+    //
+    // `is_default` is a data fact, not "the newest row": the partial unique
+    // index keeps at most one row with `is_default = 1`, while any number of
+    // rows may sit at 0. The provider CHECK is the vocabulary gate; the write
+    // path adds nothing on top of it.
+    to: 24,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE web_provider_credential (
+          provider TEXT PRIMARY KEY
+            CHECK (provider IN ('brave', 'tavily', 'perplexity', 'jina', 'exa')),
+          api_key TEXT NOT NULL CHECK (length(api_key) > 0),
+          is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX web_provider_credential_single_default
+          ON web_provider_credential (is_default)
+          WHERE is_default = 1;
+      `);
+    },
+  },
+  {
+    // 远端数据流告知 widens to the web providers (#67 / D11, D12). A CHECK is
+    // not alterable in SQLite, so this is the v14 / v21 rebuild again: create
+    // the widened table, copy every row verbatim, drop, rename. The runner has
+    // foreign keys off outside the transaction and `foreign_key_check` gates
+    // the commit. `scope_id` stays free-form because a web row names one of
+    // the five providers while model / mcp / docker rows keep their own ids.
+    to: 25,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE remote_consent_scope_v25 (
+          scope_kind TEXT NOT NULL
+            CHECK (scope_kind IN ('model', 'mcp', 'docker', 'web')),
+          scope_id TEXT NOT NULL CHECK (length(scope_id) > 0),
+          confirmed_at TEXT NOT NULL,
+          PRIMARY KEY (scope_kind, scope_id)
+        );
+        INSERT INTO remote_consent_scope_v25 (scope_kind, scope_id, confirmed_at)
+          SELECT scope_kind, scope_id, confirmed_at FROM remote_consent_scope;
+        DROP TABLE remote_consent_scope;
+        ALTER TABLE remote_consent_scope_v25 RENAME TO remote_consent_scope;
       `);
     },
   },

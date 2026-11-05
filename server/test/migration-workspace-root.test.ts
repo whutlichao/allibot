@@ -125,9 +125,9 @@ test('a v17 data directory migrates forward with the workspace columns and exist
 
     const migrated = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(migrated.exitCode, 0, migrated.output);
-    assert.match(migrated.stdout, /Schema 版本 21/);
+    assert.match(migrated.stdout, /Schema 版本 25/);
 
-    assert.equal(readSchemaVersion(dataDir), 21, 'the chain lands at the current version');
+    assert.equal(readSchemaVersion(dataDir), 25, 'the chain lands at the current version');
 
     const siblingBackups = readdirSync(tmp).filter((entry) =>
       entry.startsWith('data.backup-'),
@@ -156,11 +156,11 @@ test('a v17 data directory migrates forward with the workspace columns and exist
     const ledger = readLedger(dataDir);
     const last = ledger[ledger.length - 1]!;
     assert.equal(last['from'], 17);
-    assert.equal(last['to'], 21);
+    assert.equal(last['to'], 25);
     assert.equal(last['result'], 'ok');
     assert.equal(typeof last['backup_path'], 'string');
     assert.equal(
-      ledger.filter((row) => row['to'] === 21).length,
+      ledger.filter((row) => row['to'] === 25).length,
       1,
       'exactly one ledger line is appended for this migration',
     );
@@ -267,12 +267,12 @@ test('an empty data directory migrates to the current version with no backup and
   try {
     const migrated = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(migrated.exitCode, 0, migrated.output);
-    assert.equal(readSchemaVersion(dataDir), 21);
+    assert.equal(readSchemaVersion(dataDir), 25);
     assert.deepEqual(foreignKeyViolations(dataDir), []);
     const ledger = readLedger(dataDir);
     assert.equal(ledger.length, 1);
     assert.equal(ledger[0]!['from'], null);
-    assert.equal(ledger[0]!['to'], 21);
+    assert.equal(ledger[0]!['to'], 25);
     assert.equal(ledger[0]!['result'], 'ok');
     assert.equal(ledger[0]!['backup_path'], null);
   } finally {

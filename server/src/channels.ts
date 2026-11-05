@@ -4,6 +4,7 @@ import {
   WORKSPACE_BACKENDS,
   type ChannelMode,
   type ChannelView,
+  type WebAccessTier,
   type WorkspaceBackend,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
@@ -15,7 +16,12 @@ import {
   assertAssignableTeamLeader,
   readTeamView,
 } from './team.js';
-import { requirePermissionMode, DEFAULT_PERMISSION_MODE } from './permissions.js';
+import {
+  DEFAULT_PERMISSION_MODE,
+  isWebAccessTier,
+  optionalWebAccessTier,
+  requirePermissionMode,
+} from './permissions.js';
 import { validateWorkspaceRoot } from './workspace-root.js';
 
 /** The allowed response budget upper bounds; the default is 3. */
@@ -32,6 +38,8 @@ export interface ChannelRow {
   workspace_backend: string;
   allow_local_shell: number;
   permission_mode: string;
+  web_access: string | null;
+  docker_egress: number;
   response_budget_limit: number;
   archived_at: string | null;
   deleted_at: string | null;
@@ -52,13 +60,16 @@ interface ChannelWriteInput {
   workspaceRoot?: string | null;
   workspaceBackend?: WorkspaceBackend;
   permissionMode?: import('@allibot/shared').PermissionMode;
+  /** The raw tier; `null` un-configures it (an omitted field is `undefined`). */
+  webAccess?: WebAccessTier | null;
   allowLocalShell?: 0 | 1;
+  dockerEgress?: 0 | 1;
 }
 
 const CHANNEL_SELECT = `
 SELECT id, name, description, mode, team_leader_member_id, workspace_root,
-       workspace_backend, allow_local_shell, permission_mode, response_budget_limit,
-       archived_at, deleted_at, created_at, updated_at
+       workspace_backend, allow_local_shell, permission_mode, web_access, docker_egress,
+       response_budget_limit, archived_at, deleted_at, created_at, updated_at
 FROM channel`;
 
 const FIELD_KEYS = {
@@ -69,7 +80,9 @@ const FIELD_KEYS = {
   workspace_root: 'workspaceRoot',
   workspace_backend: 'workspaceBackend',
   permission_mode: 'permissionMode',
+  web_access: 'webAccess',
   allow_local_shell: 'allowLocalShell',
+  docker_egress: 'dockerEgress',
   response_budget_limit: 'responseBudgetLimit',
 } as const;
 
@@ -193,7 +206,9 @@ export function updateChannel(
       const nextBudget = patch.responseBudgetLimit ?? current.response_budget_limit;
       const nextBackend = patch.workspaceBackend ?? (current.workspace_backend as WorkspaceBackend);
       const nextPermissionMode = patch.permissionMode ?? current.permission_mode;
+      const nextWebAccess = patch.webAccess !== undefined ? patch.webAccess : current.web_access;
       const nextAllowLocalShell = patch.allowLocalShell ?? (current.allow_local_shell === 1 ? 1 : 0);
+      const nextDockerEgress = patch.dockerEgress ?? (current.docker_egress === 1 ? 1 : 0);
       const nextRoot = patch.workspaceRootProvided === true
         ? (patch.workspaceRoot === null
             ? null
@@ -210,7 +225,9 @@ export function updateChannel(
         nextRoot !== current.workspace_root ||
         nextBackend !== current.workspace_backend ||
         nextPermissionMode !== current.permission_mode ||
-        nextAllowLocalShell !== current.allow_local_shell;
+        nextWebAccess !== current.web_access ||
+        nextAllowLocalShell !== current.allow_local_shell ||
+        nextDockerEgress !== current.docker_egress;
       if (!changed) {
         return { found: true, changed: false, teamChanged: false };
       }
@@ -219,7 +236,8 @@ export function updateChannel(
         `UPDATE channel
             SET name = ?, description = ?, mode = ?, team_leader_member_id = ?,
                 workspace_root = ?, workspace_backend = ?, permission_mode = ?,
-                allow_local_shell = ?, response_budget_limit = ?, updated_at = ?
+                allow_local_shell = ?, web_access = ?, docker_egress = ?,
+                response_budget_limit = ?, updated_at = ?
           WHERE id = ?`,
       ).run(
         nextName,
@@ -230,6 +248,8 @@ export function updateChannel(
         nextBackend,
         nextPermissionMode,
         nextAllowLocalShell,
+        nextWebAccess,
+        nextDockerEgress,
         nextBudget,
         new Date().toISOString(),
         id,
@@ -418,8 +438,14 @@ function parsePatchInput(body: unknown): ChannelWriteInput {
   if (record['permission_mode'] !== undefined) {
     patch.permissionMode = requirePermissionMode(record['permission_mode']);
   }
+  if (record['web_access'] !== undefined) {
+    patch.webAccess = optionalWebAccessTier(record['web_access']);
+  }
   if (record['allow_local_shell'] !== undefined) {
     patch.allowLocalShell = requireBinary(record['allow_local_shell'], 'allow_local_shell');
+  }
+  if (record['docker_egress'] !== undefined) {
+    patch.dockerEgress = requireBinary(record['docker_egress'], 'docker_egress');
   }
   const description = optionalString(record, 'description');
   if (description !== undefined) {
@@ -571,6 +597,8 @@ function toChannelView(
       typeof row.permission_mode === 'string'
         ? (row.permission_mode as ChannelView['permission_mode'])
         : DEFAULT_PERMISSION_MODE,
+    web_access: isWebAccessTier(row.web_access) ? row.web_access : null,
+    docker_egress: row.docker_egress === 1 ? 1 : 0,
     response_budget_limit: row.response_budget_limit,
     archived_at: row.archived_at,
     deleted_at: row.deleted_at,

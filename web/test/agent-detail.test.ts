@@ -74,6 +74,8 @@ function agent(overrides: Partial<AgentView> & Pick<AgentView, 'id' | 'display_n
     workspace_backend: null,
     permission_mode: null,
     effective_permission_mode: 'ask-writes',
+    web_access: null,
+    effective_web_access: 'search',
     home_path: '/tmp/allibot-home/agents/agent-1',
     status: 'online',
     offline_reason: null,
@@ -112,6 +114,8 @@ function workspace(overrides: Partial<WorkspaceView> = {}): WorkspaceView {
         team: { leader_member_id: null, status: 'valid', reason: null },
     workspace: { root: null, backend: 'local', allow_local_shell: 0 },
         permission_mode: 'ask-writes',
+        web_access: null,
+        docker_egress: 0,
         response_budget_limit: 3,
         archived_at: null,
         deleted_at: null,
@@ -178,6 +182,8 @@ const REMOTE_DATA_FLOW: RemoteDataFlowReadView = {
   ],
   mcp_consents: [],
   docker_consents: [],
+  web_consents: [],
+  web_providers: [],
 };
 
 test('the Agent detail renders the three tabs in the fixed order', () => {

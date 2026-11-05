@@ -53,11 +53,26 @@ function countRows(dataDir: string, table: string): number {
   );
 }
 
-/** The schema must never carry a model credential column or table. */
+/**
+ * The model key never enters the database (M1 D1.10). ADR 0010 narrows that
+ * rule to exactly one exception — the web provider credential table added at
+ * v24 — so this guard lets that table through only in its declared shape and
+ * keeps every other table / column free of a secret-looking name.
+ */
+const WEB_PROVIDER_CREDENTIAL_TABLE = 'web_provider_credential';
+
 function assertNoCredentialSchema(dataDir: string): void {
   const secretColumn = /(api_?key|apikey|secret|password|credential|bearer)/i;
   const secretTable = /(api_?key|apikey|secret|password|credential|bearer)/i;
   for (const table of tableNames(dataDir)) {
+    if (table === WEB_PROVIDER_CREDENTIAL_TABLE) {
+      assert.deepEqual(
+        columnNames(dataDir, table),
+        ['provider', 'api_key', 'is_default', 'created_at', 'updated_at'],
+        'the one credential table holds exactly the ADR 0010 shape',
+      );
+      continue;
+    }
     assert.doesNotMatch(table, secretTable, `unexpected credential table: ${table}`);
     for (const column of columnNames(dataDir, table)) {
       assert.doesNotMatch(column, secretColumn, `unexpected credential column: ${table}.${column}`);
@@ -219,15 +234,20 @@ test('remote_consent_scope records only the scope and when it was confirmed, onc
       db.prepare(
         "INSERT INTO remote_consent_scope (scope_kind, scope_id, confirmed_at) VALUES ('docker', 'node:22', ?)",
       ).run('2026-01-01T00:00:00.000Z');
+      // v25 widened the vocabulary once more: a web provider is a remote data
+      // flow, and the row below is the shape #68 / #69 will write.
+      db.prepare(
+        "INSERT INTO remote_consent_scope (scope_kind, scope_id, confirmed_at) VALUES ('web', 'brave', ?)",
+      ).run('2026-01-01T00:00:00.000Z');
       assert.throws(
         () =>
           db
             .prepare(
-              "INSERT INTO remote_consent_scope (scope_kind, scope_id, confirmed_at) VALUES ('web', 'x', ?)",
+              "INSERT INTO remote_consent_scope (scope_kind, scope_id, confirmed_at) VALUES ('skill', 'x', ?)",
             )
             .run('2026-01-01T00:00:00.000Z'),
         /CHECK constraint failed/,
-        'the consent vocabulary is exactly model / mcp / docker',
+        'the consent vocabulary is exactly model / mcp / docker / web',
       );
     } finally {
       db.close();

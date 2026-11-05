@@ -5,13 +5,21 @@ import {
   type AgentView,
   type OwnerView,
   type PermissionMode,
+  type WebAccessTier,
   type WorkspaceBackend,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ensureAgentHome } from './agent-home.js';
 import { ApiFailure } from './api-error.js';
 import { publishMemberStatus, publishWorkspaceChanged } from './events.js';
-import { DEFAULT_PERMISSION_MODE, isPermissionMode, requirePermissionMode } from './permissions.js';
+import {
+  DEFAULT_PERMISSION_MODE,
+  isPermissionMode,
+  isWebAccessTier,
+  optionalWebAccessTier,
+  requirePermissionMode,
+  resolveWebAccessTier,
+} from './permissions.js';
 import { credentialStatus, parseModelIdentifier } from './providers.js';
 import type { InFlightRounds } from './rounds.js';
 import { readStatusPoint } from './status.js';
@@ -80,6 +88,7 @@ interface AgentRow {
   auto_claim: number;
   workspace_backend: string | null;
   permission_mode: string | null;
+  web_access: string | null;
 }
 
 const AGENT_SELECT = `
@@ -97,7 +106,8 @@ SELECT m.id,
        c.max_iterations,
        c.auto_claim,
        c.workspace_backend,
-       c.permission_mode
+       c.permission_mode,
+       c.web_access
 FROM member m
 JOIN agent_config c ON c.member_id = m.id
 WHERE m.kind = 'agent'`;
@@ -200,7 +210,7 @@ export function updateAgent(
       `UPDATE agent_config
           SET role = ?, model = ?, system_prompt = ?, enabled = ?, context_window = ?,
               compression_threshold = ?, max_iterations = ?, auto_claim = ?,
-              workspace_backend = ?, permission_mode = ?
+              workspace_backend = ?, permission_mode = ?, web_access = ?
         WHERE member_id = ?`,
     ).run(
       patch.role ?? current.role,
@@ -215,6 +225,7 @@ export function updateAgent(
         ? patch.workspaceBackend
         : current.workspace_backend,
       patch.permissionMode !== undefined ? patch.permissionMode : current.permission_mode,
+      patch.webAccess !== undefined ? patch.webAccess : current.web_access,
       id,
     );
     if (patch.displayName !== undefined) {
@@ -290,6 +301,8 @@ interface PatchInput {
   autoClaim?: number;
   workspaceBackend?: WorkspaceBackend | null;
   permissionMode?: PermissionMode | null;
+  /** `null` clears the override (follow the channel); a string must be a tier. */
+  webAccess?: WebAccessTier | null;
 }
 
 const FIELD_KEYS = {
@@ -304,6 +317,7 @@ const FIELD_KEYS = {
   auto_claim: 'autoClaim',
   workspace_backend: 'workspaceBackend',
   permission_mode: 'permissionMode',
+  web_access: 'webAccess',
 } as const;
 
 type FieldKey = keyof typeof FIELD_KEYS;
@@ -372,6 +386,9 @@ function parsePatchInput(body: unknown): PatchInput {
   }
   if (record['permission_mode'] !== undefined) {
     patch.permissionMode = optionalPermissionMode(record['permission_mode']);
+  }
+  if (record['web_access'] !== undefined) {
+    patch.webAccess = optionalWebAccessTier(record['web_access']);
   }
   return patch;
 }
@@ -533,6 +550,7 @@ function toAgentView(
   env: NodeJS.ProcessEnv,
   inFlight: InFlightRounds,
 ): AgentView {
+  const webAccess = isWebAccessTier(row.web_access) ? row.web_access : null;
   return {
     ...readStatusPoint(db, row, env, inFlight),
     id: row.id,
@@ -559,6 +577,10 @@ function toAgentView(
     effective_permission_mode: isPermissionMode(row.permission_mode)
       ? row.permission_mode
       : DEFAULT_PERMISSION_MODE,
+    web_access: webAccess,
+    // An Agent reading has no channel dimension: this is the DM chain (Agent
+    // level, then the default), so it passes no channel value at all.
+    effective_web_access: resolveWebAccessTier(webAccess, null),
     // 家目录路径由 member_id 派生，不落库 (#43 / D5.2).
     home_path: agentHomeRoot(row.id, env),
   };

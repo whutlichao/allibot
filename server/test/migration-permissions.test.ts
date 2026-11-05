@@ -141,7 +141,7 @@ function seedV18(dataDir: string): void {
   }
 }
 
-test('a v18 data directory migrates to 21 with modes, rules and approvals; rows and backup survive', async () => {
+test('a v18 data directory migrates to 25 with modes, rules and approvals; rows and backup survive', async () => {
   const tmp = await makeTempDir('allibot-migration-permissions-');
   const dataDir = path.join(tmp, 'data');
   const snapshot = path.join(tmp, 'snapshot');
@@ -152,7 +152,7 @@ test('a v18 data directory migrates to 21 with modes, rules and approvals; rows 
 
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
-    assert.equal(readSchemaVersion(dataDir), 21);
+    assert.equal(readSchemaVersion(dataDir), 25);
 
     // One sibling backup, byte-identical to the pre-migration snapshot.
     const backups = readdirSync(tmp).filter((entry) => entry.startsWith('data.backup-'));
@@ -163,10 +163,10 @@ test('a v18 data directory migrates to 21 with modes, rules and approvals; rows 
     assert.equal(diff.status, 0, `the backup equals the pre-migration snapshot: ${diff.stdout}`);
 
     // One ledger line for this run, from the fixture baseline all the way to
-    // 21 (the fixture's own baseline build recorded its from-null line first).
+    // 25 (the fixture's own baseline build recorded its from-null line first).
     const ledger = readLedger(dataDir);
-    const lines = ledger.filter((line) => line['to'] === 21);
-    assert.equal(lines.length, 1, `one from=18/to=21 line; ledger: ${JSON.stringify(ledger)}`);
+    const lines = ledger.filter((line) => line['to'] === 25);
+    assert.equal(lines.length, 1, `one from=18/to=25 line; ledger: ${JSON.stringify(ledger)}`);
     assert.equal(lines[0]!['from'], 18);
     assert.equal(lines[0]!['result'], 'ok');
     assert.equal(typeof lines[0]!['backup_path'], 'string');
@@ -444,18 +444,18 @@ test('a v18 data directory migrates to 21 with modes, rules and approvals; rows 
   }
 });
 
-test('an empty data directory migrates straight to 21 with no backup', async () => {
+test('an empty data directory migrates straight to 25 with no backup', async () => {
   const tmp = await makeTempDir('allibot-migration-permissions-empty-');
   const dataDir = path.join(tmp, 'data');
   try {
     const result = runCli(['--migrate', '--data-dir', dataDir]);
     assert.equal(result.exitCode, 0, `migrate should exit 0; output: ${result.output}`);
-    assert.match(result.output, /Schema 版本 21/);
-    assert.equal(readSchemaVersion(dataDir), 21);
+    assert.match(result.output, /Schema 版本 25/);
+    assert.equal(readSchemaVersion(dataDir), 25);
     const ledger = readLedger(dataDir);
     assert.equal(ledger.length, 1);
     assert.equal(ledger[0]!['from'], null);
-    assert.equal(ledger[0]!['to'], 21);
+    assert.equal(ledger[0]!['to'], 25);
     assert.equal(ledger[0]!['result'], 'ok');
     assert.equal(ledger[0]!['backup_path'], null);
     assert.equal(foreignKeyViolations(dataDir).length, 0);

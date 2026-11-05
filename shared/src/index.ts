@@ -112,6 +112,17 @@ export interface AgentView extends StatusPointView {
    */
   effective_permission_mode: PermissionMode;
   /**
+   * The raw Agent-level 联网档 override (D1). `null` means follow the channel;
+   * a DM has no channel, so only the Agent level and the default apply there.
+   */
+  web_access: WebAccessTier | null;
+  /**
+   * The tier this Agent resolves to without a channel context: its override or
+   * the `search` default. It is the DM's tier by construction, and it is never
+   * merged with any channel value — a channel reading carries its own row.
+   */
+  effective_web_access: WebAccessTier;
+  /**
    * The Agent home path, derived from `member_id` and the process-level global
    * layer root (D5.2). It is read-only: no database column stores it, so a
    * restart with the same home root returns the same value.
@@ -166,12 +177,39 @@ export interface RemoteDataFlowView {
 }
 
 /**
- * The three remote data-flow consent kinds (#47 / v21). `model` is M1's
- * provider consent; `mcp` confirms one remote MCP server by name; `docker`
- * confirms one image reference before a pull. All three store only the scope
- * and when it was confirmed — never a URL, command, env value or credential.
+ * The five credential providers of 联网 provider 凭据 (D6 / ADR 0010). The order
+ * is also the third step of the resolution order: `brave` → `tavily` →
+ * `perplexity` → `jina` → `exa`. A sixth name is not a provider.
  */
-export const REMOTE_CONSENT_SCOPE_KINDS = ['model', 'mcp', 'docker'] as const;
+export const WEB_PROVIDERS = ['brave', 'tavily', 'perplexity', 'jina', 'exa'] as const;
+export type WebProvider = (typeof WEB_PROVIDERS)[number];
+
+/**
+ * One web provider as the human face reads it. ADR 0010 draws the boundary
+ * here: the reading carries the mask, the status and the default flag, never
+ * the credential value.
+ */
+export interface WebProviderCredentialView {
+  provider: WebProvider;
+  /** The environment variable that is only the fallback once a row is stored. */
+  credential_env: string;
+  credential_status: CredentialStatus;
+  /** The stored key in `sk-…abcd` form, or null when no row is stored. */
+  api_key_mask: string | null;
+  is_default: 0 | 1;
+  /** Where a call would go: the endpoint override or the provider default. */
+  receiver: string;
+  confirmed_at: string | null;
+}
+
+/**
+ * The four remote data-flow consent kinds (#47 / v21, widened by M3 v25).
+ * `model` is M1's provider consent; `mcp` confirms one remote MCP server by
+ * name; `docker` confirms one image reference before a pull; `web` confirms one
+ * 联网 provider by name. All four store only the scope and when it was
+ * confirmed — never a URL, command, env value or credential.
+ */
+export const REMOTE_CONSENT_SCOPE_KINDS = ['model', 'mcp', 'docker', 'web'] as const;
 export type RemoteConsentScopeKind = (typeof REMOTE_CONSENT_SCOPE_KINDS)[number];
 
 /** One consent row as the human face reads it: scope and time only. */
@@ -190,6 +228,10 @@ export interface RemoteDataFlowReadView {
   mcp_consents: RemoteConsentScopeView[];
   /** Confirmed Docker image references (reference + time only; D5.3). */
   docker_consents: RemoteConsentScopeView[];
+  /** Confirmed 联网 providers (provider name + time only; D11). */
+  web_consents: RemoteConsentScopeView[];
+  /** The five 联网 providers, masked and in the fixed order (ADR 0010). */
+  web_providers: WebProviderCredentialView[];
 }
 
 /**
@@ -445,6 +487,16 @@ export interface PermissionReading {
   permission_mode_override: PermissionMode | null;
 }
 
+/**
+ * The three web-access tiers of 联网档 (D1): `off` assembles no web tool at
+ * all, `search` assembles only `web_search`, `search+fetch` adds `fetch`. The
+ * stored column is nullable — `NULL` means unconfigured on a channel and
+ * follow-the-channel on an Agent — and an unconfigured read falls back to
+ * `search`, so the default is not a fourth stored value.
+ */
+export const WEB_ACCESS_TIERS = ['off', 'search', 'search+fetch'] as const;
+export type WebAccessTier = (typeof WEB_ACCESS_TIERS)[number];
+
 /** One tool call inside an approval request (arguments already masked). */
 export interface ApprovalToolCallView {
   tool_call_id: string;
@@ -525,6 +577,11 @@ export interface ChannelConfigPatch {
   allow_local_shell?: 0 | 1;
   /** The channel's permission default; it has no override (rules do). */
   permission_mode?: PermissionMode;
+  /**
+   * The channel's 联网档; `null` is the explicit "unconfigured" value the read
+   * path falls back from, so it is a write, not an omission.
+   */
+  web_access?: WebAccessTier | null;
 }
 
 /**
@@ -545,6 +602,18 @@ export interface ChannelView {
    * unless the Agent carries an override.
    */
   permission_mode: PermissionMode;
+  /**
+   * The raw channel 联网档 (D1). This face republishes the stored value, so
+   * `null` reads as `null`; the `search` fallback happens in
+   * `resolveWebAccessTier`, where an Agent override and a channel value meet.
+   */
+  web_access: WebAccessTier | null;
+  /**
+   * The channel's container-egress switch (D1). `0` keeps a Docker workspace
+   * container at `--network none`; the host allowlist is T5's business, so this
+   * face reports the stored switch only.
+   */
+  docker_egress: 0 | 1;
   response_budget_limit: number;
   archived_at: string | null;
   deleted_at: string | null;

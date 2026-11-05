@@ -193,6 +193,7 @@ function command(method) {
     const name = optionValue('--name') ?? `fake-${state.seq + 1}`;
     const labels = {};
     const mounts = [];
+    let network = null;
     let index = 1;
     while (index < argv.length) {
       const token = argv[index];
@@ -209,6 +210,11 @@ function command(method) {
       }
       if (token === '--mount') {
         mounts.push(parseMount(argv[index + 1]));
+        index += 2;
+        continue;
+      }
+      if (token === '--network') {
+        network = argv[index + 1];
         index += 2;
         continue;
       }
@@ -229,6 +235,7 @@ function command(method) {
       image,
       labels,
       mounts,
+      network,
       command: commandRest,
       result: state.create,
     });

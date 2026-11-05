@@ -74,6 +74,8 @@ function agent(overrides: Partial<AgentView> = {}): AgentView {
     workspace_backend: 'docker',
     permission_mode: 'read-only',
     effective_permission_mode: 'read-only',
+    web_access: null,
+    effective_web_access: 'search',
     home_path: '/tmp/allibot-home/agents/agent-m2-1',
     status: 'online',
     offline_reason: null,
@@ -320,33 +322,44 @@ test('the string catalog delivers zh-CN only: en-US is reserved, with no orphan 
   }
 });
 
-test('T12 is absent and the deployment note still says container network isolation is not delivered', async () => {
-  const roots = [
-    new URL('../../server/src/', import.meta.url),
-    new URL('../../web/src/', import.meta.url),
-    new URL('../../shared/src/', import.meta.url),
-  ];
-  for (const root of roots) {
-    for (const file of await sourceFiles(root)) {
-      const source = await readSource(file);
-      const name = file.pathname.slice(file.pathname.lastIndexOf('/') + 1);
-      for (const forbidden of [
-        'web_access',
-        'web_provider_credential',
-        'docker_egress',
-        'web_search',
-        'web_fetch',
-        "'--network'",
-        'container_egress',
-      ]) {
-        assert.equal(source.includes(forbidden), false, `${name} still carries T12 token ${forbidden}`);
-      }
-    }
-  }
+test('M3 ships the web-access vocabulary while ADR 0006 keeps its M2 wording', async () => {
+  // v22 / v23: the channel tier, the container egress switch and the Agent
+  // override are schema columns, so the vocabulary is in the migrations, not
+  // in a feature flag outside the database.
+  const db = await readSource(new URL('../../server/src/db.ts', import.meta.url));
+  assert.match(db, /ALTER TABLE channel ADD COLUMN web_access TEXT/);
+  assert.match(db, /ALTER TABLE channel ADD COLUMN docker_egress INTEGER NOT NULL DEFAULT 0/);
+  assert.match(db, /ALTER TABLE agent_config ADD COLUMN web_access TEXT/);
+  // v24: the one plaintext-credential table (ADR 0010).
+  assert.match(db, /CREATE TABLE web_provider_credential \(/);
+
+  // The channel read / patch seam carries both fields by their column names.
+  const channels = await readSource(new URL('../../server/src/channels.ts', import.meta.url));
+  assert.match(channels, /^  web_access: 'webAccess',$/m);
+  assert.match(channels, /^  docker_egress: 'dockerEgress',$/m);
+
+  // Both 联网 tools exist in the round tool set under their model-visible names.
+  const toolSpecs = await readSource(new URL('../../server/src/tool-specs.ts', import.meta.url));
+  assert.match(toolSpecs, /^  name: 'web_search',$/m);
+  assert.match(toolSpecs, /^  name: 'fetch',$/m);
+
+  // A container starts with no network unless the channel turns egress on.
+  const dockerRuntime = await readSource(
+    new URL('../../server/src/docker-runtime.ts', import.meta.url),
+  );
+  assert.match(dockerRuntime, /args\.push\('--network', 'none'\)/);
+
+  // ADR 0006 is a historical decision record and keeps its M2 wording: M2 left
+  // container egress to T12. The M3 truth (the two-state container network) is
+  // stated in the deployment note, not in the frozen ADR.
   const adr = await readFile(
     new URL('../../docs/adr/0006-docker-workspace-backend.md', import.meta.url),
     'utf8',
   );
   assert.match(adr, /网络隔离尚未交付/);
   assert.match(adr, /T12/);
+  const deployment = await readFile(new URL('../../docs/deployment.md', import.meta.url), 'utf8');
+  assert.match(deployment, /M3 交付了容器网络的两态/);
+  assert.match(deployment, /--network none/);
+  assert.match(deployment, /docker_egress/);
 });

@@ -1,5 +1,6 @@
 import {
   AGENT_PROVIDERS,
+  WEB_PROVIDERS,
   type AgentProvider,
   type CredentialStatus,
   type RemoteConsentScopeKind,
@@ -11,6 +12,7 @@ import {
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
 import { tFromDb } from './copy.js';
+import { webProviderCredentialViews } from './web-providers.js';
 
 /**
  * 模型 provider 的完整口径（D1.10 / D4）：`provider:model` 解析、缺凭证时读哪个
@@ -110,8 +112,13 @@ export function maskSecret(text: string, secret: string): string {
   return secret.length === 0 ? text : text.split(secret).join(maskKey(secret));
 }
 
-/** The human-face form of a credential: a head, an ellipsis and a tail. */
-function maskKey(secret: string): string {
+/**
+ * The human-face form of a credential: a head, an ellipsis and a tail. This is
+ * the one mask formatter — `maskSecret` uses it inside arbitrary text, and a
+ * reading that shows a key's own mask (a web provider credential row) calls it
+ * directly, so the two can never disagree about what a masked key looks like.
+ */
+export function maskKey(secret: string): string {
   return secret.length <= 8 ? '…' : `${secret.slice(0, 3)}…${secret.slice(-4)}`;
 }
 
@@ -185,7 +192,7 @@ export function confirmProviderConsent(
 
 /**
  * 通用一次性确认 (#47 / D2.3): the same `remote_consent_scope` row M1's model
- * entry writes, for the three remote data-flow kinds. Repeating the same scope
+ * entry writes, for the four remote data-flow kinds. Repeating the same scope
  * is the same fact and keeps the first time. Only the scope and the instant
  * are stored — never a URL, command, env value or credential.
  */
@@ -230,8 +237,13 @@ export function parseConsentScope(body: unknown): {
     throw ApiFailure.validation(`未知字段：${unknown}`, { field: unknown });
   }
   const scopeKind = record['scope_kind'];
-  if (scopeKind !== 'model' && scopeKind !== 'mcp' && scopeKind !== 'docker') {
-    throw ApiFailure.validation('scope_kind 必须是 model / mcp / docker', {
+  if (
+    scopeKind !== 'model' &&
+    scopeKind !== 'mcp' &&
+    scopeKind !== 'docker' &&
+    scopeKind !== 'web'
+  ) {
+    throw ApiFailure.validation('scope_kind 必须是 model / mcp / docker / web', {
       field: 'scope_kind',
     });
   }
@@ -243,6 +255,14 @@ export function parseConsentScope(body: unknown): {
     throw ApiFailure.validation('model 的 scope_id 必须是 anthropic / openai', {
       field: 'scope_id',
     });
+  }
+  // A web row names one of the five 联网 providers (D11), the same fixed
+  // vocabulary the credential table's CHECK carries.
+  if (scopeKind === 'web' && !(WEB_PROVIDERS as readonly string[]).includes(scopeId)) {
+    throw ApiFailure.validation(
+      `web 的 scope_id 必须是 ${WEB_PROVIDERS.join(' / ')}`,
+      { field: 'scope_id' },
+    );
   }
   return { scopeKind, scopeId };
 }
@@ -304,5 +324,7 @@ export function remoteDataFlowView(
     providers,
     mcp_consents: readConsentScopes(db, 'mcp'),
     docker_consents: readConsentScopes(db, 'docker'),
+    web_consents: readConsentScopes(db, 'web'),
+    web_providers: webProviderCredentialViews(db, env),
   };
 }
