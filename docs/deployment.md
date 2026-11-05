@@ -1,7 +1,8 @@
-# allibot M2 部署说明（部署事实，不是完整沙箱承诺）
+# allibot 部署说明（部署事实，不是完整沙箱承诺）
 
-本文只陈述 M2 实际交付的部署边界。M2 可以在 **local** 或 **Docker** 工作区后端上运行；
-它不是完整沙箱，容器网络隔离尚未交付。
+本文只陈述已经交付的部署边界：M2 的工作区后端与工具面，以及 M3 的联网三件套（联网档、联网
+provider 凭据、容器出网）。它可以在 **local** 或 **Docker** 工作区后端上运行；它不是完整沙箱，
+容器网络只有「默认无网 / 显式白名单」两态，按 host 的判定在联网工具层而不是网络层。
 
 ## 本地开发
 
@@ -58,9 +59,10 @@ allibot_API_ORIGIN=http://127.0.0.1:3010 npm run dev:web
   项目根挂到 `/workspace`（rw），成员家目录挂到 `/agent-home`（ro），全局技能挂到 `/skills`
   （ro），数据目录**不**挂载。容器不持久、不跨 target 共享、不跨进程复用。
 
-Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力：web 访问模式、web provider
-凭据、容器出网策略、`--network` 默认值、host allowlist。部署者不能把 M2 容器当作完整沙箱，
-也不能假设容器默认不能访问网络。
+Docker 是容器隔离，不是网络隔离。M3 交付了容器网络的两态：缺省 `--network none`，或按频道的
+`docker_egress` 与 host 白名单接入 Docker 默认网络（见「容器出网」）。但那份 host 白名单由联网
+工具层执行，不是容器的网络策略：容器一旦接上默认网络，容器内进程并不被它逐 host 拦住。部署者
+既不能把容器当作完整沙箱，也不能把「默认无网」读成「容器被限制在几个 host 上」。
 
 ## Docker 前置条件与一次性确认
 
@@ -240,7 +242,9 @@ shell + 逐次审批 + 项目根工作目录，没有沙箱；MCP 工具只在 `
 ### 仍不提供的能力
 
 - AG-UI 不发工具调用事件（没有 `TOOL_CALL_*`），前端看不到轮内工具进度。
-- 工具调用不入库：没有审计面，也没有新表 / 新列，`SCHEMA_VERSION` 仍为 21，本批无迁移步骤。
+- 工具调用不入库：没有审计面，也没有工具调用表；M3 的 v22–v25 迁移只加两个联网档列、容器出网
+  开关、凭据表与 `('web', …)` 的告知范围，与工具调用无关。当前 `SCHEMA_VERSION` 是 25，部署时
+  跑一次 `npm run migrate`。
 - 无 deferred / 异步收口：一轮在同一个 HTTP 请求内跑完，默认最坏情况是 10 批工具执行、11 次
   模型调用 × 单次 60 秒超时，需要审批时再叠加 600 秒批次等待。**这个上界只在每条 `Bash`
   命令都会自己退出时成立**——命令执行没有超时（见下一条），一条不退出的命令会让这个请求
@@ -251,20 +255,164 @@ shell + 逐次审批 + 项目根工作目录，没有沙箱；MCP 工具只在 `
   （等满收口 `failed`），不含命令执行本身；补上它要改接缝与错误码，属后续票。
 - 无 token 级流式：文本仍一次性返回，AG-UI 的 `TEXT_MESSAGE_CONTENT` 语义不变。
 - 无每 Agent 工具白名单：模型可见工具仍只由轮次可用集（项目根 / Plan face / 频道的
-  `allow_local_shell` 与工作区后端）决定，`permission_rule` 只判定调用是否放行，不是可见性
-  过滤器；也没有新的配置面。
+  `allow_local_shell` 与工作区后端；M3 又加了联网档与 provider 解析，见「联网能力」）决定，
+  `permission_rule` 只判定调用是否放行，不是可见性过滤器；也没有按 Agent 逐工具勾选的配置面。
 - 无本机 provider 通道：仍只有 `anthropic` 与 `openai` 两条线（M1 D1.10 的延后项不随本批
   引入）。
 
 这是部署时必须向使用者说明的边界，不是配置开关。
+
+## 联网能力（M3）：三个开关各管一件事
+
+M3 交付了三件正本，`SCHEMA_VERSION` 因此到 25（迁移步骤 v22–v25）：
+
+- **联网档**：`channel.web_access` 与 `agent_config.web_access`——本轮装配哪些联网工具；
+- **联网 provider 凭据**：`web_provider_credential`——`web_search` 用哪家 provider；
+- **容器出网**：`channel.docker_egress`——Docker 后端的容器接不接网络。
+
+三者互不代替：档位开了不等于有 provider，有 provider 不等于容器能出网，容器能出网也不放宽工具
+判定。`web_search` 与 `fetch` 都作为工具面进上文的轮内工具循环，走同一道闸门（ADR-0007）与同一
+套回灌截断，没有第二套判定路径。
+
+### 联网档：四档，与有效档位怎么算
+
+档位只决定**装配哪些工具**：
+
+- `off`：本轮**不装配任何联网工具**。它不是「装配了再全部拒绝」——模型根本看不到这两个名字，
+  所以 `off` 不是模型能绕过的过滤器。
+- `search`：只有 `web_search`。
+- `search+fetch`：`web_search` 与 `fetch`。
+- 未配置（`NULL`）：回退默认档 `search`。缺省就是「有 provider 就能搜」，关闭必须显式写 `off`。
+
+有效档位的解析顺序：Agent 覆盖（`agent_config.web_access` 非 NULL）→ 频道值（`channel.web_access`
+非 NULL）→ 默认档 `search`。私聊（DM）没有频道，所以 DM 的有效档位是「Agent 覆盖 + 默认档」；DM
+的 `fetch` 永不装配（即使 Agent 覆盖写的是 `search+fetch`），闸门对 DM 的 `fetch` 也直接拒绝
+（reason `read-only-tool`）——这是 DM 自己的硬边界，不是把 DM 的权限档改成 `read-only`（DM 的
+`permission_mode` 仍按 Agent 覆盖或默认档算）。任务线程跟随所属频道的档位。写面是
+`PATCH /api/channels/{id}` 与 `PATCH /api/agents/{id}` 的 `web_access`：
+前者接受 `'off'` / `'search'` / `'search+fetch'` / `null`（`null` = 未配置），后者同样接受三档与
+`null`（`null` = 清除覆盖、回到跟随频道），三档以外的值一律 400 且不写；这两条 PATCH 的其它字段
+口径不变。
+
+装配之上还有两层约束，两层都要读：
+
+- **`read-only` 权限档下 `fetch` 不进工具集**（模型看不见）。万一模型仍然调用（陈旧装配、按规则
+  直呼），闸门的硬边界直接拒绝：`deny`，reason `read-only-tool`，零 socket。两层都写，是因为
+  装配层管「看不见」，判定层管「看见了也做不了」。
+- **`search+fetch` 下 `fetch` 不逐次审批**：选这一档本身就是那次人类授权（决策 reason 记
+  `web-fetch-tier`）。`permission_rule` 的 `deny` / `ask` 规则仍能收紧它——豁免排在规则合并之后：
+  一条 `fetch` 的 `deny` 仍然拒绝，一条 `ask` 仍然进 600 秒审批批次（批准即取，拒绝是 `denied`
+  工具结果、轮次继续）。
+
+`fetch` 的规则 `pattern` 与审批载荷**只有 host**（`target.hostname`，不含协议、端口、路径与
+query），所以一条带 `?token=…` 的 URL 不可能把 token 写进审批记录。规则按 glob 匹配这个 host
+字符串（空 `pattern` = 该工具的全部调用）。`fetch` 自己是后端进程对目标 URL 的直接 GET：不带
+provider 凭据、也不带任何凭据头（URL 里自带 `user:pass@` 的在闸门之前就被拒），同 host 的重定向
+最多跟 5 跳，跳到另一个 host 时不跟、明确失败。
+
+### 联网 provider 凭据
+
+五家带凭据的 provider：`brave` / `tavily` / `perplexity` / `jina` / `exa`。每家一把 key，存
+`web_provider_credential`（`provider` 主键、`api_key` **明文**、`is_default`、时间戳）；provider
+取值由 CHECK 限定为这五家，至多一行默认（部分唯一索引保证）。这是本仓唯一一处明文入库的密钥，
+由 ADR-0010 显式裁定；模型 provider 密钥仍然只从进程环境读、不写库。不做加解密，也不把它
+扩成通用 secret store。
+
+解析顺序唯一，逐级往下：
+
+1. 进程环境 `allibot_WEB_SEARCH_PROVIDER` 点名的 provider；
+2. 凭据表里的默认项（`is_default = 1`，至多一行）；
+3. 已有凭据的 provider，按固定顺序 `brave` → `tavily` → `perplexity` → `jina` → `exa`；
+4. 免凭据回退：该 Agent 的 `mcp.json` 里 server 名**恰为** `exa`、本轮已连上、且工具列表里有一个
+   名字带 `search` 的工具（取第一个命中），经既有 MCP 面调用 `mcp:exa/<tool>`。名字近似
+   （`exa-search`、`my-exa`）不算；它走既有的 `('mcp', server)` 确认，不需要 `('web','exa')` 行。
+
+一个 provider 可用 = 它有凭据 **且** 有那一行 `('web', provider)` 的一次性远端数据流确认。未确认
+的 provider 不可用，不会被静默跳过当成能用；某一步点名的 provider 缺凭据时往下走一步（名字是
+偏好，不是硬失败）。
+
+凭据值的优先级是**库内值优先、环境变量兜底**：同一 provider 两边都有时用库内值，所以 UI 里换 key
+立即生效、不用重启进程（解析在每次调用时做，凭据值不被缓存）。环境变量只是兜底来源，不是
+正本：
+
+- `allibot_WEB_<PROVIDER>_API_KEY`（`BRAVE` / `TAVILY` / `PERPLEXITY` / `JINA` / `EXA`）：兜底的凭据；
+- `allibot_WEB_<PROVIDER>_BASE_URL`：该 provider 的端点覆盖，未设置时用默认端点。它存在的理由是
+  让测试把请求指向进程内的假 provider，生产不用它换家运行。
+
+人类面读数（`GET /api/remote-data-flow` 的 `web_providers` / `web_consents` 等）只回掩码（形如
+`sk-…abcd`）与「有没有凭据」；完整 key 不进 HTTP 响应、不进 SSE 帧、不进日志、不进轮次 reason、
+不进审批载荷。写面是两条：`PUT /api/web-providers/{provider}/credential`（保存 key 的同时写那行
+确认，一次调用两个事实）与 `POST /api/web-providers/{provider}/consent`（不换 key 也能补确认，
+重复调用保留首次时间）。只接受这五家，第六家是 400。
+
+**解析不出可用 provider 时，不静默降级成 `off`，也不把配置错误伪装成工具结果。** 有效档位不是
+`off`、但上面四步都拿不到可用 provider 时：
+
+- **装配层不把 `web_search` 交给模型**（不挂一个只会失败的工具）；`search+fetch` 下 `fetch`
+  照旧装配——它不需要 provider。
+- 模型仍然调用它（陈旧装配、按规则直呼）时，本轮在**调用点**失败：`failed` + 可读 reason，点名
+  缺什么，例如「联网搜索不可用：provider brave 没有凭据（设置 `allibot_WEB_BRAVE_API_KEY` 或为
+  该 provider 保存 key）」；零出网 socket。
+
+收口挂在调用点而不是轮次开头，因为默认档就是 `search`：迁移上来的数据目录一个 provider 都没有，
+若在轮次开头收口，每一次与联网无关的轮次都会失败。`fetch` 不受这条影响：它不需要 provider，是
+一次直接的 host GET，缺凭据与缺确认都不挡住它（它只受档位、`read-only` 与 `permission_rule` 的
+约束）。
+
+### 容器出网
+
+只有两态，没有第三种：
+
+- **默认无网**：`docker_egress = 0`（缺省）→ 容器创建时带 `--network none`。
+- **显式白名单**：`docker_egress = 1` 且该频道至少有一条带**显式 host** 的 `fetch` `allow` 规则
+  → 容器接上 Docker 的默认网络（create 参数里没有 `--network none`）。
+
+白名单就是那些显式 host 的集合，来源是同一批 `permission_rule` 行（`tool_name = 'fetch'`、
+`behavior = 'allow'`、scope 是该频道），没有第二张 host 表。以下都不算显式 host，因此不贡献出网：
+空 `pattern`（它只放行工具调用）、带协议 / 路径 / query 的 URL、端口、glob（`*.example.net`）与
+正则；`deny` / `ask` 行也不贡献。所以：
+
+- `docker_egress = 1` 但白名单为空（例如只有一条空 `pattern` 的 `allow`）→ **仍然无网**，不是
+  「全开」。
+- `docker_egress = 0` 时，即使规则里写着显式 host，容器也无网——开关在规则之前。
+
+写面是频道视图：`PATCH /api/channels/{id}` 接受 `docker_egress` 的 `0` / `1`，其它值（`2`、`'1'`、
+`null`、`true`）一律 400 且不写；读数随频道读数返回，没有 `/api/docker-egress` 这样的第二面。
+Agent 级没有这个字段（与 `allow_local_shell` 同形）。
+
+两点必须如实说明：
+
+- **按 host 的判定不在网络层，在联网工具层。** 容器一旦接上默认网络，容器内进程（容器里的
+  `Bash`、容器内 stdio MCP server）并不被那份 host 白名单拦在网络层：那不是防火墙，也不是通用
+  网络策略。按 host 的允许 / 拒绝发生在 `fetch` 这个工具调用上，而 `fetch` 与 `web_search` 都由
+  后端进程自己发起、不经容器——所以 `fetch` 能不能用由联网档与 `permission_rule` 决定，容器开不
+  开网由 `docker_egress` 决定，两个开关不改写彼此。
+- **网络在容器创建时定死。** 已经跑起来的容器不会因为改 `docker_egress` 或改一条 `fetch` 规则而
+  热改网络；新事实作用于本进程此后创建的下一个容器（改项目根会导致重建，改开关不会立即重建）。
+
+最后是本仓一贯的验证缺口：**真机 Docker daemon 与真实容器网络不在自动化 seam 内**。自动化只断言
+假运行时收到的运行时参数（create 的 argv 里有没有 `--network none`、白名单是哪些 host），真实容器
+里能不能出网需要部署者手工冒烟；这与 M2 的既有缺口一致，不能读成「已经证明容器无网」。
 
 ## 备份边界
 
 三种东西分开备份，不能互相替代：
 
 1. **数据目录**：只承载 `allibot.db`、`attachments/`、`schema-migrations.jsonl` 与可丢弃的
-   `mcp-hosts/`。整目录备份只复制这些内容；schema / 技能迁移的整目录备份落在数据目录的同级
-   目录（`<data-dir>.backup-*`），迁移清单也在数据目录之外。
+   `mcp-hosts/`。整目录备份只复制这些内容；schema / 技能迁移的整目录备份落在数据目录的**同级**
+   目录（`<data-dir>.backup-*`，名字里带迁移开始时间戳）；清单本身在数据目录内，
+   `schema-migrations.jsonl` 的每一行记着对应那次备份的路径。
+
+   **数据目录备份从此包含明文密钥。** `web_provider_credential.api_key` 是明文（ADR-0010 的
+   命名例外，见「联网 provider 凭据」），它就在 `allibot.db` 里，所以一份数据目录备份 = 已保存的
+   联网 provider 密钥一份不少地跟着走；迁移前自动建的那份 `<data-dir>.backup-*` 是数据目录的整
+   目录副本，因此与数据目录同体携带同一批密钥，磁盘快照 / 整机备份同理。由此有两条操作要求，
+   不是可选项：
+   - **位置与可读性按密钥对待**：数据目录与每一份 `<data-dir>.backup-*` 都只应放在 owner 与运行
+     后端的账号可读的位置（目录 700、文件 600 由部署层保证，本仓不加密库文件）。把这些副本拷到
+     别处——另一台机器、共享盘、工单附件、聊天窗口——等于把密钥拷到那里。
+   - **不用的副本删掉**：确认迁移后的库可用之后删掉旧的 `<data-dir>.backup-*`，不要长期堆成历史。
+     想收回已落盘的密钥只有删 `web_provider_credential` 的行这一条路，而删完之后旧备份里仍然有。
 2. **项目根**：`workspace_root` 指向的宿主目录（频道 / 任务共用其所属频道的根）。它是工作区
    内容的正本，M2 不把它复制进数据目录，也不把它放进数据目录备份；需要 owner 自行备份。
 3. **Agent 家目录 / 全局层**：`~/.allibot/agents/<member_id>/`（`AGENTS.md`、`skills/`、
@@ -273,8 +421,12 @@ shell + 逐次审批 + 项目根工作目录，没有沙箱；MCP 工具只在 `
 
 ## 密钥与日志
 
-- 模型 provider 密钥、web / 联网凭据、MCP `env_names` 的**值**都不写入 SQLite、日志或 SSE。
-  `mcp.json` 只声明变量名；shell / 工具进程按 allowlist 加这些名字从进程环境取值。
+- 模型 provider 密钥与 MCP `env_names` 的**值**都不写入 SQLite、日志或 SSE。`mcp.json` 只声明
+  变量名；shell / 工具进程按 allowlist 加这些名字从进程环境取值。
+- **唯一的例外是联网 provider 凭据**（ADR-0010）：`web_provider_credential.api_key` 明文入库，
+  所以数据目录备份与 `<data-dir>.backup-*` 都带着它（见「备份边界」）。例外只到这张表这一列
+  为止：读数只回掩码，密钥值不进 SSE 帧、日志、轮次 reason 与审批载荷；provider 回显的片段在落
+  成结果前按 `maskSecret` 掩码。
 - 审批摘要只保留工具名与可读参数；MCP 参数与 Bash 命令中的 token 形值在入库、SSE 与 HTTP
   读数前都会掩码。
 - `mcp_server`、`skill` 行只存元数据与 hash，不存字节或密钥。
