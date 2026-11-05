@@ -6,44 +6,75 @@
  * 它们承诺的 token 名与取值的仓内只读参照实现。token 名按名消费，
  * 改名或删除都会打断下游全部消费点。
  *
+ * 表面层次（Surface Tier）：--bg（画布 / 主区） < --surface（侧栏 / 顶栏）
+ * < --panel（抽屉 / 输入框） < --panel-2（悬停嵌套）。层次只由这四档底色与
+ * 1px --border 表达，不加卡片盒子、不加投影（浮层除外）。
+ *
  * 档位（Tier）：族名沿用旧名，四档按对比度用途分层——
  *   淡底档 = 族名（只做背景提示，不做边界）
- *   填充档 = -fill（族的本色，深墨文字压其上）
- *   文字档 = -deep（同色相压深，≥4.5:1 可作正文）
+ *   填充档 = -fill（族的本色，深底上压 --on-accent 的亮字）
+ *   文字档 = -deep（暗底语义是「提亮」：同色相里最亮的一档，≥4.5:1 可作正文；
+ *                 与亮色主题里「压深」的方向相反，这是本层唯一的语义反转）
  *   图形档 = -graphic（同色相中档，≥3:1 可作焦点环、状态点、边界）
  *
  * 产品角色族（--selected* / --unread* / --warn*）由产品扩展层
- * product-roles.css 声明，不在本文件内。
+ * product-roles.css 声明，不在本文件内。版式与动效 token（--font-* / --r-* /
+ * --ease / --hover / --active / --sidebar / --drawer）追加在本文件末尾，
+ * 与色值 token 同属本层，同样进 token-contract.ts 的清单。
  */
 :root {
   /* 系统面 */
-  --bg: hsl(220 20% 97%);
-  --surface: hsl(0 0% 100%);
-  --panel: hsl(220 16% 95%);
-  --panel-2: hsl(220 14% 92%);
-  --fg: hsl(222 30% 14%);
-  --muted: hsl(220 12% 42%);
-  --faint: hsl(220 10% 62%);
-  --border: hsl(220 14% 88%);
-  --border-strong: hsl(220 14% 76%);
-  --on-accent: hsl(222 30% 14%);
+  --bg: #08090A;
+  --surface: #0F1014;
+  --panel: #16171C;
+  --panel-2: #1E1F25;
+  --fg: #F7F8F8;
+  --muted: #9CA3AF;
+  --faint: #6E7481;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --on-accent: #FFFFFF;
 
-  /* 角色族 accent：蓝相 */
-  --accent: hsl(214 90% 94%);
-  --accent-fill: hsl(214 80% 72%);
-  --accent-deep: hsl(214 80% 32%);
-  --accent-graphic: hsl(214 70% 48%);
+  /* 角色族 accent：蓝相 214 */
+  --accent: hsl(214 80% 16%);
+  --accent-fill: hsl(214 85% 62%);
+  --accent-deep: hsl(214 90% 78%);
+  --accent-graphic: hsl(214 85% 60%);
 
-  /* 状态点：只表达后端事实，不参与头像色位或角色族 */
-  --online: hsl(150 60% 32%);
-  --working: hsl(205 80% 42%);
-  --error: hsl(4 72% 46%);
-  --offline: hsl(220 10% 55%);
+  /* 状态点：只表达后端事实，不参与头像色位或角色族；暗底需提亮才可读 */
+  --online: hsl(150 55% 55%);
+  --working: hsl(205 80% 62%);
+  --error: hsl(4 75% 62%);
+  --offline: hsl(220 8% 52%);
 
-  /* 头像色位：五个确定性色相，只用于识别同一成员 */
-  --av-0: hsl(300 45% 42%);
-  --av-1: hsl(55 75% 30%);
-  --av-2: hsl(185 65% 34%);
-  --av-3: hsl(340 60% 44%);
-  --av-4: hsl(100 40% 36%);
+  /* 头像色位：五个确定性色相，只用于识别同一成员；色相值固定，只调饱和度与明度 */
+  --av-0: hsl(300 45% 62%);
+  --av-1: hsl(55 70% 52%);
+  --av-2: hsl(185 55% 48%);
+  --av-3: hsl(340 60% 62%);
+  --av-4: hsl(100 35% 54%);
+
+  /*
+   * 版式与动效：字体栈的第一位由 fonts.css 的 @font-face 提供；字体没 vendored
+   * 到时栈会自动落到系统字体，取值不需要跟着改。
+   */
+  --font-sans: 'Inter', -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-display: 'Inter Tight', 'Inter', -apple-system, 'PingFang SC', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* 圆角语法：控件 6 / 面板 8 / 容器 10，上限 12，永不做胶囊 */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+
+  /* 动效：hover 150ms ease-out；布局 320ms --ease；无弹性、无发光 */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* 悬停与按下：只有这两档叠色，没有第三套可改值 */
+  --hover: rgba(255, 255, 255, 0.035);
+  --active: rgba(255, 255, 255, 0.06);
+
+  /* 布局尺寸：侧栏与抽屉各一档，窄屏规则改的是列宽策略而不是这两个取值 */
+  --sidebar: 248px;
+  --drawer: 400px;
 }

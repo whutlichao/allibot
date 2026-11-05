@@ -1,7 +1,9 @@
 /*
- * 样式入口：按顺序加载系统 token 层与产品扩展层。
- * token 名是视觉契约，加载顺序即层叠顺序。
+ * 样式入口：按顺序加载本地字体、系统 token 层、产品扩展层与组件样式。
+ * token 名是视觉契约，加载顺序即层叠顺序；字体排在 token 之前，
+ * 否则字体栈的第一位在被消费时还没有 @font-face 可解析。
  */
+@import './fonts.css';
 @import './tokens.css';
 @import './product-roles.css';
 @import './components.css';

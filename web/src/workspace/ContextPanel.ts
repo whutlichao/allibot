@@ -125,7 +125,6 @@ export function ContextPanel({
   return createElement(
     'section',
     { className: 'context-panel', 'aria-label': t(locale, 'workspace.context.title') },
-    createElement('h2', { className: 'context-panel__title' }, t(locale, 'workspace.context.title')),
     context === null
       ? createElement(
           'p',

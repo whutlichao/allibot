@@ -5,23 +5,28 @@
  * 每个角色恰好一个色相；族名沿用旧名，新增档位只使用
  * -fill / -deep / -graphic 后缀（不得使用 -light / -dark 别名）。
  * 四档含义见 tokens.css 头部注释。
+ *
+ * 暗底注意：-deep 档的语义在暗色主题里反转成「提亮」——它是同色相中最亮的一档，
+ * 用来在深底上压正文；-fill 是本色，配 tokens.css 的 --on-accent 亮字；
+ * 族名档只做低饱和提示底，不画边界。四族色相互不相同，且 selected 的谱系
+ * （紫 235）是全站唯一允许的饱和强调色。
  */
 :root {
-  /* 角色族 selected：紫相 */
-  --selected: hsl(262 80% 95%);
-  --selected-fill: hsl(262 65% 74%);
-  --selected-deep: hsl(262 60% 36%);
-  --selected-graphic: hsl(262 55% 52%);
+  /* 角色族 selected：紫相 235（Linear 主紫 #5E6AD2，全站唯一强调色） */
+  --selected: hsl(235 60% 16%);
+  --selected-fill: hsl(235 58% 60%);
+  --selected-deep: hsl(235 90% 84%);
+  --selected-graphic: hsl(235 58% 66%);
 
-  /* 角色族 unread：青相 */
-  --unread: hsl(168 70% 92%);
-  --unread-fill: hsl(168 65% 62%);
-  --unread-deep: hsl(168 72% 24%);
-  --unread-graphic: hsl(168 55% 34%);
+  /* 角色族 unread：青相 168 */
+  --unread: hsl(168 60% 14%);
+  --unread-fill: hsl(168 55% 55%);
+  --unread-deep: hsl(168 70% 76%);
+  --unread-graphic: hsl(168 55% 50%);
 
-  /* 角色族 warn：橙相 */
-  --warn: hsl(32 95% 92%);
-  --warn-fill: hsl(32 90% 68%);
-  --warn-deep: hsl(32 85% 28%);
-  --warn-graphic: hsl(32 80% 42%);
+  /* 角色族 warn：橙相 32 */
+  --warn: hsl(32 55% 11%);
+  --warn-fill: hsl(32 85% 62%);
+  --warn-deep: hsl(32 90% 78%);
+  --warn-graphic: hsl(32 85% 58%);
 }
