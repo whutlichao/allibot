@@ -234,6 +234,20 @@ export function requireWebAccessTier(value: unknown): WebAccessTier {
   return value;
 }
 
+/**
+ * The effective 联网档 of one target context (D1): the Agent override wins when
+ * it is set, then the channel value, then the `search` default. A DM has no
+ * channel, so its caller passes `null` there and the Agent level plus the
+ * default is the whole chain. Pure on purpose: no database access, so the tool
+ * assembly (T4) and the human-face readings resolve the tier the same way.
+ */
+export function resolveWebAccessTier(
+  agentOverride: WebAccessTier | null,
+  channelWebAccess: WebAccessTier | null,
+): WebAccessTier {
+  return agentOverride ?? channelWebAccess ?? DEFAULT_WEB_ACCESS_TIER;
+}
+
 /** A target context's permission facts (D5.5). */
 export interface TargetPermissionContext {
   targetId: string;

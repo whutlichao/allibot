@@ -112,6 +112,17 @@ export interface AgentView extends StatusPointView {
    */
   effective_permission_mode: PermissionMode;
   /**
+   * The raw Agent-level 联网档 override (D1). `null` means follow the channel;
+   * a DM has no channel, so only the Agent level and the default apply there.
+   */
+  web_access: WebAccessTier | null;
+  /**
+   * The tier this Agent resolves to without a channel context: its override or
+   * the `search` default. It is the DM's tier by construction, and it is never
+   * merged with any channel value — a channel reading carries its own row.
+   */
+  effective_web_access: WebAccessTier;
+  /**
    * The Agent home path, derived from `member_id` and the process-level global
    * layer root (D5.2). It is read-only: no database column stores it, so a
    * restart with the same home root returns the same value.

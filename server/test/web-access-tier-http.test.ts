@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
+import { WEB_ACCESS_TIERS, type WebAccessTier } from '@allibot/shared';
+import { resolveWebAccessTier } from '../dist/permissions.js';
 import {
   makeTempDir,
   removeTempDir,
@@ -194,6 +196,133 @@ test('PATCH /api/channels/{id} writes the web-access tier, and an explicit null 
       CHANNEL_BODY.name,
       'a tier write leaves the other columns alone',
     );
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('a web-access value outside the three tiers is 400 validation_failed and writes nothing', async () => {
+  const fixture = await startWebAccessFixture('allibot-web-access-channel-invalid-');
+  try {
+    const channelId = await createChannel(fixture);
+    const stored = await patchJson(fixture, `/api/channels/${channelId}`, { web_access: 'off' });
+    assert.equal(stored.status, 200, await stored.clone().text());
+
+    const rejected: unknown[] = ['all', 7, 'search ', 'SEARCH', '', 'search, fetch'];
+    for (const value of rejected) {
+      const response = await patchJson(fixture, `/api/channels/${channelId}`, {
+        web_access: value,
+      });
+      assert.equal(
+        response.status,
+        400,
+        `web_access ${JSON.stringify(value)} must be refused; body: ${await response
+          .clone()
+          .text()}`,
+      );
+      assert.equal(errorCode(await readJson(response)), 'validation_failed');
+      assert.equal(
+        queryDatabase<{ web_access: string | null }>(
+          fixture.dataDir,
+          'SELECT web_access FROM channel WHERE id = ?',
+          [channelId],
+        )?.web_access,
+        'off',
+        `a refused ${JSON.stringify(value)} leaves the stored tier alone`,
+      );
+      const detail = await readJson(await fetch(`${fixture.base}/api/channels/${channelId}`));
+      assert.equal(detail['web_access'], 'off');
+    }
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('the effective tier is the Agent override, then the channel value, then search', async () => {
+  // The resolution order of D1 as a table: the expected column is the spec's
+  // sentence, not a recomputation of the implementation.
+  const cases: {
+    agent: WebAccessTier | null;
+    channel: WebAccessTier | null;
+    effective: WebAccessTier;
+    why: string;
+  }[] = [
+    { agent: null, channel: 'off', effective: 'off', why: 'an unset Agent follows the channel' },
+    {
+      agent: 'search+fetch',
+      channel: 'off',
+      effective: 'search+fetch',
+      why: 'the Agent override wins over the channel',
+    },
+    { agent: null, channel: null, effective: 'search', why: 'both unset falls back to search' },
+    {
+      agent: 'off',
+      channel: 'search+fetch',
+      effective: 'off',
+      why: 'an Agent can tighten below the channel, not only widen',
+    },
+    {
+      agent: 'search',
+      channel: 'search+fetch',
+      effective: 'search',
+      why: 'the stored override is honored even when it is the middle tier',
+    },
+    {
+      agent: null,
+      channel: 'search+fetch',
+      effective: 'search+fetch',
+      why: 'the channel value is written through untouched',
+    },
+  ];
+  for (const entry of cases) {
+    assert.equal(
+      resolveWebAccessTier(entry.agent, entry.channel),
+      entry.effective,
+      `agent=${String(entry.agent)} channel=${String(entry.channel)}: ${entry.why}`,
+    );
+  }
+
+  assert.deepEqual(
+    [...WEB_ACCESS_TIERS],
+    ['off', 'search', 'search+fetch'],
+    'three stored tiers: the fourth accepted write input is null, not a tier string',
+  );
+
+  // A DM has no channel dimension: the Agent level plus the default is the
+  // whole chain, so an unset DM Agent resolves to search whatever channels say.
+  assert.equal(resolveWebAccessTier(null, null), 'search', 'a DM Agent with no override');
+  assert.equal(resolveWebAccessTier('search+fetch', null), 'search+fetch', 'a DM Agent override');
+});
+
+test('GET /api/agents/{id} reads the override and the effective tier without a channel dimension', async () => {
+  const fixture = await startWebAccessFixture('allibot-web-access-agent-read-');
+  try {
+    // The channel deliberately carries a non-default tier: an Agent reading has
+    // no channel dimension (that is the DM rule), so it must not leak in.
+    const channelId = await createChannel(fixture);
+    const channelPatch = await patchJson(fixture, `/api/channels/${channelId}`, {
+      web_access: 'off',
+    });
+    assert.equal(channelPatch.status, 200, await channelPatch.clone().text());
+
+    const agentId = await createAgent(fixture);
+
+    const detail = await fetch(`${fixture.base}/api/agents/${agentId}`);
+    assert.equal(detail.status, 200);
+    const agent = await readJson(detail);
+    assert.equal(agent['web_access'], null, 'an Agent with no override stores NULL');
+    assert.equal(
+      agent['effective_web_access'],
+      'search',
+      'the Agent level plus the default is the whole chain: the channel tier is absent',
+    );
+
+    const list = await readJson(await fetch(`${fixture.base}/api/agents`));
+    const listed = (list['agents'] as Record<string, unknown>[]).find(
+      (entry) => entry['id'] === agentId,
+    );
+    assert.equal(listed?.['web_access'], null);
+    assert.equal(listed?.['effective_web_access'], 'search');
   } finally {
     await fixture.stop();
   }

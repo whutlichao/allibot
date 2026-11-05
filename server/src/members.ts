@@ -11,7 +11,13 @@ import type Database from 'better-sqlite3';
 import { ensureAgentHome } from './agent-home.js';
 import { ApiFailure } from './api-error.js';
 import { publishMemberStatus, publishWorkspaceChanged } from './events.js';
-import { DEFAULT_PERMISSION_MODE, isPermissionMode, requirePermissionMode } from './permissions.js';
+import {
+  DEFAULT_PERMISSION_MODE,
+  isPermissionMode,
+  isWebAccessTier,
+  requirePermissionMode,
+  resolveWebAccessTier,
+} from './permissions.js';
 import { credentialStatus, parseModelIdentifier } from './providers.js';
 import type { InFlightRounds } from './rounds.js';
 import { readStatusPoint } from './status.js';
@@ -80,6 +86,7 @@ interface AgentRow {
   auto_claim: number;
   workspace_backend: string | null;
   permission_mode: string | null;
+  web_access: string | null;
 }
 
 const AGENT_SELECT = `
@@ -97,7 +104,8 @@ SELECT m.id,
        c.max_iterations,
        c.auto_claim,
        c.workspace_backend,
-       c.permission_mode
+       c.permission_mode,
+       c.web_access
 FROM member m
 JOIN agent_config c ON c.member_id = m.id
 WHERE m.kind = 'agent'`;
@@ -533,6 +541,7 @@ function toAgentView(
   env: NodeJS.ProcessEnv,
   inFlight: InFlightRounds,
 ): AgentView {
+  const webAccess = isWebAccessTier(row.web_access) ? row.web_access : null;
   return {
     ...readStatusPoint(db, row, env, inFlight),
     id: row.id,
@@ -559,6 +568,10 @@ function toAgentView(
     effective_permission_mode: isPermissionMode(row.permission_mode)
       ? row.permission_mode
       : DEFAULT_PERMISSION_MODE,
+    web_access: webAccess,
+    // An Agent reading has no channel dimension: this is the DM chain (Agent
+    // level, then the default), so it passes no channel value at all.
+    effective_web_access: resolveWebAccessTier(webAccess, null),
     // 家目录路径由 member_id 派生，不落库 (#43 / D5.2).
     home_path: agentHomeRoot(row.id, env),
   };
