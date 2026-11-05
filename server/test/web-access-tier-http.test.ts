@@ -481,19 +481,18 @@ test('the two channel columns read back exactly what the row stores', async () =
   try {
     const channelId = await createChannel(fixture);
 
-    // The egress switch has no write face in this ticket (T5 owns it), so the
-    // only way to prove the reading is a column readout rather than a constant
-    // is to seed the row and observe the GET.
-    const db = new Database(path.join(fixture.dataDir, 'allibot.db'));
-    try {
-      db.prepare('UPDATE channel SET web_access = ?, docker_egress = ? WHERE id = ?').run(
-        'search+fetch',
-        1,
-        channelId,
-      );
-    } finally {
-      db.close();
-    }
+    // Both columns have a write face now — `web_access` from this ticket, the
+    // egress switch from the Docker-backend ticket — so the reading is exercised
+    // through the shipped PATCH instead of a SQL seed: what the GET answers has
+    // to be what that one write stored.
+    const written = await patchJson(fixture, `/api/channels/${channelId}`, {
+      web_access: 'search+fetch',
+      docker_egress: 1,
+    });
+    assert.equal(written.status, 200, await written.clone().text());
+    const writtenBody = await readJson(written);
+    assert.equal(writtenBody['web_access'], 'search+fetch');
+    assert.equal(writtenBody['docker_egress'], 1, 'the PATCH returns the new reading');
 
     const detail = await readJson(await fetch(`${fixture.base}/api/channels/${channelId}`));
     assert.equal(detail['web_access'], 'search+fetch');
