@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -1036,8 +1036,43 @@ for (const provider of PROVIDER_ROWS) {
     }
   });
 
-  test(`[${provider.label}] malformed write arguments are tool results and never reach the face`, async () => {
-    const fixture = await startFixture(`allibot-write-edit-shape-${provider.label}-`, provider);
+  test(`[${provider.label}] a write onto an existing directory is an io-error tool result`, async () => {
+    const fixture = await startFixture(`allibot-write-edit-io-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, {
+        prefix: 'project',
+        withRoot: true,
+        permissionMode: 'trusted-writes',
+      });
+      assert.ok(round.project !== null);
+      const directory = path.join(round.project, 'a-directory');
+      mkdirSync(directory);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([
+          { id: 'call-io', name: 'Write', input: { path: 'a-directory', content: 'X' } },
+        ]),
+        provider.text('那个路径是个目录，我换个名字再写'),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@写文件的成员 写到那个目录上');
+
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.id, 'call-io');
+      assert.equal(results[0]?.isError, true, "the face's own failure is an error tool result");
+      assert.ok(
+        (results[0]?.content ?? '').startsWith('[Write] error: io-error'),
+        `the io-error code reaches the model: ${results[0]?.content ?? ''}`,
+      );
+      assert.equal(statSync(directory).isDirectory(), true, 'the directory is untouched');
+      assert.deepEqual(await listApprovals(fixture), [], 'a trusted root write never asks');
+      assert.equal(roundOutcome(fixture).status, 'replied', 'the round continues');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] malformed write arguments are tool results and never reach the face`, async () => {    const fixture = await startFixture(`allibot-write-edit-shape-${provider.label}-`, provider);
     try {
       const round = await openRound(fixture, provider, {
         prefix: 'project',

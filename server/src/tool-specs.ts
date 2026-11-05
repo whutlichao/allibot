@@ -416,7 +416,7 @@ const TEAM_ASSIGN: RoundToolSpec = {
     { name: 'member_id', description: 'The member to assign the work to.', required: true },
     { name: 'instruction', description: 'What that member has to do.', required: true },
   ],
-  available: (input) => input.team?.assign != null,
+  available: (input) => input.team?.assign !== undefined,
   async execute(input, context) {
     const request: TeamAssignRequest = {
       member_id: input['member_id'] as string,
@@ -472,7 +472,8 @@ const SOP_VERDICT: RoundToolSpec = {
   ],
   available: () => true,
   async execute(input) {
-    const verdict = input['verdict'] === 'pass' ? 'pass' : 'fail';
+    // The shape check proved the value is one of the two words (D11).
+    const verdict = input['verdict'] as (typeof SOP_VERDICTS)[number];
     return {
       ok: true,
       content: ['[SopVerdict] ok', `verdict: ${verdict}`].join('\n'),
@@ -556,11 +557,12 @@ function mcpToolSpec(server: string, tool: RoundMcpTool): RoundToolSpec {
 }
 
 /**
- * The MCP specs this round may offer, in `RoundInput.tools`' own order: the
- * servers it actually connected, each followed by the tools that server listed.
- * Every one of them is dynamic — a server contributes only what it answered
- * with this round — so an empty assembly is zero specs and zero tools, never a
- * round error.
+ * The MCP specs this round may offer, in the assembly's own server order (the
+ * same order `RoundInput.tools` lists them in, since both are derived from one
+ * `mcp.servers`): the servers it actually connected, each followed by the tools
+ * that server listed. Every one of them is dynamic — a server contributes only
+ * what it answered with this round — so an empty assembly is zero specs and zero
+ * tools, never a round error.
  */
 function mcpToolSpecs(input: RoundInput): RoundToolSpec[] {
   const mcp = input.mcp;
@@ -598,11 +600,14 @@ const MCP_TOOL_PREFIX = 'mcp:';
 
 /**
  * Whether a tool belongs to this batch's scope by its own class (D2): the `read`
- * class, the `write` class (#74), plus the read-only internal tools, read off
- * the product's one classification (`classifyToolName`). This is a scope filter,
- * not a permission decision: it decides what the round's request offers, and the
- * tool gate still decides every call that reaches a face — which is where an
- * `ask` becomes a 600-second approval batch and a `deny` becomes `DENIED`.
+ * class, the `write` class (#74), the `internal` tools this batch offers —
+ * `BATCH_INTERNAL_TOOLS`: the four Plan tools over the current run and the two
+ * team / task actions, none of them read-only — and, for the `execute` class,
+ * `Bash` plus the whole `mcp:` namespace. Every class is read off the product's
+ * one classification (`classifyToolName`). This is a scope filter, not a
+ * permission decision: it decides what the round's request offers, and the tool
+ * gate still decides every call that reaches a face — which is where an `ask`
+ * becomes a 600-second approval batch and a `deny` becomes `DENIED`.
  */
 function inBatchScope(name: string): boolean {
   const reading = classifyToolName(name);
@@ -620,12 +625,14 @@ function inBatchScope(name: string): boolean {
 }
 
 /**
-/**
  * Whether this round offers the tool (D2). The round's own availability
  * calculation — `RoundInput.tools`, narrowed to the batch's classes — is that
  * list for every tool but one: `SopVerdict` is the verifier round's own channel
- * (D11), and no round lists it in `RoundInput.tools` (the product's tool-name
- * vocabulary is the gate's, and an internal tool never passes the gate).
+ * (D11), and the round lists the SOP channel's role instead of the name
+ * (`RoundInput.sop.role`), because a verifier round's tool set is not the
+ * availability calculation's. The exception is about where the visibility comes
+ * from, not about the name's class: `SopVerdict` is classified `internal` by the
+ * one classification table like every other name this batch added.
  */
 function offeredInRound(spec: RoundToolSpec, input: RoundInput): boolean {
   return spec.name === SOP_VERDICT.name
@@ -655,41 +662,24 @@ export function roundToolSpecs(input: RoundInput): RoundToolSpec[] {
  */
 export function roundToolContext(input: RoundInput, copy: ToolCopy): RoundToolContext {
   return {
-    files(): RoundFileTools {
-      const files = input.workspace?.files;
-      if (files === undefined) {
-        throw new Error('tool face missing: this round has no project file face');
-      }
-      return files;
-    },
-    plan(): RoundPlanFace {
-      if (input.plan === null) {
-        throw new Error('tool face missing: this round has no Plan face');
-      }
-      return input.plan;
-    },
-    shell(): RoundShell {
-      const shell = input.workspace?.shell;
-      if (shell === undefined) {
-        throw new Error('tool face missing: this round has no local shell face');
-      }
-      return shell;
-    },
-    mcp(): RoundMcpContext {
-      if (input.mcp === null) {
-        throw new Error('tool face missing: this round assembled no MCP context');
-      }
-      return input.mcp;
-    },
-    assign(): (request: TeamAssignRequest) => Promise<TeamAssignToolResult> {
-      const assign = input.team?.assign;
-      if (assign == null) {
-        throw new Error('tool face missing: this round has no TeamAssign face');
-      }
-      return assign;
-    },
+    files: () => requiredFace(input.workspace?.files, 'project file face'),
+    plan: () => requiredFace(input.plan, 'Plan face'),
+    shell: () => requiredFace(input.workspace?.shell, 'local shell face'),
+    mcp: () => requiredFace(input.mcp, 'MCP context'),
+    assign: () => requiredFace(input.team?.assign, 'TeamAssign face'),
     copy,
   };
+}
+
+/**
+ * One face the round input carries, as the spec that reached it requires: an
+ * absent one is the registry's own bug, stated as one.
+ */
+function requiredFace<T>(value: T | null | undefined, what: string): T {
+  if (value === null || value === undefined) {
+    throw new Error(`tool face missing: this round has no ${what}`);
+  }
+  return value;
 }
 
 /**

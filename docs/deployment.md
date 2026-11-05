@@ -115,8 +115,11 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
   - `mcp.json` 是唯一正本（M2 D6.1）：文件缺失 = 零 MCP 工具、不报错；文件非法 = 整份不
     装配（连合法的兄弟条目也不连）；启用但未做 `('mcp', server)` 一次性远端确认的 http /
     sse server 零连接（`/api/remote-data-flow/consent`，`scope_kind = 'mcp'`，stdio 不需要）；
-    server 连不上或 `tools/list` 取不到 = 零该 server 的工具。以上任一情况轮次都照常用剩下
-    的工具跑完，不报轮次错，可读诊断只进 `RoundOutcome.reason` 与 MCP 管理面。
+    server 连不上或 `tools/list` 取不到 = 零该 server 的工具。另外，名字拼不出合法
+    `mcp:<server>/<tool>` 的工具（`server` 或工具名里含 `/` 或空白）不会被装配给模型：
+    闸门的 execute 类正则只认 `mcp:<非斜杠非空白>/<非斜杠非空白>`，装配层不为它发明另一个
+    名字。以上任一情况轮次都照常用剩下的工具跑完，不报轮次错，可读诊断只进
+    `RoundOutcome.reason` 与 MCP 管理面。
   - 参数形状由 server 自己声明：本轮不持有那份 schema（`RoundMcpTool` 只有名字与描述），
     所以请求里的工具定义是开放式对象（`type: object` + `additionalProperties: true`），模型
     给的对象**原样转交**给 server，不套用文件工具那套扁平字符串检查；被 server 自己拒绝的
@@ -163,13 +166,16 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
 ### 结构化事实的生命周期
 
 `SopVerdict` 与 `transfer_task` 记下的事实属于**轮次**，不属于正文：它们在循环里累积，本轮
-无论以哪种方式收口都会带上——正常答复、撞 `max_iterations`、以及"模型说了判定但没有正文"
-（后者按既有 empty completion 收口 `failed`，但已记录的判定不丢）。这不是新的可观测面：
-映射目标是 `RoundResult` 的既有字段，没有新字段、没有新事件、工具调用本身不入库。
+无论以哪种方式收口都会带上——正常答复、撞 `max_iterations`、以及"模型说了判定但没有正文"。
+最后一种按既有 empty completion 收口 `failed`，此时只保留 `sopVerdict`：判定就是 verifier 的
+全部协议（`sop-executor` 只读这个字段）；转派动作**不**随一个没有产出的轮次走，因为写路径提交
+任务动作时不看 verdict，而 `failed` 轮次不推进游标——否则同一条触发消息下次唤醒会再转派一次
+（团队分派路径本来就有 `verdict !== 'replied'` 的守卫，这里是同一条不变量）。这不是新的可观测
+面：映射目标是 `RoundResult` 的既有字段，没有新字段、没有新事件、工具调用本身不入库。
 
 同一轮里同一个事实被陈述多次时，后一次覆盖前一次。
 
-### 仍属脚本化专用的工具
+### 仍属脚本化专用的能力
 
 以下能力只有脚本化 provider（`--scripted-provider`）能驱动：
 
@@ -236,7 +242,13 @@ shell + 逐次审批 + 项目根工作目录，没有沙箱；MCP 工具只在 `
 - AG-UI 不发工具调用事件（没有 `TOOL_CALL_*`），前端看不到轮内工具进度。
 - 工具调用不入库：没有审计面，也没有新表 / 新列，`SCHEMA_VERSION` 仍为 21，本批无迁移步骤。
 - 无 deferred / 异步收口：一轮在同一个 HTTP 请求内跑完，默认最坏情况是 10 批工具执行、11 次
-  模型调用 × 单次 60 秒超时，需要审批时再叠加 600 秒批次等待。
+  模型调用 × 单次 60 秒超时，需要审批时再叠加 600 秒批次等待。**这个上界只在每条 `Bash`
+  命令都会自己退出时成立**——命令执行没有超时（见下一条），一条不退出的命令会让这个请求
+  无界等待。
+- `Bash` 没有命令级超时：`local-shell` 接缝（`RunShellRequest` / `RoundShellResult`）没有超时
+  字段，`spawn` 也没有 timer，所以一条不退出或等 stdin 的命令会让这一轮的 HTTP 请求无界
+  等待：既不回灌工具结果，也不收口。#75 里的「超时」在本批只覆盖 600 秒**审批批次**超时
+  （等满收口 `failed`），不含命令执行本身；补上它要改接缝与错误码，属后续票。
 - 无 token 级流式：文本仍一次性返回，AG-UI 的 `TEXT_MESSAGE_CONTENT` 语义不变。
 - 无每 Agent 工具白名单：模型可见工具仍只由轮次可用集（项目根 / Plan face / 频道的
   `allow_local_shell` 与工作区后端）决定，`permission_rule` 只判定调用是否放行，不是可见性

@@ -579,6 +579,54 @@ for (const provider of PROVIDER_ROWS) {
     }
   });
 
+  test(`[${provider.label}] a TeamAssign call that names the leader itself is a target_self result and the round continues`, async () => {
+    const fixture = await startFixture(`allibot-orchestration-assign-self-${provider.label}-`, provider);
+    try {
+      const channelId = await createChannel(fixture);
+      const leaderId = await createAgent(fixture, provider, '队长');
+      await joinChannel(fixture, channelId, leaderId);
+      await makeTeam(fixture, channelId, leaderId);
+      await confirmRemoteDataFlow(fixture, provider);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([
+          {
+            id: 'call-self',
+            name: 'TeamAssign',
+            input: { member_id: leaderId, instruction: '交给自己' },
+          },
+        ]),
+        provider.text('分给自己不行，我自己做'),
+      ]);
+
+      await sendMessage(fixture, channelId, '@队长 把这件事交给你自己');
+
+      assert.equal(
+        fixture.endpoint.requests.length,
+        2,
+        'a refused assignment runs no member sub-round',
+      );
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.id, 'call-self');
+      assert.equal(results[0]?.isError, true, 'a refusal is an error tool result');
+      assert.ok(
+        (results[0]?.content ?? '').startsWith('[TeamAssign] error: target_self'),
+        `the stable code reaches the model: ${results[0]?.content ?? ''}`,
+      );
+      assert.deepEqual(
+        (await messages(fixture, channelId)).map((message) => [message['kind'], message['body']]),
+        [
+          ['human', '@队长 把这件事交给你自己'],
+          ['agent', '分给自己不行，我自己做'],
+        ],
+        'the refusal is a result: the round still answers',
+      );
+      assert.equal(roundOutcomes(fixture)[0]?.status, 'replied');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   test(`[${provider.label}] a transfer_task call moves the task and the action comes from the tool call`, async () => {
     const fixture = await startFixture(`allibot-orchestration-transfer-${provider.label}-`, provider);
     try {
@@ -631,6 +679,58 @@ for (const provider of PROVIDER_ROWS) {
           ZH_CN['round.transfer.done'].text.replace('{assignee}', '成员乙'),
         ),
         `the round states the structured action it took: ${firstOutcome?.reason ?? ''}`,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a round that transfers and lands no text leaves the task where it was`, async () => {
+    const fixture = await startFixture(
+      `allibot-orchestration-transfer-empty-${provider.label}-`,
+      provider,
+    );
+    try {
+      const channelId = await createChannel(fixture);
+      const assigneeId = await createAgent(fixture, provider, '成员甲');
+      const otherId = await createAgent(fixture, provider, '成员乙');
+      for (const member of [assigneeId, otherId]) {
+        await joinChannel(fixture, channelId, member);
+      }
+      const task = await createTask(fixture, channelId, '空正文转派任务');
+      await assignTask(fixture, task.id, assigneeId);
+      await confirmRemoteDataFlow(fixture, provider);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([
+          { id: 'call-transfer', name: 'transfer_task', input: { member_id: otherId } },
+        ]),
+        provider.emptyText(),
+      ]);
+
+      await sendMessage(fixture, task.targetId, '@成员甲 把任务交给成员乙，然后什么都不用写');
+
+      const result = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!))[0];
+      assert.equal(result?.isError, false, 'the call itself is a result like any other');
+      const outcome = roundOutcomes(fixture)[0];
+      assert.equal(outcome?.member_id, assigneeId);
+      assert.equal(outcome?.status, 'failed', 'no text is still the empty-completion failure');
+      assert.equal(
+        readAssignee(fixture, task.id),
+        assigneeId,
+        'a round with no conclusion states no task action, so the task does not move',
+      );
+      assert.equal(
+        (await messages(fixture, task.targetId)).some(
+          (message) =>
+            message['kind'] === 'system' &&
+            String(message['body']).includes(
+              ZH_CN['task.event.assignee.transferred'].text
+                .replace('{previous}', '成员甲')
+                .replace('{assignee}', '成员乙'),
+            ),
+        ),
+        false,
+        'the write path wrote no transfer record',
       );
     } finally {
       await fixture.stop();
