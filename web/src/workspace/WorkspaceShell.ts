@@ -333,6 +333,20 @@ export function WorkspaceShell({
     createElement(
       'span',
       { className: 'workspace-header__title' },
+      createElement(
+        'svg',
+        {
+          'aria-hidden': 'true',
+          width: 14,
+          height: 14,
+          viewBox: '0 0 16 16',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.4,
+          strokeLinejoin: 'round',
+        },
+        createElement('path', { d: 'M3.5 3.5h9v7h-5l-4 3z' }),
+      ),
       context?.label ?? t(locale, 'workspace.context.empty'),
     ),
     createElement(
@@ -369,6 +383,22 @@ export function WorkspaceShell({
       : createElement(
           'div',
           { className: 'workspace-notice', 'data-notice': 'members' },
+          createElement(
+            'svg',
+            {
+              'aria-hidden': 'true',
+              className: 'workspace-notice__icon',
+              width: 13,
+              height: 13,
+              viewBox: '0 0 16 16',
+              fill: 'none',
+              stroke: 'currentColor',
+              strokeWidth: 1.5,
+              strokeLinecap: 'round',
+            },
+            createElement('circle', { cx: 8, cy: 8, r: 5.6 }),
+            createElement('path', { d: 'M8 5.4v3.4M8 10.6h.01' }),
+          ),
           createElement(
             'span',
             { className: 'workspace-notice__text' },
@@ -602,7 +632,7 @@ export function WorkspaceShell({
               t(locale, 'workspace.drawer.close'),
             ),
           ),
-          drawerBody,
+          createElement('div', { className: 'workspace-drawer__body' }, drawerBody),
         );
 
   return createElement(CopilotKitProvider, {

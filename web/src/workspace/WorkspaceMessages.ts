@@ -133,17 +133,30 @@ function messageText(content: unknown): string {
   return content === undefined || content === null ? '' : String(content);
 }
 
-function authorHeader(author: MessageAuthorView) {
+/**
+ * The avatar column of a message row. It is a direct child of the row so the
+ * row can be a two-column grid (avatar + everything else), and it never
+ * carries the author name: the name has exactly one rendering point.
+ */
+function authorAvatar(author: MessageAuthorView) {
+  return createElement(Avatar, {
+    slot: avatarSlotOf(author.avatarSlot),
+    name: author.displayName,
+  });
+}
+
+/**
+ * The author line above the body: name, plus the timestamp when the row has
+ * one. `AllibotMessageMetadata` carries no time field, and the shell does not
+ * invent one, so only the name renders.
+ */
+function authorLine(author: MessageAuthorView) {
   return createElement(
     'div',
     {
       className: 'workspace-message__author',
       'data-author-member-id': author.memberId,
     },
-    createElement(Avatar, {
-      slot: avatarSlotOf(author.avatarSlot),
-      name: author.displayName,
-    }),
     createElement('span', { className: 'workspace-message__author-name' }, author.displayName),
   );
 }
@@ -249,7 +262,8 @@ export function WorkspaceAssistantMessage(props: CopilotChatAssistantMessageProp
       'data-message-id': message.id,
       'data-author-member-id': author?.memberId ?? '',
     },
-    author === null ? null : authorHeader(author),
+    author === null ? null : authorAvatar(author),
+    author === null ? null : authorLine(author),
     createElement(MessageBody, {
       kind: 'agent',
       body,
@@ -271,7 +285,8 @@ export function WorkspaceUserMessage(props: CopilotChatUserMessageProps) {
       'data-message-id': message.id,
       'data-author-member-id': author?.memberId ?? '',
     },
-    author === null ? null : authorHeader(author),
+    author === null ? null : authorAvatar(author),
+    author === null ? null : authorLine(author),
     createElement(MessageBody, {
       kind: 'human',
       body: messageText(message.content),

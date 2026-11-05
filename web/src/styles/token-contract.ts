@@ -28,6 +28,24 @@ export const AVATAR_SLOT_TOKENS = ['--av-0', '--av-1', '--av-2', '--av-3', '--av
 /** 新增档位不得使用 -light / -dark 等明暗别名。 */
 export const FORBIDDEN_TIER_ALIASES = ['-light', '-dark'] as const;
 
+/**
+ * 版式与动效 token：字体栈、圆角语法、缓动、叠色档与两处布局尺寸。
+ * 它们与色值 token 一样由消费点按名读取，同样进下面的固定清单。
+ */
+const TYPE_AND_MOTION_TOKENS = [
+  '--font-sans',
+  '--font-display',
+  '--font-mono',
+  '--r-sm',
+  '--r-md',
+  '--r-lg',
+  '--ease',
+  '--hover',
+  '--active',
+  '--sidebar',
+  '--drawer',
+] as const;
+
 /** 固定 token 名清单：下游按名字消费的完整集合。 */
 export const VISUAL_CONTRACT_TOKENS = [
   // 系统面
@@ -72,4 +90,6 @@ export const VISUAL_CONTRACT_TOKENS = [
   '--av-2',
   '--av-3',
   '--av-4',
+  // 版式与动效
+  ...TYPE_AND_MOTION_TOKENS,
 ] as const;

@@ -233,6 +233,12 @@ export function workspaceChatProps(
     // CopilotKit's own defaults are English; the shell binds the same two
     // labels to the one workspace catalog instead of adding a second i18n path.
     labels: workspaceChatLabels(locale),
+    // The library ships a light palette and switches through its own `dark`
+    // marker. The chat root is the element carrying `data-copilotkit`, and the
+    // marker is appended to that same class list, so the library's own chrome
+    // (input surface, tool cards, scrollbars) follows the one dark theme
+    // instead of rendering its light defaults on the dark canvas.
+    className: 'dark',
     chatView: WorkspaceChatView,
     messageView: WorkspaceMessageView as unknown as CopilotChatViewProps['messageView'],
     input: WorkspaceComposer as unknown as CopilotChatViewProps['input'],
