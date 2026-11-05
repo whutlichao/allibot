@@ -41,7 +41,7 @@ import { roundToolSpecs, type ToolCopy } from './tool-specs.js';
  */
 
 /** The adapter's resolved inputs for one call. */
-export interface ProviderAvailability {
+interface ProviderAvailability {
   provider: AgentProvider;
   model: string;
   /** The credential the request carries; never logged, never rendered. */
@@ -49,7 +49,7 @@ export interface ProviderAvailability {
   baseUrl: string;
 }
 
-export type AvailabilityResult =
+type AvailabilityResult =
   | { ok: true; available: ProviderAvailability }
   | { ok: false; reason: string };
 
@@ -58,7 +58,7 @@ export type AvailabilityResult =
  * deliberately different words — no model, unconfirmed remote provider, missing
  * credential — each with its own readable copy, and none opens a socket.
  */
-export function resolveAvailability(
+function resolveAvailability(
   db: Database.Database,
   input: RoundInput,
   env: NodeJS.ProcessEnv,
