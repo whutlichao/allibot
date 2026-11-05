@@ -4,6 +4,7 @@ import type {
   PlanTaskStatus,
   PlanTaskView,
   TeamAssignmentState,
+  WebAccessTier,
   WorkspaceBackend,
 } from '@allibot/shared';
 
@@ -489,6 +490,91 @@ export interface RoundMcpContext {
 }
 
 /**
+ * One `web_search` call: the query text, nothing else. The provider, the
+ * endpoint, the credential and the auth header are the round's facts, not
+ * arguments a model chooses.
+ */
+export interface WebSearchRequest {
+  query: string;
+}
+
+/** One `fetch` call: the absolute URL the host process GETs (D10). */
+export interface WebFetchRequest {
+  url: string;
+}
+
+/** One search hit, as the provider returned it (D13: no second processing). */
+export interface RoundWebSearchHit {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+/**
+ * Why a `web_search` call came back failed. `unavailable` is absent on purpose:
+ * no usable provider / consent at the call point is not a tool result but a
+ * readable throw that closes the round failed (D8).
+ */
+export type WebSearchErrorCode = 'provider-error' | 'mcp-error';
+
+/**
+ * One `web_search` result. A provider answer carries `hits`; the credential-free
+ * `exa` MCP fallback carries its own `content` body instead. `capped` is present
+ * only when the hit-count cap actually cut the list — a result that happens to
+ * hold exactly the cap's worth of hits is not a capped one (D13).
+ */
+export interface RoundWebSearchResult {
+  ok: boolean;
+  /** The provider / MCP server that answered, named for the model. */
+  source: string;
+  error?: WebSearchErrorCode;
+  message?: string;
+  hits?: readonly RoundWebSearchHit[];
+  content?: string;
+  capped?: 'hits';
+}
+
+/** Why a `fetch` call did not produce a page. All of them are tool results. */
+export type WebFetchErrorCode =
+  | 'invalid-url'
+  | 'denied'
+  | 'cross-host-redirect'
+  | 'request-failed';
+
+/**
+ * One `fetch` result. A completed response is `ok: true` whatever its status
+ * (a 404 is an answer); a denial, a refused cross-host redirect and a transport
+ * failure are tool errors that never close the round.
+ */
+export interface RoundWebFetchResult {
+  ok: boolean;
+  error?: WebFetchErrorCode;
+  message?: string;
+  /** The requested URL's bare hostname, the one subject rule patterns match. */
+  host?: string;
+  status?: number;
+  content?: string;
+}
+
+/**
+ * 联网工具面 (#70 / D10): the round's effective 联网档, the `web_search` and
+ * `fetch` calls, and the tool gate `fetch` asks before it opens a socket.
+ *
+ * The gate lives here, not on `RoundWorkspaceContext`, because a DM / rootless
+ * round has no workspace but still has a permission context: the same
+ * `TargetPermissionContext` the file tools use, resolved independently of the
+ * project root. `null` on the round input means this round assembles no web
+ * face at all (tier `off`, or no web tool to offer).
+ */
+export interface RoundWebFace {
+  /** The effective 联网档 this round assembled by (D1). */
+  tier: WebAccessTier;
+  permission: RoundPermissionFace;
+  search(request: WebSearchRequest): Promise<RoundWebSearchResult>;
+  fetch(request: WebFetchRequest): Promise<RoundWebFetchResult>;
+}
+
+/**
  * The SOP context of one internal member round (D4.3). It is `null` on every
  * ordinary / team round. Both roles use the same member-face seam; the
  * verifier receives the executor's text as part of its input.
@@ -562,6 +648,14 @@ export interface RoundInput {
    * root round can still use MCP; it never gains project file tools.
    */
   mcp: RoundMcpContext | null;
+  /**
+   * The round's 联网工具面 (D10): `null` when this round assembles no web tool at
+   * all — tier `off`, or neither `web_search` (no usable provider) nor `fetch`
+   * (withheld under read-only / on a DM) is available. Assembly is independent
+   * of the project workspace, so a DM / rootless round can still search and
+   * fetch.
+   */
+  web: RoundWebFace | null;
   /** The seq of the message that triggered this wake. */
   baseSeq: number;
   reason: WakeReason;
