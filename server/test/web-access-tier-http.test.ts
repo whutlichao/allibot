@@ -433,3 +433,79 @@ test('an Agent web-access value outside the three tiers is 400 validation_failed
     await fixture.stop();
   }
 });
+
+test('the web-access write face keeps the archived-400 and deleted-404 channel rules', async () => {
+  const fixture = await startWebAccessFixture('allibot-web-access-channel-lifecycle-');
+  try {
+    const archivedId = await createChannel(fixture);
+    const archived = await postJson(fixture, `/api/channels/${archivedId}/archive`, {});
+    assert.equal(archived.status, 200, await archived.clone().text());
+
+    const archivedPatch = await patchJson(fixture, `/api/channels/${archivedId}`, {
+      web_access: 'off',
+    });
+    assert.equal(archivedPatch.status, 400, await archivedPatch.clone().text());
+    assert.equal(errorCode(await readJson(archivedPatch)), 'validation_failed');
+    assert.equal(
+      queryDatabase<{ web_access: string | null }>(
+        fixture.dataDir,
+        'SELECT web_access FROM channel WHERE id = ?',
+        [archivedId],
+      )?.web_access,
+      null,
+      'an archived channel takes no tier write',
+    );
+
+    const deletedId = await createChannel(fixture);
+    const deleted = await fetch(`${fixture.base}/api/channels/${deletedId}`, { method: 'DELETE' });
+    assert.equal(deleted.status, 204, await deleted.text());
+
+    const deletedPatch = await patchJson(fixture, `/api/channels/${deletedId}`, {
+      web_access: 'off',
+    });
+    assert.equal(deletedPatch.status, 404, await deletedPatch.clone().text());
+    assert.equal(errorCode(await readJson(deletedPatch)), 'not_found');
+
+    const missingAgent = await patchJson(fixture, '/api/agents/does-not-exist', {
+      web_access: 'off',
+    });
+    assert.equal(missingAgent.status, 404, await missingAgent.clone().text());
+    assert.equal(errorCode(await readJson(missingAgent)), 'not_found');
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('the two channel columns read back exactly what the row stores', async () => {
+  const fixture = await startWebAccessFixture('allibot-web-access-channel-columns-');
+  try {
+    const channelId = await createChannel(fixture);
+
+    // The egress switch has no write face in this ticket (T5 owns it), so the
+    // only way to prove the reading is a column readout rather than a constant
+    // is to seed the row and observe the GET.
+    const db = new Database(path.join(fixture.dataDir, 'allibot.db'));
+    try {
+      db.prepare('UPDATE channel SET web_access = ?, docker_egress = ? WHERE id = ?').run(
+        'search+fetch',
+        1,
+        channelId,
+      );
+    } finally {
+      db.close();
+    }
+
+    const detail = await readJson(await fetch(`${fixture.base}/api/channels/${channelId}`));
+    assert.equal(detail['web_access'], 'search+fetch');
+    assert.equal(detail['docker_egress'], 1, 'the switch reads 1 when the row says 1');
+    const stored = queryDatabase<{ web_access: string | null; docker_egress: number }>(
+      fixture.dataDir,
+      'SELECT web_access, docker_egress FROM channel WHERE id = ?',
+      [channelId],
+    );
+    assert.equal(stored?.web_access, 'search+fetch');
+    assert.equal(stored?.docker_egress, 1);
+  } finally {
+    await fixture.stop();
+  }
+});
