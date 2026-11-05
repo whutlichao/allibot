@@ -129,25 +129,59 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
   - server 返回 `isError`、连接中断、server 未装配都是工具结果（`error: tool-error` /
     `connection` / `unavailable`），轮次继续；回灌内容是 `[mcp:<server>/<tool>] ok` 或
     `error: <code>` + `server` / `tool` + server 正文，同样受 20000 字回灌上限约束。
+- `TaskCreate` / `TaskUpdate`：Plan 写工具，需要 Plan face（`RoundInput.plan` 非空）——
+  也就是说任务线程与 team 目标有，DM 与 autonomous 频道的普通轮次没有（请求里根本不带这两个
+  名字）。`TaskCreate{title}` 追加到本轮 Plan run；`TaskUpdate{id, title?, status?}` 改标题
+  和/或三词状态（`pending` / `in_progress` / `completed`）。`status` 是闭集：Schema 里带
+  `enum`，其它值在进入 Plan face 之前就被拒成 `invalid-arguments` 工具结果（不是轮次失败，
+  也不会改到任何一行）。查不到的 id 是 `not-found` 工具结果。
+- `TeamAssign`：队长专用，需要队长的分派 face（`RoundInput.team.assign` 非空，只有真实队长轮次
+  有）。`TeamAssign{member_id, instruction}` 走 M2 既有分派路径：成员子轮次在**同一个队长轮次内**
+  跑完，assignment 记录、jump 消耗、子轮次产物全部按 M2 既有行为产生；成员输出只作为**工具结果**
+  回给队长，不落成频道消息。队长不可用、`target_self`、成员不可用、预算耗尽等既有判定不变，
+  失败是带稳定码（`not_leader` / `target_self` / `target_unavailable` / `budget_exhausted` /
+  `member_failed`）的错误工具结果，轮次继续。
+- `transfer_task`：任务当前受派者专用（`RoundInput.tools` 只在受派者轮次里给这个名字）。
+  `transfer_task{member_id}` 不直接写库，它把本轮结论映射成既有的结构化任务动作
+  `RoundResult.taskAction='transfer_task'` + `taskTransferMemberId`，真正的转派由既有写路径做
+  （受派者变更、任务线程成员、系统变更记录、team 频道的 `team-change` 唤醒全部照旧）。
+  目标不是本频道另一个存活 Agent 成员时写路径拒绝并在轮次原因里说明，写路径不动任何行。
+- `SopVerdict`：**只在 verifier 轮**（`RoundInput.sop.role === 'verifier'`）装配的专用
+  `internal` 工具，`SopVerdict{verdict: 'pass'|'fail'}` 由适配器映射到既有
+  `RoundResult.sopVerdict`。判定的来源是**工具调用**：正文里写 pass 不算，不解析 `replies`；
+  也不为两家 provider 各写一套结构化输出（OpenAI 的 `response_format` / Anthropic 的文本协议
+  都不用）。没有调用这个工具时 `sopVerdict` 为空，SOP 运行按既有词条
+  `sop.run.verifier.noVerdict` 失败。这个工具不对应任何 face、不进 `permission_rule` 词汇，
+  因此没有审批批次。
 - 两家 provider（`anthropic` 与 `openai:<模型>`）行为一致：工具定义与工具结果各按自己的
   wire shape 序列化（`tools[].input_schema` + `tool_use` / `tools[].function.parameters` +
-  `tool_calls`），循环、上限与收口完全一致。
+  `tool_calls`），循环、上限与收口完全一致；结构化事实（`sopVerdict` / `taskAction` /
+  `taskTransferMemberId`）两家走同一条通道，没有各自的解析分支。
 - 没有工具面（DM、无项目根、无 Plan face）时，请求里根本不带 `tools`，行为与原来的单次
   补全相同。
 
+### 结构化事实的生命周期
+
+`SopVerdict` 与 `transfer_task` 记下的事实属于**轮次**，不属于正文：它们在循环里累积，本轮
+无论以哪种方式收口都会带上——正常答复、撞 `max_iterations`、以及"模型说了判定但没有正文"
+（后者按既有 empty completion 收口 `failed`，但已记录的判定不丢）。这不是新的可观测面：
+映射目标是 `RoundResult` 的既有字段，没有新字段、没有新事件、工具调用本身不入库。
+
+同一轮里同一个事实被陈述多次时，后一次覆盖前一次。
+
 ### 仍属脚本化专用的工具
 
-以下工具名在轮次可用集里，但本批没有给模型提供规格，因此真实模型调不到，只有脚本化
-provider（`--scripted-provider`）能驱动：
+以下能力只有脚本化 provider（`--scripted-provider`）能驱动：
 
-- 编排类：`TeamAssign` / `transfer_task` / Plan 的写工具 `TaskCreate` / `TaskUpdate`。
-- `SopVerdict` 的结构化判定通道：通道已定（一个专用 `internal` 类工具映射到既有
-  `sopVerdict`），本批未实现；`RoundResult.taskAction` 用的同一条通道同理。
+- `continue_task`（自动续跑，结构化任务动作的另一半）：`RoundInput.tools` 里**没有**对应的
+  工具名，本批也没有为它发明一个（工具名是对外契约，改名 / 新增等于同时改模型可见列表、
+  `permission_rule.tool_name` 与审批载荷三处）。因此真实模型目前无法请求续跑，续跑仍由脚本化
+  provider 驱动；这是本批如实保留的缺口。`transfer_task` 已经可用，`continue_task` 待定。
 
-接入真实模型不等于 team 分派、Plan 写或 SOP 判定可用；本版本不能这样宣传。写类、执行类与
-MCP 工具已进循环，但边界仍是真实的：写只在项目根内；`Bash` 是本机明文 shell + 逐次审批 +
-项目根工作目录，没有沙箱；MCP 工具只在 `mcp.json` 正本、远端一次性确认与实际连上的 server
-上可用，零 server 就是零 MCP 工具。
+接入真实模型不等于自动续跑可用；本版本不能这样宣传。写类、执行类、MCP 工具、team 分派、
+Plan 写、转派与 SOP 判定都已进循环，但边界仍是真实的：写只在项目根内；`Bash` 是本机明文
+shell + 逐次审批 + 项目根工作目录，没有沙箱；MCP 工具只在 `mcp.json` 正本、远端一次性确认
+与实际连上的 server 上可用，零 server 就是零 MCP 工具。
 
 ### 上限语义
 

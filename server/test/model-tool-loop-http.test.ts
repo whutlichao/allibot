@@ -1737,8 +1737,8 @@ for (const provider of PROVIDER_ROWS) {
       const definitions = provider.toolDefinitions(requestPayload(fixture.endpoint.requests[0]!));
       assert.deepEqual(
         definitions.map((definition) => definition.name),
-        ['TaskList', 'TaskGet'],
-        'a Plan round without a project root carries exactly the read-only Plan tools',
+        ['TaskList', 'TaskGet', 'TaskCreate', 'TaskUpdate', 'transfer_task'],
+        'a Plan round without a project root carries exactly the Plan tools and the transfer',
       );
       const list = definitions.find((definition) => definition.name === 'TaskList');
       assert.deepEqual(list?.schema['properties'], {}, 'TaskList takes no argument');
@@ -1921,7 +1921,7 @@ for (const provider of PROVIDER_ROWS) {
         provider
           .toolDefinitions(requestPayload(fixture.endpoint.requests[0]!))
           .map((definition) => definition.name),
-        ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'TaskList', 'TaskGet'],
+        ['Read', 'Glob', 'Grep', 'Write', 'Edit', 'TaskList', 'TaskGet', 'TaskCreate', 'TaskUpdate', 'transfer_task'],
         'a task round with a project root is handed the whole batch',
       );
 
