@@ -39,7 +39,7 @@ M1 与 M2 都交付了「没有联网」的产品：Agent 能读项目文件、�
 15. As an owner, I want the key readable back only as a mask, so that a screenshot of the settings page cannot leak it.
 16. As an owner, I want a provider key to never appear in logs, SSE frames or round reasons, so that a failing request cannot leak it.
 17. As an owner, I want the backup documentation to say the credential table contains plaintext keys, so that I know what a data-directory backup carries.
-18. As an owner, I want a round with no usable provider to fail with a readable reason, so that "web is on but nothing works" is visible rather than silent.
+18. As an owner, I want a round that calls a web tool with no usable provider to fail with a readable reason, so that "web is on but nothing works" is visible rather than silent.
 19. As an owner, I want a missing credential to name the environment variable and provider, so that I can fix it without reading the source.
 20. As an owner, I want a fallback to an `exa` MCP server when no key exists, so that a configured MCP search works without a key.
 21. As an owner, I want that fallback to require a server literally named `exa`, so that an unrelated server cannot take over search by name coincidence.
@@ -71,15 +71,15 @@ M1 与 M2 都交付了「没有联网」的产品：Agent 能读项目文件、�
 
 **D7 端点覆盖。** 每家一个 `allibot_WEB_<PROVIDER>_BASE_URL`（`BRAVE` / `TAVILY` / `PERPLEXITY` / `JINA` / `EXA`），未设置时用该家默认端点；尾部斜杠剥除规则与 `providerBaseUrl` 一致。测试用它把请求指向本地假 provider，生产不用它换家运行。
 
-**D8 缺能力时的收口。** 有效档位不是 `off`、但解析不出任何可用 provider（无 key、无默认、无 `exa` MCP）时：本轮 `failed`，可读 reason 点名缺什么（缺哪家的 key / 缺 `exa` MCP / 缺确认），零 socket。不静默降级为 `off`，也不把配置错误伪装成工具结果。
+**D8 缺能力时的收口。** 有效档位不是 `off`、但解析不出任何可用 provider（无 key、无默认、无 `exa` MCP，或解析出的 provider 未确认）时，装配层不挂这家 provider 的工具；模型仍发起调用时（陈旧装配、规则直呼）本轮 `failed`，可读 reason 点名缺什么（缺哪家的 key / 缺 `exa` MCP / 缺 `('web', provider)` 确认），零 socket。收口挂在**调用点**而不是轮次开头：档位默认是 `search`，而迁移上来的数据目录一个 provider 都没有，若在轮次开头收口，每一次与联网无关的轮次都会失败——那不是「不静默降级成 off」，是把缺配置放大成全局故障。不静默降级为 `off`，也不把配置错误伪装成工具结果。
 
 **D9 `exa` MCP 回退的判定。** 可用 = 该 Agent 的 `mcp.json` 里 server 名**恰为** `exa`、该 server 已连接、且其工具列表里存在搜索类工具（按 server 返回的工具名匹配 `search` 语义，取第一个命中项）。命中则经既有 MCP face 调用 `mcp:exa/<tool>`，沿用既有 MCP 一次性确认与 execute 类判定。名字模糊匹配一律不做。
 
 **D10 轮次输入的新面。** `RoundInput` 增加 `web: RoundWebFace | null`：`web_search({query})` 与 `fetch({url})` 两个方法，加该轮的有效档位与解析出的 provider 事实；`null` 表示本轮不装配（`off`、read-only 下的 `fetch` 单独处理、DM 的 `fetch`）。装配由 `rounds.ts` 按 D1 的有效档位与 D2 的两层约束决定；local 与 Docker 两种后端都装配，区别只是出网由谁执行（local 由宿主进程直接发请求，属于已明示的无沙箱事实）。
 
-**D11 `('web', provider)` 远端数据流确认。** 复用 `remote_consent_scope` 与既有通用确认端点，`scope_kind` 的 CHECK 从 `('model','mcp','docker')` 扩到含 `'web'`；未确认时该 provider 视为不可用，走 D8 的收口。确认按 provider 一次性，不按 key 轮换失效。
+**D11 `('web', provider)` 远端数据流确认。** 正本仍是 `remote_consent_scope`：`scope_kind` 的 CHECK 从 `('model','mcp','docker')` 扩到含 `'web'`（D12 的 v25 重建），`scope_id` 取五家 provider 名。人类面写路径按词条是两条 web 专线：`POST /api/web-providers/<provider>/consent` 单独确认，`PUT /api/web-providers/<provider>/credential` 保存 key 的同时写确认行——一次调用既落凭据又落告知，不拆成两步留一个「UI 忘了第二步」的口子。读数接 `GET /api/remote-data-flow`，新增 `web_consents`（形状照既有 `mcp_consents` / `docker_consents`）。两处既有代码要同步扩：`parseConsentScope` 现在把 `scope_kind` 硬校验成 `model` / `mcp` / `docker`（`providers.ts:233`），要加 `web` 并改错误文案；`POST /api/remote-data-flow/<provider>/consent` 那条路由是模型专用（`parseProviderParam` 只认 `AGENT_PROVIDERS`），不要拿它当 web 的写路径。未确认时该 provider 视为不可用，走 D8 的收口；`exa` MCP 回退不需要 `('web','exa')` 行，它走既有的 `('mcp', server)` 确认。确认按 provider 一次性，不按 key 轮换失效。
 
-**D12 schema 四步。** `v22`：`channel` 加 `web_access` 与 `docker_egress` 两列（含 CHECK）；`v23`：`agent_config` 加 `web_access`（NULL = 跟随）；`v24`：新建 `web_provider_credential` 与「至多一行 default」的部分唯一索引；`v25`：`remote_consent_scope` 的 `scope_kind` CHECK 扩容——这是 CHECK 变更，必须表重建，沿用 v14 / v21 的形状（重建表、`INSERT … SELECT`、`RENAME`、提交前 `PRAGMA foreign_key_check` 把门）。`SCHEMA_VERSION` 21 → 25，严格 +1，单事务，迁移前整目录备份与审计台账不变。
+**D12 schema 四步。** `v22`：`channel` 加 `web_access TEXT`（可空，NULL = 未配置、读路径回退 `search`——照 `agent_config.workspace_backend` 的可空先例，不是 `channel.workspace_backend` 的 NOT NULL DEFAULT）与 `docker_egress INTEGER NOT NULL DEFAULT 0 CHECK (docker_egress IN (0, 1))`；`v23`：`agent_config` 加 `web_access TEXT`（可空，NULL = 跟随频道，CHECK 形状照既有 `agent_config.permission_mode`）；`v24`：新建 `web_provider_credential` 与「至多一行 default」的部分唯一索引；`v25`：`remote_consent_scope` 的 `scope_kind` CHECK 扩容——这是 CHECK 变更，必须表重建，沿用 v14 / v21 的形状（重建表、`INSERT … SELECT`、`RENAME`、提交前 `PRAGMA foreign_key_check` 把门）。`SCHEMA_VERSION` 21 → 25，严格 +1，单事务，迁移前整目录备份与审计台账不变。
 
 **D13 结果回灌复用 #51 的纪律。** `web_search` / `fetch` 的结果形状走 `tool-specs` 的既有整形与回灌截断，不新造一套；命中的是「回灌层总量上限 + 显式截断标记」，`capped` 事实只在有封顶语义时给出（搜索命中数上限）。
 
@@ -119,6 +119,6 @@ M1 与 M2 都交付了「没有联网」的产品：Agent 能读项目文件、�
 
 **ADR。** 新增 `docs/adr/0010-web-provider-credential-in-db.md`：裁定「模型密钥不进库、联网 provider 凭据是唯一例外」，并写死安全边界（只回掩码、不入日志 / SSE / reason、备份说明标注、至多一行默认、provider 枚举）。档位判定顺序、工具类、host 粒度、schema 步骤都属于可逆实现决策，写在本规格，不另开 ADR。
 
-**"与 ADR-0007 的关系。** 本规格不改 0007 的判定顺序，只在其中插一条档位豁免（D4）并新增两个工具名（D3）；read-only 硬顶、规则合并优先级、600 秒审批批次全部沿用。
+**与 ADR-0007 的关系。** 本规格不改 0007 的判定顺序，只在其中插一条档位豁免（D4）并新增两个工具名（D3）；read-only 硬顶、规则合并优先级、600 秒审批批次全部沿用。
 
 **`exa-mcp` 免凭据回退的边界。** 它是解析顺序的最后一项，不是「永远可用」的兜底：没有名为 `exa` 的服务器时它就是不可用，走 D8 收口。真实 provider 与 MCP 回退二选一，不会并行发两份请求。
