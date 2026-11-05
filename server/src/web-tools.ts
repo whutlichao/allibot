@@ -1,18 +1,22 @@
-import type { WebAccessTier, WebProvider } from '@allibot/shared';
+import type { WebAccessTier } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import type {
   RoundMcpContext,
   RoundPermissionFace,
   RoundWebFace,
   RoundWebFetchResult,
-  RoundWebSearchHit,
   RoundWebSearchResult,
   WebFetchRequest,
   WebSearchRequest,
 } from './agent-seam.js';
 import { maskSecret } from './providers.js';
 import type { ToolGate } from './tool-gate.js';
-import { resolveWebSearch, type WebSearchResolution } from './web-providers.js';
+import {
+  resolveWebSearch,
+  webProviderHits,
+  webProviderSearchCall,
+  type WebSearchResolution,
+} from './web-providers.js';
 
 /**
  * 联网工具 (D5 / D8 / D10 / D13): the two calls a round's web face performs —
@@ -91,137 +95,6 @@ function unavailableReason(
   }
 }
 
-/** One provider's search request, as the provider's own wire shape expects it. */
-interface ProviderSearchCall {
-  url: string;
-  init: RequestInit;
-}
-
-/** Each provider's search endpoint, auth header and body (D6 / D7). */
-function providerSearchCall(
-  provider: WebProvider,
-  baseUrl: string,
-  query: string,
-  apiKey: string,
-): ProviderSearchCall {
-  switch (provider) {
-    case 'brave':
-      return {
-        url: `${baseUrl}/res/v1/web/search?q=${encodeURIComponent(query)}`,
-        init: {
-          method: 'GET',
-          headers: { accept: 'application/json', 'x-subscription-token': apiKey },
-        },
-      };
-    case 'tavily':
-      return {
-        url: `${baseUrl}/search`,
-        init: {
-          method: 'POST',
-          headers: {
-            accept: 'application/json',
-            'content-type': 'application/json',
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({ query }),
-        },
-      };
-    case 'perplexity':
-      return {
-        url: `${baseUrl}/chat/completions`,
-        init: {
-          method: 'POST',
-          headers: {
-            accept: 'application/json',
-            'content-type': 'application/json',
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({ model: 'sonar', messages: [{ role: 'user', content: query }] }),
-        },
-      };
-    case 'jina':
-      return {
-        url: `${baseUrl}/search?q=${encodeURIComponent(query)}`,
-        init: {
-          method: 'GET',
-          headers: { accept: 'application/json', authorization: `Bearer ${apiKey}` },
-        },
-      };
-    case 'exa':
-      return {
-        url: `${baseUrl}/search`,
-        init: {
-          method: 'POST',
-          headers: {
-            accept: 'application/json',
-            'content-type': 'application/json',
-            'x-api-key': apiKey,
-          },
-          body: JSON.stringify({ query }),
-        },
-      };
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function textField(value: unknown, key: string): string {
-  const raw = asRecord(value)?.[key];
-  return typeof raw === 'string' ? raw : '';
-}
-
-/** One provider's payload as the three hit fields the model reads (D13). */
-function providerHits(provider: WebProvider, payload: unknown): RoundWebSearchHit[] {
-  const root = asRecord(payload) ?? {};
-  switch (provider) {
-    case 'brave':
-      return asArray(asRecord(root['web'])?.['results']).map((entry) => ({
-        title: textField(entry, 'title'),
-        url: textField(entry, 'url'),
-        snippet: textField(entry, 'description'),
-      }));
-    case 'tavily':
-      return asArray(root['results']).map((entry) => ({
-        title: textField(entry, 'title'),
-        url: textField(entry, 'url'),
-        snippet: textField(entry, 'content'),
-      }));
-    case 'perplexity': {
-      const answer = asRecord(asArray(root['choices'])[0]);
-      const content = textField(asRecord(answer?.['message']), 'content');
-      if (content.length === 0) {
-        return [];
-      }
-      const citation = asArray(root['citations'])[0];
-      return [{
-        title: 'perplexity',
-        url: typeof citation === 'string' ? citation : '',
-        snippet: content,
-      }];
-    }
-    case 'jina':
-      return asArray(root['data']).map((entry) => ({
-        title: textField(entry, 'title'),
-        url: textField(entry, 'url'),
-        snippet: textField(entry, 'description') || textField(entry, 'content'),
-      }));
-    case 'exa':
-      return asArray(root['results']).map((entry) => ({
-        title: textField(entry, 'title'),
-        url: textField(entry, 'url'),
-        snippet: textField(entry, 'text'),
-      }));
-  }
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -233,7 +106,7 @@ async function searchViaProvider(
   doFetch: typeof fetch,
 ): Promise<RoundWebSearchResult> {
   const provider = resolution.provider;
-  const call = providerSearchCall(provider, resolution.base_url, query, resolution.api_key);
+  const call = webProviderSearchCall(provider, resolution.base_url, query, resolution.api_key);
   let response: Response;
   try {
     response = await doFetch(call.url, {
@@ -271,7 +144,7 @@ async function searchViaProvider(
       message: `${provider} answered a body that is not JSON`,
     };
   }
-  const hits = providerHits(provider, payload);
+  const hits = webProviderHits(provider, payload);
   const capped = hits.length > MAX_WEB_SEARCH_HITS;
   return {
     ok: true,

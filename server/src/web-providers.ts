@@ -5,6 +5,7 @@ import {
   type WebProviderCredentialView,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
+import type { RoundWebSearchHit } from './agent-seam.js';
 import { ApiFailure } from './api-error.js';
 // `providers.ts` owns the shared primitives (the one consent row and the mask)
 // and imports this module back for the reading. The two use each other only
@@ -13,8 +14,8 @@ import { confirmRemoteConsent, maskSecret } from './providers.js';
 
 /**
  * 联网 provider 凭据 (D6 / D7 / D11, ADR 0010): the five credential providers,
- * the two human-face write paths, the masked reading and the one resolution
- * order T4's tool assembly consumes.
+ * the two human-face write paths, the masked reading, the one per-provider wire
+ * table and the one resolution order T4's tool assembly consumes.
  *
  * This is the one place in the repository that stores a plaintext secret. The
  * boundary ADR 0010 draws is kept by shape: nothing here hands a credential
@@ -25,45 +26,200 @@ import { confirmRemoteConsent, maskSecret } from './providers.js';
 /** The provider named first in the resolution order (D6). */
 export const WEB_SEARCH_PROVIDER_ENV = 'allibot_WEB_SEARCH_PROVIDER';
 
-/** The environment variable each provider falls back to (ADR 0010 §4). */
-export const WEB_PROVIDER_CREDENTIAL_ENV: Readonly<Record<WebProvider, string>> = {
-  brave: 'allibot_WEB_BRAVE_API_KEY',
-  tavily: 'allibot_WEB_TAVILY_API_KEY',
-  perplexity: 'allibot_WEB_PERPLEXITY_API_KEY',
-  jina: 'allibot_WEB_JINA_API_KEY',
-  exa: 'allibot_WEB_EXA_API_KEY',
-};
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function textField(value: unknown, key: string): string {
+  const raw = asRecord(value)?.[key];
+  return typeof raw === 'string' ? raw : '';
+}
+
+/** One provider's search request, as the provider's own wire shape expects it. */
+export interface WebProviderCall {
+  url: string;
+  init: RequestInit;
+}
 
 /**
- * Each provider's endpoint override (D7). It exists so a test can point a call
- * at an in-process fake provider; production does not use it to switch
- * providers.
+ * One provider's facts (D6 / D7, ADR 0010 §4) gathered on one row: where its
+ * search endpoint is, which environment variables override the endpoint and
+ * carry the key, what request its wire shape expects, and how its answer reads
+ * back as hits. This table is the whole per-provider surface — a provider is
+ * one row here — so the five below can never drift out of step with each other.
  */
-const WEB_PROVIDER_BASE_URL_ENV: Readonly<Record<WebProvider, string>> = {
-  brave: 'allibot_WEB_BRAVE_BASE_URL',
-  tavily: 'allibot_WEB_TAVILY_BASE_URL',
-  perplexity: 'allibot_WEB_PERPLEXITY_BASE_URL',
-  jina: 'allibot_WEB_JINA_BASE_URL',
-  exa: 'allibot_WEB_EXA_BASE_URL',
+interface WebProviderWire {
+  /** The endpoint override's environment variable (D7). */
+  baseUrlEnv: string;
+  /** The endpoint used when no override is set (D7). */
+  defaultBaseUrl: string;
+  /** The credential's environment fallback (ADR 0010 §4). */
+  credentialEnv: string;
+  search(baseUrl: string, query: string, apiKey: string): WebProviderCall;
+  hits(payload: unknown): RoundWebSearchHit[];
+}
+
+const WEB_PROVIDER_WIRE: Readonly<Record<WebProvider, WebProviderWire>> = {
+  brave: {
+    baseUrlEnv: 'allibot_WEB_BRAVE_BASE_URL',
+    defaultBaseUrl: 'https://api.search.brave.com',
+    credentialEnv: 'allibot_WEB_BRAVE_API_KEY',
+    search: (baseUrl, query, apiKey) => ({
+      url: `${baseUrl}/res/v1/web/search?q=${encodeURIComponent(query)}`,
+      init: {
+        method: 'GET',
+        headers: { accept: 'application/json', 'x-subscription-token': apiKey },
+      },
+    }),
+    hits: (payload) =>
+      asArray(asRecord(asRecord(payload)?.['web'])?.['results']).map((entry) => ({
+        title: textField(entry, 'title'),
+        url: textField(entry, 'url'),
+        snippet: textField(entry, 'description'),
+      })),
+  },
+  tavily: {
+    baseUrlEnv: 'allibot_WEB_TAVILY_BASE_URL',
+    defaultBaseUrl: 'https://api.tavily.com',
+    credentialEnv: 'allibot_WEB_TAVILY_API_KEY',
+    search: (baseUrl, query, apiKey) => ({
+      url: `${baseUrl}/search`,
+      init: {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ query }),
+      },
+    }),
+    hits: (payload) =>
+      asArray(asRecord(payload)?.['results']).map((entry) => ({
+        title: textField(entry, 'title'),
+        url: textField(entry, 'url'),
+        snippet: textField(entry, 'content'),
+      })),
+  },
+  perplexity: {
+    baseUrlEnv: 'allibot_WEB_PERPLEXITY_BASE_URL',
+    defaultBaseUrl: 'https://api.perplexity.ai',
+    credentialEnv: 'allibot_WEB_PERPLEXITY_API_KEY',
+    search: (baseUrl, query, apiKey) => ({
+      url: `${baseUrl}/chat/completions`,
+      init: {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ model: 'sonar', messages: [{ role: 'user', content: query }] }),
+      },
+    }),
+    // Perplexity answers with one synthesized completion, not a hit list: the
+    // first choice's content is the answer and the first citation its url.
+    hits: (payload) => {
+      const root = asRecord(payload) ?? {};
+      const answer = asRecord(asArray(root['choices'])[0]);
+      const content = textField(asRecord(answer?.['message']), 'content');
+      if (content.length === 0) {
+        return [];
+      }
+      const citation = asArray(root['citations'])[0];
+      return [{
+        title: 'perplexity',
+        url: typeof citation === 'string' ? citation : '',
+        snippet: content,
+      }];
+    },
+  },
+  jina: {
+    baseUrlEnv: 'allibot_WEB_JINA_BASE_URL',
+    defaultBaseUrl: 'https://api.jina.ai',
+    credentialEnv: 'allibot_WEB_JINA_API_KEY',
+    search: (baseUrl, query, apiKey) => ({
+      url: `${baseUrl}/search?q=${encodeURIComponent(query)}`,
+      init: {
+        method: 'GET',
+        headers: { accept: 'application/json', authorization: `Bearer ${apiKey}` },
+      },
+    }),
+    hits: (payload) =>
+      asArray(asRecord(payload)?.['data']).map((entry) => ({
+        title: textField(entry, 'title'),
+        url: textField(entry, 'url'),
+        snippet: textField(entry, 'description') || textField(entry, 'content'),
+      })),
+  },
+  exa: {
+    baseUrlEnv: 'allibot_WEB_EXA_BASE_URL',
+    defaultBaseUrl: 'https://api.exa.ai',
+    credentialEnv: 'allibot_WEB_EXA_API_KEY',
+    search: (baseUrl, query, apiKey) => ({
+      url: `${baseUrl}/search`,
+      init: {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify({ query }),
+      },
+    }),
+    hits: (payload) =>
+      asArray(asRecord(payload)?.['results']).map((entry) => ({
+        title: textField(entry, 'title'),
+        url: textField(entry, 'url'),
+        snippet: textField(entry, 'text'),
+      })),
+  },
 };
 
-/** The endpoint each provider is called at when no override is set (D7). */
-const WEB_PROVIDER_DEFAULT_BASE_URL: Readonly<Record<WebProvider, string>> = {
-  brave: 'https://api.search.brave.com',
-  tavily: 'https://api.tavily.com',
-  perplexity: 'https://api.perplexity.ai',
-  jina: 'https://api.jina.ai',
-  exa: 'https://api.exa.ai',
-};
+/** The environment variable a provider's key falls back to (ADR 0010 §4). */
+export function webProviderCredentialEnv(provider: WebProvider): string {
+  return WEB_PROVIDER_WIRE[provider].credentialEnv;
+}
 
-/** A web provider's endpoint: the override wins, trailing slashes stripped (D7). */
+/**
+ * A web provider's endpoint: the override wins, trailing slashes stripped (D7).
+ * The override exists so a test can point a call at an in-process fake provider;
+ * production does not use it to switch providers.
+ */
 export function webProviderBaseUrl(provider: WebProvider, env: NodeJS.ProcessEnv): string {
-  const override = env[WEB_PROVIDER_BASE_URL_ENV[provider]];
+  const wire = WEB_PROVIDER_WIRE[provider];
+  const override = env[wire.baseUrlEnv];
   const base = override === undefined || override.trim().length === 0
-    ? WEB_PROVIDER_DEFAULT_BASE_URL[provider]
+    ? wire.defaultBaseUrl
     : override.trim();
   return base.replace(/\/+$/, '');
 }
+
+/** One provider's search request: the URL and the init its own wire shape expects (D6 / D7). */
+export function webProviderSearchCall(
+  provider: WebProvider,
+  baseUrl: string,
+  query: string,
+  apiKey: string,
+): WebProviderCall {
+  return WEB_PROVIDER_WIRE[provider].search(baseUrl, query, apiKey);
+}
+
+/** One provider's answer as the three hit fields the model reads (D13). */
+export function webProviderHits(
+  provider: WebProvider,
+  payload: unknown,
+): RoundWebSearchHit[] {
+  return WEB_PROVIDER_WIRE[provider].hits(payload);
+}
+
 
 /** 路径里的 web provider 参数；不在五家内是 400，不是 404。 */
 export function parseWebProviderParam(value: string): WebProvider {
@@ -151,7 +307,7 @@ function credentialView(
     : 'present';
   return {
     provider,
-    credential_env: WEB_PROVIDER_CREDENTIAL_ENV[provider],
+    credential_env: webProviderCredentialEnv(provider),
     credential_status: status,
     // The mask is `maskSecret`'s own form: feeding it the key as its own text
     // yields the head-ellipsis-tail reading and nothing of the body.
@@ -240,7 +396,7 @@ export function webProviderCredentialValue(
   if (stored !== null) {
     return { value: stored.api_key, source: 'db' };
   }
-  const raw = env[WEB_PROVIDER_CREDENTIAL_ENV[provider]];
+  const raw = env[webProviderCredentialEnv(provider)];
   if (raw === undefined || raw.trim().length === 0) {
     return null;
   }
@@ -309,7 +465,7 @@ function unusable(
     kind: 'unusable',
     reason,
     provider,
-    credential_env: provider === null ? null : WEB_PROVIDER_CREDENTIAL_ENV[provider],
+    credential_env: provider === null ? null : webProviderCredentialEnv(provider),
   };
 }
 
