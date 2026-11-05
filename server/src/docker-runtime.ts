@@ -26,9 +26,16 @@ export interface DockerContainerSpec {
   image: string;
   labels: Record<string, string>;
   mounts: readonly DockerMount[];
+  /**
+   * The container network (#71 / D5): `none` means `--network none`; `default`
+   * joins Docker's own default network, which is the absence of the flag.
+   */
+  network: DockerNetwork;
   /** The keep-alive command; the container is not a persistent workspace. */
   command: readonly string[];
 }
+
+export type DockerNetwork = 'none' | 'default';
 
 export interface DockerExecRequest {
   containerId: string;
@@ -215,6 +222,9 @@ export function createDockerCliRuntime(options: DockerCliRuntimeOptions): Docker
             mount.readOnly ? ',readonly' : ''
           }`,
         );
+      }
+      if (spec.network === 'none') {
+        args.push('--network', 'none');
       }
       args.push('--workdir', '/workspace', spec.image, ...spec.command);
       const result = await run(args, { timeoutMs: CONTROL_TIMEOUT_MS });

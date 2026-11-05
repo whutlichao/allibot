@@ -182,6 +182,7 @@ async function patchJson(fixture: Fixture, route: string, body: unknown): Promis
   });
 }
 
+
 async function createAgent(fixture: Fixture): Promise<string> {
   const created = await postJson(fixture, '/api/agents', {
     display_name: 'Docker Agent',
@@ -1231,31 +1232,123 @@ test('a docker channel without a project root reads workspace-root-missing', asy
   }
 });
 
-test('M2 ships no container egress policy: no docker_egress field, route or network flag', async () => {
-  const fixture = await startFixture('allibot-docker-egress-');
+// ---------------------------------------------------------------------------
+// Slice 6 — container egress (#71 / D5 / D14)
+// ---------------------------------------------------------------------------
+
+/**
+ * The egress fact as the fake runtime records it: the `--network` token of the
+ * create argv, or null when the container joins Docker's default network.
+ * The fake is an injected runtime, so this is the same observation a real
+ * daemon would get from the same argv — no daemon, no network.
+ */
+function createdNetwork(fixture: Fixture): unknown {
+  const creates = createEntries(fixture);
+  assert.equal(creates.length, 1, 'one container for this target context');
+  return creates[0]!['network'];
+}
+
+test('docker_egress=0 creates the container with --network none; a local round has no container', async () => {
+  const fixture = await startFixture('allibot-docker-egress-default-', {
+    scriptedProvider: 'reply',
+  });
   try {
     const agentId = await createAgent(fixture);
-    seedProject(fixture, agentId);
-    const channelId = await createChannel(fixture, 'Docker 网络边界');
-    await joinChannel(fixture, channelId, agentId);
-    await configureDockerChannel(fixture, channelId, fixture.project);
-    await sendMessage(fixture, channelId, '跑一轮');
-    const created = createEntries(fixture)[0]!;
-    assert.equal(
-      JSON.stringify(created).includes('--network'),
-      false,
-      'no network flag is set on the container (T12 owns the policy)',
-    );
-    const patched = await patchJson(fixture, `/api/channels/${channelId}`, {
-      docker_egress: 'none',
-    });
-    assert.equal(patched.status, 400);
-    const errorBody = (await readJson(patched))['error'] as Record<string, unknown> | undefined;
-    assert.equal(errorBody?.['code'] ?? 'unknown', 'validation_failed');
+    const dockerChannel = await createChannel(fixture, 'Docker 网络边界');
+    await joinChannel(fixture, dockerChannel, agentId);
+    await configureDockerChannel(fixture, dockerChannel, fixture.project);
+
+    // The default switch is 0: no network until the channel asks for it.
+    await sendMessage(fixture, dockerChannel, '跑一轮');
+    assert.equal(createdNetwork(fixture), 'none');
+
+    // The switch is a Docker-backend fact: a local round never creates a
+    // container.
+    const localChannel = await createChannel(fixture, '本地网络边界');
+    await joinChannel(fixture, localChannel, agentId);
+    await configureChannel(fixture, localChannel, { workspace_root: fixture.project });
+    await sendMessage(fixture, localChannel, '本地跑一轮');
+    assert.equal(createEntries(fixture).length, 1, 'a local round has no container');
+
+    // No second egress face: the channel view owns the switch and there is no
+    // `/api/docker-egress` route.
     const workspace = await readJson(await fetch(`${fixture.base}/api/workspace`));
     assert.equal('docker_egress' in workspace, false);
     const route = await fetch(`${fixture.base}/api/docker-egress`);
     assert.equal(route.status, 404);
+  } finally {
+    await fixture.stop();
+  }
+});
+
+function channelEgressColumn(dataDir: string, channelId: string): number | undefined {
+  const db = new Database(path.join(dataDir, 'allibot.db'), { readonly: true });
+  try {
+    return (
+      db
+        .prepare('SELECT docker_egress FROM channel WHERE id = ?')
+        .get(channelId) as { docker_egress: number } | undefined
+    )?.docker_egress;
+  } finally {
+    db.close();
+  }
+}
+
+test('PATCH accepts docker_egress 0 | 1 and rejects every other value with 400 and no write', async () => {
+  const fixture = await startFixture('allibot-docker-egress-patch-', {
+    scriptedProvider: 'reply',
+  });
+  try {
+    const agentId = await createAgent(fixture);
+    const channelId = await createChannel(fixture, 'Docker 开关');
+    await joinChannel(fixture, channelId, agentId);
+
+    const initial = await readJson(await fetch(`${fixture.base}/api/channels/${channelId}`));
+    assert.equal(initial['docker_egress'], 0, 'a channel has no container network until told to');
+
+    const enabled = await patchJson(fixture, `/api/channels/${channelId}`, { docker_egress: 1 });
+    assert.equal(enabled.status, 200, await enabled.clone().text());
+    assert.equal((await readJson(enabled))['docker_egress'], 1, 'PATCH returns the new reading');
+    assert.equal(channelEgressColumn(fixture.dataDir, channelId), 1);
+    const list = await readJson(await fetch(`${fixture.base}/api/channels`));
+    assert.deepEqual(
+      (list['channels'] as Record<string, unknown>[]).map((entry) => entry['docker_egress']),
+      [1],
+      'the channel list carries the same reading',
+    );
+
+    for (const invalid of [2, '1', null, true, -1]) {
+      const patch = await patchJson(fixture, `/api/channels/${channelId}`, {
+        docker_egress: invalid,
+      });
+      assert.equal(patch.status, 400, `invalid switch ${JSON.stringify(invalid)}`);
+      const errorBody = (await readJson(patch))['error'] as Record<string, unknown> | undefined;
+      assert.equal(errorBody?.['code'] ?? 'unknown', 'validation_failed');
+      assert.equal(
+        channelEgressColumn(fixture.dataDir, channelId),
+        1,
+        'a rejected switch writes nothing',
+      );
+    }
+
+    const disabled = await patchJson(fixture, `/api/channels/${channelId}`, { docker_egress: 0 });
+    assert.equal(disabled.status, 200, await disabled.clone().text());
+    assert.equal((await readJson(disabled))['docker_egress'], 0);
+    assert.equal(channelEgressColumn(fixture.dataDir, channelId), 0);
+
+    // Mirrors allow_local_shell: the switch is channel-only, and the existing
+    // binary field keeps its own PATCH shape and reading.
+    const agentPatch = await patchJson(fixture, `/api/agents/${agentId}`, { docker_egress: 1 });
+    assert.equal(agentPatch.status, 400, await agentPatch.clone().text());
+    const shell = await patchJson(fixture, `/api/channels/${channelId}`, { allow_local_shell: 1 });
+    assert.equal(shell.status, 200, await shell.clone().text());
+    const readBack = await readJson(shell);
+    assert.equal(readBack['docker_egress'], 0);
+    assert.deepEqual(readBack['workspace'], {
+      root: null,
+      backend: 'local',
+      allow_local_shell: 1,
+    });
   } finally {
     await fixture.stop();
   }

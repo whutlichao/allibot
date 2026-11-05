@@ -63,6 +63,7 @@ interface ChannelWriteInput {
   /** The raw tier; `null` un-configures it (an omitted field is `undefined`). */
   webAccess?: WebAccessTier | null;
   allowLocalShell?: 0 | 1;
+  dockerEgress?: 0 | 1;
 }
 
 const CHANNEL_SELECT = `
@@ -81,6 +82,7 @@ const FIELD_KEYS = {
   permission_mode: 'permissionMode',
   web_access: 'webAccess',
   allow_local_shell: 'allowLocalShell',
+  docker_egress: 'dockerEgress',
   response_budget_limit: 'responseBudgetLimit',
 } as const;
 
@@ -206,6 +208,7 @@ export function updateChannel(
       const nextPermissionMode = patch.permissionMode ?? current.permission_mode;
       const nextWebAccess = patch.webAccess !== undefined ? patch.webAccess : current.web_access;
       const nextAllowLocalShell = patch.allowLocalShell ?? (current.allow_local_shell === 1 ? 1 : 0);
+      const nextDockerEgress = patch.dockerEgress ?? (current.docker_egress === 1 ? 1 : 0);
       const nextRoot = patch.workspaceRootProvided === true
         ? (patch.workspaceRoot === null
             ? null
@@ -223,7 +226,8 @@ export function updateChannel(
         nextBackend !== current.workspace_backend ||
         nextPermissionMode !== current.permission_mode ||
         nextWebAccess !== current.web_access ||
-        nextAllowLocalShell !== current.allow_local_shell;
+        nextAllowLocalShell !== current.allow_local_shell ||
+        nextDockerEgress !== current.docker_egress;
       if (!changed) {
         return { found: true, changed: false, teamChanged: false };
       }
@@ -232,7 +236,8 @@ export function updateChannel(
         `UPDATE channel
             SET name = ?, description = ?, mode = ?, team_leader_member_id = ?,
                 workspace_root = ?, workspace_backend = ?, permission_mode = ?,
-                allow_local_shell = ?, web_access = ?, response_budget_limit = ?, updated_at = ?
+                allow_local_shell = ?, web_access = ?, docker_egress = ?,
+                response_budget_limit = ?, updated_at = ?
           WHERE id = ?`,
       ).run(
         nextName,
@@ -244,6 +249,7 @@ export function updateChannel(
         nextPermissionMode,
         nextAllowLocalShell,
         nextWebAccess,
+        nextDockerEgress,
         nextBudget,
         new Date().toISOString(),
         id,
@@ -437,6 +443,9 @@ function parsePatchInput(body: unknown): ChannelWriteInput {
   }
   if (record['allow_local_shell'] !== undefined) {
     patch.allowLocalShell = requireBinary(record['allow_local_shell'], 'allow_local_shell');
+  }
+  if (record['docker_egress'] !== undefined) {
+    patch.dockerEgress = requireBinary(record['docker_egress'], 'docker_egress');
   }
   const description = optionalString(record, 'description');
   if (description !== undefined) {

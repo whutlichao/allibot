@@ -457,6 +457,7 @@ export function dockerContainerSpec(options: {
       'allibot.target': options.targetId,
     },
     mounts: dockerMounts(options),
+    network: 'none',
     // M2 does not build images: the image only needs a long-lived `/bin/sh`
     // compatible process so the container stays up between execs.
     command: ['sleep', 'infinity'],
