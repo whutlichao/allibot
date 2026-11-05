@@ -445,6 +445,16 @@ export interface PermissionReading {
   permission_mode_override: PermissionMode | null;
 }
 
+/**
+ * The three web-access tiers of 联网档 (D1): `off` assembles no web tool at
+ * all, `search` assembles only `web_search`, `search+fetch` adds `fetch`. The
+ * stored column is nullable — `NULL` means unconfigured on a channel and
+ * follow-the-channel on an Agent — and an unconfigured read falls back to
+ * `search`, so the default is not a fourth stored value.
+ */
+export const WEB_ACCESS_TIERS = ['off', 'search', 'search+fetch'] as const;
+export type WebAccessTier = (typeof WEB_ACCESS_TIERS)[number];
+
 /** One tool call inside an approval request (arguments already masked). */
 export interface ApprovalToolCallView {
   tool_call_id: string;
@@ -525,6 +535,11 @@ export interface ChannelConfigPatch {
   allow_local_shell?: 0 | 1;
   /** The channel's permission default; it has no override (rules do). */
   permission_mode?: PermissionMode;
+  /**
+   * The channel's 联网档; `null` is the explicit "unconfigured" value the read
+   * path falls back from, so it is a write, not an omission.
+   */
+  web_access?: WebAccessTier | null;
 }
 
 /**
@@ -545,6 +560,17 @@ export interface ChannelView {
    * unless the Agent carries an override.
    */
   permission_mode: PermissionMode;
+  /**
+   * The raw channel 联网档 (D1). `null` is unconfigured and reads as the
+   * `search` default; it is never resolved into a tier on this face.
+   */
+  web_access: WebAccessTier | null;
+  /**
+   * The channel's container-egress switch (D1). `0` keeps a Docker workspace
+   * container at `--network none`; the host allowlist is T5's business, so this
+   * face reports the stored switch only.
+   */
+  docker_egress: 0 | 1;
   response_budget_limit: number;
   archived_at: string | null;
   deleted_at: string | null;

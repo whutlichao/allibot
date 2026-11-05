@@ -4,6 +4,7 @@ import {
   WORKSPACE_BACKENDS,
   type ChannelMode,
   type ChannelView,
+  type WebAccessTier,
   type WorkspaceBackend,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
@@ -32,6 +33,8 @@ export interface ChannelRow {
   workspace_backend: string;
   allow_local_shell: number;
   permission_mode: string;
+  web_access: string | null;
+  docker_egress: number;
   response_budget_limit: number;
   archived_at: string | null;
   deleted_at: string | null;
@@ -57,8 +60,8 @@ interface ChannelWriteInput {
 
 const CHANNEL_SELECT = `
 SELECT id, name, description, mode, team_leader_member_id, workspace_root,
-       workspace_backend, allow_local_shell, permission_mode, response_budget_limit,
-       archived_at, deleted_at, created_at, updated_at
+       workspace_backend, allow_local_shell, permission_mode, web_access, docker_egress,
+       response_budget_limit, archived_at, deleted_at, created_at, updated_at
 FROM channel`;
 
 const FIELD_KEYS = {
@@ -571,6 +574,9 @@ function toChannelView(
       typeof row.permission_mode === 'string'
         ? (row.permission_mode as ChannelView['permission_mode'])
         : DEFAULT_PERMISSION_MODE,
+    web_access:
+      typeof row.web_access === 'string' ? (row.web_access as WebAccessTier) : null,
+    docker_egress: row.docker_egress === 1 ? 1 : 0,
     response_budget_limit: row.response_budget_limit,
     archived_at: row.archived_at,
     deleted_at: row.deleted_at,
