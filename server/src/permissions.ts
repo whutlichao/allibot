@@ -1,12 +1,14 @@
 import {
   PERMISSION_BEHAVIORS,
   PERMISSION_MODES,
+  WEB_ACCESS_TIERS,
   type PermissionBehavior,
   type PermissionMode,
   type PermissionReading,
   type PermissionRuleInput,
   type PermissionRuleView,
   type PermissionScopeKind,
+  type WebAccessTier,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import { ApiFailure } from './api-error.js';
@@ -36,6 +38,9 @@ import { readTargetKind } from './sql.js';
  */
 
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'ask-writes';
+
+/** The tier an unconfigured (`NULL`) web-access value resolves to (D1). */
+export const DEFAULT_WEB_ACCESS_TIER: WebAccessTier = 'search';
 
 export type ToolClass = 'read' | 'write' | 'execute' | 'internal';
 
@@ -203,6 +208,27 @@ export function requirePermissionMode(value: unknown): PermissionMode {
     throw ApiFailure.validation(
       `permission_mode must be one of: ${PERMISSION_MODES.join(', ')}`,
       { field: 'permission_mode', value },
+    );
+  }
+  return value;
+}
+
+export function isWebAccessTier(value: unknown): value is WebAccessTier {
+  return typeof value === 'string' && (WEB_ACCESS_TIERS as readonly string[]).includes(value);
+}
+
+/**
+ * The write-path gate for 联网档 (#68 / D1): exactly the three stored tiers, so
+ * `'all'`, a number, `'SEARCH'` and a padded `'search '` are all 400s. `null` is
+ * not a tier — the nullable column is the caller's `optional` wrapper's
+ * business, which keeps "clear back to unconfigured" distinguishable from "a
+ * value that is not a tier".
+ */
+export function requireWebAccessTier(value: unknown): WebAccessTier {
+  if (!isWebAccessTier(value)) {
+    throw ApiFailure.validation(
+      `web_access must be one of: ${WEB_ACCESS_TIERS.join(', ')}`,
+      { field: 'web_access', value },
     );
   }
   return value;

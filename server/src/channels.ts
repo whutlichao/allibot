@@ -16,7 +16,7 @@ import {
   assertAssignableTeamLeader,
   readTeamView,
 } from './team.js';
-import { requirePermissionMode, DEFAULT_PERMISSION_MODE } from './permissions.js';
+import { requirePermissionMode, DEFAULT_PERMISSION_MODE, requireWebAccessTier } from './permissions.js';
 import { validateWorkspaceRoot } from './workspace-root.js';
 
 /** The allowed response budget upper bounds; the default is 3. */
@@ -55,6 +55,8 @@ interface ChannelWriteInput {
   workspaceRoot?: string | null;
   workspaceBackend?: WorkspaceBackend;
   permissionMode?: import('@allibot/shared').PermissionMode;
+  /** `web_access` was present in the body; an explicit null clears it. */
+  webAccess?: WebAccessTier | null;
   allowLocalShell?: 0 | 1;
 }
 
@@ -72,6 +74,7 @@ const FIELD_KEYS = {
   workspace_root: 'workspaceRoot',
   workspace_backend: 'workspaceBackend',
   permission_mode: 'permissionMode',
+  web_access: 'webAccess',
   allow_local_shell: 'allowLocalShell',
   response_budget_limit: 'responseBudgetLimit',
 } as const;
@@ -196,6 +199,7 @@ export function updateChannel(
       const nextBudget = patch.responseBudgetLimit ?? current.response_budget_limit;
       const nextBackend = patch.workspaceBackend ?? (current.workspace_backend as WorkspaceBackend);
       const nextPermissionMode = patch.permissionMode ?? current.permission_mode;
+      const nextWebAccess = patch.webAccess !== undefined ? patch.webAccess : current.web_access;
       const nextAllowLocalShell = patch.allowLocalShell ?? (current.allow_local_shell === 1 ? 1 : 0);
       const nextRoot = patch.workspaceRootProvided === true
         ? (patch.workspaceRoot === null
@@ -213,6 +217,7 @@ export function updateChannel(
         nextRoot !== current.workspace_root ||
         nextBackend !== current.workspace_backend ||
         nextPermissionMode !== current.permission_mode ||
+        nextWebAccess !== current.web_access ||
         nextAllowLocalShell !== current.allow_local_shell;
       if (!changed) {
         return { found: true, changed: false, teamChanged: false };
@@ -222,7 +227,7 @@ export function updateChannel(
         `UPDATE channel
             SET name = ?, description = ?, mode = ?, team_leader_member_id = ?,
                 workspace_root = ?, workspace_backend = ?, permission_mode = ?,
-                allow_local_shell = ?, response_budget_limit = ?, updated_at = ?
+                allow_local_shell = ?, web_access = ?, response_budget_limit = ?, updated_at = ?
           WHERE id = ?`,
       ).run(
         nextName,
@@ -233,6 +238,7 @@ export function updateChannel(
         nextBackend,
         nextPermissionMode,
         nextAllowLocalShell,
+        nextWebAccess,
         nextBudget,
         new Date().toISOString(),
         id,
@@ -421,6 +427,9 @@ function parsePatchInput(body: unknown): ChannelWriteInput {
   if (record['permission_mode'] !== undefined) {
     patch.permissionMode = requirePermissionMode(record['permission_mode']);
   }
+  if (record['web_access'] !== undefined) {
+    patch.webAccess = optionalWebAccessTier(record['web_access']);
+  }
   if (record['allow_local_shell'] !== undefined) {
     patch.allowLocalShell = requireBinary(record['allow_local_shell'], 'allow_local_shell');
   }
@@ -485,6 +494,11 @@ function requireAutonomousCreateMode(value: unknown): void {
       { field: 'mode', value },
     );
   }
+}
+
+/** `null` is the stored "unconfigured" value; a string must be one of three tiers. */
+function optionalWebAccessTier(value: unknown): WebAccessTier | null {
+  return value === null ? null : requireWebAccessTier(value);
 }
 
 /** The explicit local-shell switch (#46 / D5.4): exactly 0 or 1. */

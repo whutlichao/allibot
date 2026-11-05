@@ -141,3 +141,60 @@ test('GET /api/channels/{id} reads an unconfigured web_access and the default eg
     await fixture.stop();
   }
 });
+
+test('PATCH /api/channels/{id} writes the web-access tier, and an explicit null is unconfigured', async () => {
+  const fixture = await startWebAccessFixture('allibot-web-access-channel-write-');
+  try {
+    const channelId = await createChannel(fixture);
+
+    const off = await patchJson(fixture, `/api/channels/${channelId}`, { web_access: 'off' });
+    assert.equal(off.status, 200, await off.clone().text());
+    assert.equal((await readJson(off))['web_access'], 'off', 'the PATCH returns the new reading');
+    assert.equal(
+      queryDatabase<{ web_access: string | null }>(
+        fixture.dataDir,
+        'SELECT web_access FROM channel WHERE id = ?',
+        [channelId],
+      )?.web_access,
+      'off',
+    );
+
+    const fetchTier = await patchJson(fixture, `/api/channels/${channelId}`, {
+      web_access: 'search+fetch',
+    });
+    assert.equal(fetchTier.status, 200, await fetchTier.clone().text());
+    const detail = await fetch(`${fixture.base}/api/channels/${channelId}`);
+    assert.equal((await readJson(detail))['web_access'], 'search+fetch');
+
+    const search = await patchJson(fixture, `/api/channels/${channelId}`, { web_access: 'search' });
+    assert.equal(search.status, 200, await search.clone().text());
+    assert.equal((await readJson(search))['web_access'], 'search');
+
+    const cleared = await patchJson(fixture, `/api/channels/${channelId}`, { web_access: null });
+    assert.equal(cleared.status, 200, await cleared.clone().text());
+    assert.equal(
+      (await readJson(cleared))['web_access'],
+      null,
+      'null is the stored unconfigured value, not a fourth tier',
+    );
+    assert.equal(
+      queryDatabase<{ web_access: string | null }>(
+        fixture.dataDir,
+        'SELECT web_access FROM channel WHERE id = ?',
+        [channelId],
+      )?.web_access,
+      null,
+    );
+    assert.equal(
+      queryDatabase<{ name: string }>(
+        fixture.dataDir,
+        'SELECT name FROM channel WHERE id = ?',
+        [channelId],
+      )?.name,
+      CHANNEL_BODY.name,
+      'a tier write leaves the other columns alone',
+    );
+  } finally {
+    await fixture.stop();
+  }
+});
