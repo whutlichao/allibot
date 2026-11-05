@@ -14,6 +14,7 @@ import {
   type RecordingEndpoint,
   type RunningServer,
 } from './support.ts';
+import { PROVIDER_ROWS, type ProviderRow } from './provider-rows.ts';
 
 /**
  * 编排类工具与结构化通道 (#77 / T11 / D3 / D4 / D11): the real model drives the
@@ -25,191 +26,6 @@ import {
  * shape. Every case runs on both provider rows, so neither the wire shape nor
  * the structured channel can drift on one side only.
  */
-
-/** The sentinel credential the recording endpoint's env carries. */
-const PROVIDER_KEY = 'sk-orchestration-0123456789abcdefghij-wxyz';
-
-/** One tool call a provider turn asks the round to run. */
-interface ToolCallShape {
-  id: string;
-  name: string;
-  input: unknown;
-}
-
-/** One tool definition a recorded request carried, normalized across providers. */
-interface ToolDefinitionShape {
-  name: string;
-  description: string;
-  schema: Record<string, unknown>;
-}
-
-/** One tool result a recorded request fed back, normalized across providers. */
-interface ToolResultShape {
-  id: string;
-  content: string;
-  isError: boolean;
-}
-
-/**
- * One provider's wire shape. This file owns what is specific to the
- * orchestration tools and the structured channel; `model-tool-loop-http.test.ts`
- * owns the general parsing matrix, and both rows here answer the same cases.
- */
-interface ProviderRow {
-  label: 'anthropic' | 'openai';
-  model: string;
-  provider: 'anthropic' | 'openai';
-  env: (baseUrl: string) => NodeJS.ProcessEnv;
-  path: string;
-  /** One assistant turn that requests the given tool calls. */
-  toolCalls: (calls: readonly ToolCallShape[], narration?: string) => RecordedReply;
-  /** One assistant turn that carries text and asks for nothing. */
-  text: (body: string) => RecordedReply;
-  /** One assistant turn that carries no text at all: the empty completion. */
-  emptyText: () => RecordedReply;
-  toolDefinitions: (payload: Record<string, unknown>) => ToolDefinitionShape[];
-  toolResults: (payload: Record<string, unknown>) => ToolResultShape[];
-}
-
-function messagesOf(payload: Record<string, unknown>): Record<string, unknown>[] {
-  const messages = payload['messages'];
-  return Array.isArray(messages) ? (messages as Record<string, unknown>[]) : [];
-}
-
-function blocksOf(message: Record<string, unknown>): Record<string, unknown>[] {
-  const content = message['content'];
-  return Array.isArray(content) ? (content as Record<string, unknown>[]) : [];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-const ANTHROPIC: ProviderRow = {
-  label: 'anthropic',
-  model: 'anthropic:claude-sonnet-4-5',
-  provider: 'anthropic',
-  env: (baseUrl) => ({ ANTHROPIC_API_KEY: PROVIDER_KEY, ANTHROPIC_BASE_URL: baseUrl }),
-  path: '/v1/messages',
-  toolCalls: (calls, narration) => ({
-    status: 200,
-    body: {
-      content: [
-        ...(narration === undefined ? [] : [{ type: 'text', text: narration }]),
-        ...calls.map((call) => ({
-          type: 'tool_use',
-          id: call.id,
-          name: call.name,
-          input: call.input,
-        })),
-      ],
-    },
-  }),
-  text: (body) => ({ status: 200, body: { content: [{ type: 'text', text: body }] } }),
-  emptyText: () => ({ status: 200, body: { content: [{ type: 'text', text: '' }] } }),
-  toolDefinitions: (payload) => {
-    const tools = payload['tools'];
-    if (!Array.isArray(tools)) {
-      return [];
-    }
-    return (tools as Record<string, unknown>[]).map((tool) => ({
-      name: String(tool['name']),
-      description: String(tool['description'] ?? ''),
-      schema: (tool['input_schema'] ?? {}) as Record<string, unknown>,
-    }));
-  },
-  toolResults: (payload) => {
-    const results: ToolResultShape[] = [];
-    for (const message of messagesOf(payload)) {
-      if (message['role'] !== 'user') {
-        continue;
-      }
-      for (const block of blocksOf(message)) {
-        if (block['type'] !== 'tool_result') {
-          continue;
-        }
-        results.push({
-          id: String(block['tool_use_id']),
-          content:
-            typeof block['content'] === 'string' ? block['content'] : JSON.stringify(block['content']),
-          isError: block['is_error'] === true,
-        });
-      }
-    }
-    return results;
-  },
-};
-
-const OPENAI: ProviderRow = {
-  label: 'openai',
-  model: 'openai:gpt-5',
-  provider: 'openai',
-  env: (baseUrl) => ({ OPENAI_API_KEY: PROVIDER_KEY, OPENAI_BASE_URL: baseUrl }),
-  path: '/chat/completions',
-  toolCalls: (calls, narration) => ({
-    status: 200,
-    body: {
-      choices: [
-        {
-          message: {
-            role: 'assistant',
-            content: narration ?? null,
-            tool_calls: calls.map((call) => ({
-              id: call.id,
-              type: 'function',
-              function: { name: call.name, arguments: JSON.stringify(call.input) },
-            })),
-          },
-        },
-      ],
-    },
-  }),
-  text: (body) => ({
-    status: 200,
-    body: { choices: [{ message: { role: 'assistant', content: body } }] },
-  }),
-  emptyText: () => ({
-    status: 200,
-    body: { choices: [{ message: { role: 'assistant', content: '' } }] },
-  }),
-  toolDefinitions: (payload) => {
-    const tools = payload['tools'];
-    if (!Array.isArray(tools)) {
-      return [];
-    }
-    return (tools as Record<string, unknown>[]).map((tool) => {
-      const fn = isRecord(tool['function']) ? tool['function'] : {};
-      return {
-        name: String(fn['name']),
-        description: String(fn['description'] ?? ''),
-        schema: (fn['parameters'] ?? {}) as Record<string, unknown>,
-      };
-    });
-  },
-  toolResults: (payload) => {
-    const results: ToolResultShape[] = [];
-    for (const message of messagesOf(payload)) {
-      if (message['role'] !== 'tool') {
-        continue;
-      }
-      const content =
-        typeof message['content'] === 'string'
-          ? message['content']
-          : JSON.stringify(message['content']);
-      results.push({
-        id: String(message['tool_call_id']),
-        content,
-        // This wire shape has no `is_error`: a failed call states its stable
-        // code as the first line of its content.
-        isError: /^\[[^\]]+\] error: /.test(content),
-      });
-    }
-    return results;
-  },
-};
-
-/** Both rows run the same cases; this list is the matrix's only source. */
-const PROVIDER_ROWS: readonly ProviderRow[] = [ANTHROPIC, OPENAI];
 
 interface Fixture {
   tmp: string;
@@ -579,6 +395,54 @@ for (const provider of PROVIDER_ROWS) {
     }
   });
 
+  test(`[${provider.label}] a TeamAssign call that names the leader itself is a target_self result and the round continues`, async () => {
+    const fixture = await startFixture(`allibot-orchestration-assign-self-${provider.label}-`, provider);
+    try {
+      const channelId = await createChannel(fixture);
+      const leaderId = await createAgent(fixture, provider, '队长');
+      await joinChannel(fixture, channelId, leaderId);
+      await makeTeam(fixture, channelId, leaderId);
+      await confirmRemoteDataFlow(fixture, provider);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([
+          {
+            id: 'call-self',
+            name: 'TeamAssign',
+            input: { member_id: leaderId, instruction: '交给自己' },
+          },
+        ]),
+        provider.text('分给自己不行，我自己做'),
+      ]);
+
+      await sendMessage(fixture, channelId, '@队长 把这件事交给你自己');
+
+      assert.equal(
+        fixture.endpoint.requests.length,
+        2,
+        'a refused assignment runs no member sub-round',
+      );
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.id, 'call-self');
+      assert.equal(results[0]?.isError, true, 'a refusal is an error tool result');
+      assert.ok(
+        (results[0]?.content ?? '').startsWith('[TeamAssign] error: target_self'),
+        `the stable code reaches the model: ${results[0]?.content ?? ''}`,
+      );
+      assert.deepEqual(
+        (await messages(fixture, channelId)).map((message) => [message['kind'], message['body']]),
+        [
+          ['human', '@队长 把这件事交给你自己'],
+          ['agent', '分给自己不行，我自己做'],
+        ],
+        'the refusal is a result: the round still answers',
+      );
+      assert.equal(roundOutcomes(fixture)[0]?.status, 'replied');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   test(`[${provider.label}] a transfer_task call moves the task and the action comes from the tool call`, async () => {
     const fixture = await startFixture(`allibot-orchestration-transfer-${provider.label}-`, provider);
     try {
@@ -631,6 +495,58 @@ for (const provider of PROVIDER_ROWS) {
           ZH_CN['round.transfer.done'].text.replace('{assignee}', '成员乙'),
         ),
         `the round states the structured action it took: ${firstOutcome?.reason ?? ''}`,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] a round that transfers and lands no text leaves the task where it was`, async () => {
+    const fixture = await startFixture(
+      `allibot-orchestration-transfer-empty-${provider.label}-`,
+      provider,
+    );
+    try {
+      const channelId = await createChannel(fixture);
+      const assigneeId = await createAgent(fixture, provider, '成员甲');
+      const otherId = await createAgent(fixture, provider, '成员乙');
+      for (const member of [assigneeId, otherId]) {
+        await joinChannel(fixture, channelId, member);
+      }
+      const task = await createTask(fixture, channelId, '空正文转派任务');
+      await assignTask(fixture, task.id, assigneeId);
+      await confirmRemoteDataFlow(fixture, provider);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([
+          { id: 'call-transfer', name: 'transfer_task', input: { member_id: otherId } },
+        ]),
+        provider.emptyText(),
+      ]);
+
+      await sendMessage(fixture, task.targetId, '@成员甲 把任务交给成员乙，然后什么都不用写');
+
+      const result = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!))[0];
+      assert.equal(result?.isError, false, 'the call itself is a result like any other');
+      const outcome = roundOutcomes(fixture)[0];
+      assert.equal(outcome?.member_id, assigneeId);
+      assert.equal(outcome?.status, 'failed', 'no text is still the empty-completion failure');
+      assert.equal(
+        readAssignee(fixture, task.id),
+        assigneeId,
+        'a round with no conclusion states no task action, so the task does not move',
+      );
+      assert.equal(
+        (await messages(fixture, task.targetId)).some(
+          (message) =>
+            message['kind'] === 'system' &&
+            String(message['body']).includes(
+              ZH_CN['task.event.assignee.transferred'].text
+                .replace('{previous}', '成员甲')
+                .replace('{assignee}', '成员乙'),
+            ),
+        ),
+        false,
+        'the write path wrote no transfer record',
       );
     } finally {
       await fixture.stop();

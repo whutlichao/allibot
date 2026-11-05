@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import { ZH_CN } from '@allibot/shared';
+import { MAX_SHELL_OUTPUT_BYTES } from '../dist/local-shell.js';
 import {
   removeTempDir,
   runCli,
@@ -38,9 +39,6 @@ const PROVIDER_KEY = 'sk-bash-loop-0123456789abcdefghij-wxyz';
 
 /** The one model this file's Agent is configured with. */
 const MODEL = 'anthropic:claude-sonnet-4-5';
-
-/** The shell's own output cap; a larger output is the truncation fact's trigger. */
-const MAX_SHELL_OUTPUT_BYTES = 1024 * 1024;
 
 /** One tool call a provider turn asks the round to run. */
 interface ToolCallShape {
@@ -490,6 +488,11 @@ test('a non-zero exit code and its stderr come back as the tool result and the m
     const results = toolResults(requestPayload(fixture.endpoint.requests[1]!));
     assert.equal(results.length, 1);
     assert.equal(results[0]?.id, 'call-fail');
+    assert.equal(
+      results[0]?.isError,
+      false,
+      'a non-zero exit is the command\'s own result, not a tool error',
+    );
     const content = results[0]?.content ?? '';
     assert.ok(content.includes('exit-code: 3'), `the exit code reaches the model: ${content}`);
     assert.ok(content.includes('BASH-STDERR'), `the stderr body reaches the model: ${content}`);

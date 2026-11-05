@@ -3,30 +3,37 @@ import {
   type MessageKey,
   type MessageValues,
   type PlanTaskStatus,
-  type PlanTaskView,
 } from '@allibot/shared';
 import type {
   EditFileRequest,
   GlobFileRequest,
   GrepFileRequest,
   PlanTaskUpdateRequest,
-  RoundFileToolResult,
   RoundFileTools,
   RoundInput,
-  RoundMcpCallResult,
   RoundMcpContext,
   RoundMcpTool,
   RoundPlanFace,
   RoundShell,
-  RoundShellResult,
   TeamAssignRequest,
   TeamAssignToolResult,
   WriteFileRequest,
 } from './agent-seam.js';
-import { MAX_GREP_FILES } from './docker-files.js';
-import { MAX_SHELL_OUTPUT_BYTES } from './local-shell.js';
 import { classifyToolName } from './permissions.js';
-import { MAX_GREP_MATCHES } from './workspace-files.js';
+import {
+  shapeEdit,
+  shapeGlob,
+  shapeGrep,
+  shapeMcpCall,
+  shapeRead,
+  shapeShell,
+  shapeTaskCreate,
+  shapeTaskGet,
+  shapeTaskList,
+  shapeTaskUpdate,
+  shapeTeamAssign,
+  shapeWrite,
+} from './tool-result-shaping.js';
 
 /**
  * The backend's one natural-language renderer, injected by the caller that
@@ -66,11 +73,18 @@ export function capToolResultContent(content: string, t: ToolCopy): string {
  * A tool name is the product's name, not a provider's: `Read` is the same word
  * as `permission_rule.tool_name`, the approval payload and the file tool the
  * round's own face exposes, and `TaskList` is the same word as the Plan face's
- * method. The offered set is this batch's scope — the `read` class plus the
- * read-only `internal` tools — intersected with the round's availability
+ * method. The offered set is this batch's scope — the `read` / `write` classes,
+ * the `internal` tools it offers and the `execute` tools (`Bash` and the `mcp:`
+ * namespace) — intersected with the round's availability
  * calculation (`RoundInput.tools`), so a round that has no file face is offered
  * no file tool and a round with no Plan face is offered no Plan tool — those
  * names are absent from the provider request, not refused at call time.
+ *
+ * This module owns the registry, the round's scope filter, the argument shape
+ * check and the provider schema each spec is serialized to. What a tool hands
+ * back to the model is shaped in `tool-result-shaping.ts`, one function per
+ * tool, so a result's shape and a tool's availability are two separate
+ * reasons to change.
  *
  * The batch's scope grew with its tickets: `Read` / `Glob` / `Grep` over the
  * round's file face and `TaskList` / `TaskGet` over its Plan face (#59);
@@ -416,7 +430,7 @@ const TEAM_ASSIGN: RoundToolSpec = {
     { name: 'member_id', description: 'The member to assign the work to.', required: true },
     { name: 'instruction', description: 'What that member has to do.', required: true },
   ],
-  available: (input) => input.team?.assign != null,
+  available: (input) => input.team?.assign !== undefined,
   async execute(input, context) {
     const request: TeamAssignRequest = {
       member_id: input['member_id'] as string,
@@ -472,7 +486,8 @@ const SOP_VERDICT: RoundToolSpec = {
   ],
   available: () => true,
   async execute(input) {
-    const verdict = input['verdict'] === 'pass' ? 'pass' : 'fail';
+    // The shape check proved the value is one of the two words (D11).
+    const verdict = input['verdict'] as (typeof SOP_VERDICTS)[number];
     return {
       ok: true,
       content: ['[SopVerdict] ok', `verdict: ${verdict}`].join('\n'),
@@ -556,11 +571,12 @@ function mcpToolSpec(server: string, tool: RoundMcpTool): RoundToolSpec {
 }
 
 /**
- * The MCP specs this round may offer, in `RoundInput.tools`' own order: the
- * servers it actually connected, each followed by the tools that server listed.
- * Every one of them is dynamic — a server contributes only what it answered
- * with this round — so an empty assembly is zero specs and zero tools, never a
- * round error.
+ * The MCP specs this round may offer, in the assembly's own server order (the
+ * same order `RoundInput.tools` lists them in, since both are derived from one
+ * `mcp.servers`): the servers it actually connected, each followed by the tools
+ * that server listed. Every one of them is dynamic — a server contributes only
+ * what it answered with this round — so an empty assembly is zero specs and zero
+ * tools, never a round error.
  */
 function mcpToolSpecs(input: RoundInput): RoundToolSpec[] {
   const mcp = input.mcp;
@@ -598,11 +614,14 @@ const MCP_TOOL_PREFIX = 'mcp:';
 
 /**
  * Whether a tool belongs to this batch's scope by its own class (D2): the `read`
- * class, the `write` class (#74), plus the read-only internal tools, read off
- * the product's one classification (`classifyToolName`). This is a scope filter,
- * not a permission decision: it decides what the round's request offers, and the
- * tool gate still decides every call that reaches a face — which is where an
- * `ask` becomes a 600-second approval batch and a `deny` becomes `DENIED`.
+ * class, the `write` class (#74), the `internal` tools this batch offers —
+ * `BATCH_INTERNAL_TOOLS`: the four Plan tools over the current run and the two
+ * team / task actions, none of them read-only — and, for the `execute` class,
+ * `Bash` plus the whole `mcp:` namespace. Every class is read off the product's
+ * one classification (`classifyToolName`). This is a scope filter, not a
+ * permission decision: it decides what the round's request offers, and the tool
+ * gate still decides every call that reaches a face — which is where an `ask`
+ * becomes a 600-second approval batch and a `deny` becomes `DENIED`.
  */
 function inBatchScope(name: string): boolean {
   const reading = classifyToolName(name);
@@ -620,12 +639,14 @@ function inBatchScope(name: string): boolean {
 }
 
 /**
-/**
  * Whether this round offers the tool (D2). The round's own availability
  * calculation — `RoundInput.tools`, narrowed to the batch's classes — is that
  * list for every tool but one: `SopVerdict` is the verifier round's own channel
- * (D11), and no round lists it in `RoundInput.tools` (the product's tool-name
- * vocabulary is the gate's, and an internal tool never passes the gate).
+ * (D11), and the round lists the SOP channel's role instead of the name
+ * (`RoundInput.sop.role`), because a verifier round's tool set is not the
+ * availability calculation's. The exception is about where the visibility comes
+ * from, not about the name's class: `SopVerdict` is classified `internal` by the
+ * one classification table like every other name this batch added.
  */
 function offeredInRound(spec: RoundToolSpec, input: RoundInput): boolean {
   return spec.name === SOP_VERDICT.name
@@ -655,41 +676,24 @@ export function roundToolSpecs(input: RoundInput): RoundToolSpec[] {
  */
 export function roundToolContext(input: RoundInput, copy: ToolCopy): RoundToolContext {
   return {
-    files(): RoundFileTools {
-      const files = input.workspace?.files;
-      if (files === undefined) {
-        throw new Error('tool face missing: this round has no project file face');
-      }
-      return files;
-    },
-    plan(): RoundPlanFace {
-      if (input.plan === null) {
-        throw new Error('tool face missing: this round has no Plan face');
-      }
-      return input.plan;
-    },
-    shell(): RoundShell {
-      const shell = input.workspace?.shell;
-      if (shell === undefined) {
-        throw new Error('tool face missing: this round has no local shell face');
-      }
-      return shell;
-    },
-    mcp(): RoundMcpContext {
-      if (input.mcp === null) {
-        throw new Error('tool face missing: this round assembled no MCP context');
-      }
-      return input.mcp;
-    },
-    assign(): (request: TeamAssignRequest) => Promise<TeamAssignToolResult> {
-      const assign = input.team?.assign;
-      if (assign == null) {
-        throw new Error('tool face missing: this round has no TeamAssign face');
-      }
-      return assign;
-    },
+    files: () => requiredFace(input.workspace?.files, 'project file face'),
+    plan: () => requiredFace(input.plan, 'Plan face'),
+    shell: () => requiredFace(input.workspace?.shell, 'local shell face'),
+    mcp: () => requiredFace(input.mcp, 'MCP context'),
+    assign: () => requiredFace(input.team?.assign, 'TeamAssign face'),
     copy,
   };
+}
+
+/**
+ * One face the round input carries, as the spec that reached it requires: an
+ * absent one is the registry's own bug, stated as one.
+ */
+function requiredFace<T>(value: T | null | undefined, what: string): T {
+  if (value === null || value === undefined) {
+    throw new Error(`tool face missing: this round has no ${what}`);
+  }
+  return value;
 }
 
 /**
@@ -770,308 +774,4 @@ export function checkToolArguments(spec: RoundToolSpec, input: unknown): ToolArg
     }
   }
   return { ok: true, values };
-}
-
-/**
- * The result's own state on its first line. `io-error` is the file face's own
- * catch-all code, so a failed result that somehow carries none still reports a
- * code the model can act on.
- */
-function statusLine(name: string, result: RoundFileToolResult): string {
-  return result.ok ? `[${name}] ok` : `[${name}] error: ${result.error ?? 'io-error'}`;
-}
-
-/** A failed file-tool result: state, the request it answers, then the face's message. */
-function shapeFileFailure(
-  name: string,
-  request: readonly string[],
-  result: RoundFileToolResult,
-): ToolAnswer {
-  const lines = [statusLine(name, result), ...request];
-  if (result.message !== undefined) {
-    lines.push(`message: ${result.message}`);
-  }
-  return { ok: false, content: lines.join('\n') };
-}
-
-/** One `Read` result as the model reads it: summary first, body after it. */
-function shapeRead(requested: string, result: RoundFileToolResult): ToolAnswer {
-  if (!result.ok) {
-    return shapeFileFailure('Read', [`path: ${requested}`], result);
-  }
-  const lines = [statusLine('Read', result), `path: ${result.path ?? requested}`];
-  if (result.scope !== undefined) {
-    lines.push(`root: ${result.scope}`);
-  }
-  if (result.bytes !== undefined) {
-    lines.push(`bytes: ${result.bytes}`);
-  }
-  lines.push('content:', result.content ?? '');
-  return { ok: true, content: lines.join('\n') };
-}
-
-/** One `Glob` result: the request, then one path per line. */
-function shapeGlob(requested: GlobFileRequest, result: RoundFileToolResult): ToolAnswer {
-  const request = [
-    `pattern: ${requested.pattern}`,
-    ...(requested.path === undefined ? [] : [`base: ${requested.path}`]),
-  ];
-  if (!result.ok) {
-    return shapeFileFailure('Glob', request, result);
-  }
-  const lines = [statusLine('Glob', result), ...request];
-  if (result.scope !== undefined) {
-    lines.push(`root: ${result.scope}`);
-  }
-  const paths = result.paths ?? [];
-  lines.push(`files: ${paths.length}`);
-  lines.push(...(paths.length === 0 ? ['(no file matched)'] : paths));
-  return { ok: true, content: lines.join('\n') };
-}
-
-/**
- * One `Grep` result: the request, then one `path:line: text` line per hit.
- *
- * `t` is the round's translation function — the same entry point every backend
- * string uses, bound from `tFromDb` by the caller that holds the database —
- * passed in rather than imported so this module never reads the language
- * preference itself. Exported so a test can pin the model-visible capped copy
- * without a provider round trip.
- */
-export function shapeGrep(
-  requested: GrepFileRequest,
-  result: RoundFileToolResult,
-  t: ToolCopy,
-): ToolAnswer {
-  const request = [
-    `pattern: ${requested.pattern}`,
-    ...(requested.path === undefined ? [] : [`base: ${requested.path}`]),
-  ];
-  if (!result.ok) {
-    return shapeFileFailure('Grep', request, result);
-  }
-  const lines = [statusLine('Grep', result), ...request];
-  if (result.scope !== undefined) {
-    lines.push(`root: ${result.scope}`);
-  }
-  const matches = result.matches ?? [];
-  lines.push(`matches: ${matches.length}`);
-  if (result.capped === 'matches') {
-    lines.push(t('tool.grep.capped.matches', { limit: MAX_GREP_MATCHES }));
-  } else if (result.capped === 'files') {
-    lines.push(t('tool.grep.capped.files', { limit: MAX_GREP_FILES }));
-  }
-  lines.push(
-    ...(matches.length === 0
-      ? ['(no line matched)']
-      : matches.map((match) => `${match.path}:${match.line}: ${match.text}`)),
-  );
-  return { ok: true, content: lines.join('\n') };
-}
-
-/**
- * One `Write` result: the request, then how much landed. The face's own result
- * carries no content echo, so a write of a huge file never doubles the re-feed.
- */
-function shapeWrite(requested: WriteFileRequest, result: RoundFileToolResult): ToolAnswer {
-  const request = [`path: ${requested.path}`];
-  if (!result.ok) {
-    return shapeFileFailure('Write', request, result);
-  }
-  const lines = [statusLine('Write', result), `path: ${result.path ?? requested.path}`];
-  if (result.scope !== undefined) {
-    lines.push(`root: ${result.scope}`);
-  }
-  if (result.bytes !== undefined) {
-    lines.push(`bytes: ${result.bytes}`);
-  }
-  return { ok: true, content: lines.join('\n') };
-}
-
-/** One `Edit` result: the request, then how many occurrences were replaced. */
-function shapeEdit(requested: EditFileRequest, result: RoundFileToolResult): ToolAnswer {
-  const request = [`path: ${requested.path}`];
-  if (!result.ok) {
-    return shapeFileFailure('Edit', request, result);
-  }
-  const lines = [statusLine('Edit', result), `path: ${result.path ?? requested.path}`];
-  if (result.scope !== undefined) {
-    lines.push(`root: ${result.scope}`);
-  }
-  if (result.replacements !== undefined) {
-    lines.push(`replacements: ${result.replacements}`);
-  }
-  return { ok: true, content: lines.join('\n') };
-}
-
-/** One `TaskList` result: the run's size, then one `- [status] title (id)` per item. */
-function shapeTaskList(tasks: readonly PlanTaskView[]): ToolAnswer {
-  const lines = ['[TaskList] ok', `tasks: ${tasks.length}`];
-  if (tasks.length === 0) {
-    lines.push("(this run's plan has no items)");
-  } else {
-    lines.push(...tasks.map((task) => `- [${task.status}] ${task.title} (${task.id})`));
-  }
-  return { ok: true, content: lines.join('\n') };
-}
-
-/** One `TaskGet` result: the item's fields, or the stable `not-found` code. */
-function shapeTaskGet(requested: string, task: PlanTaskView | null): ToolAnswer {
-  if (task === null) {
-    return {
-      ok: false,
-      content: [
-        '[TaskGet] error: not-found',
-        `id: ${requested}`,
-        "message: this id is not an item of this round's plan run",
-      ].join('\n'),
-    };
-  }
-  return { ok: true, content: planTaskLines('TaskGet', task) };
-}
-
-/** One `TaskCreate` result: the item the call appended at the end of the run. */
-function shapeTaskCreate(task: PlanTaskView): ToolAnswer {
-  return { ok: true, content: planTaskLines('TaskCreate', task) };
-}
-
-/** One `TaskUpdate` result: the item as it now reads, or the stable `not-found` code. */
-function shapeTaskUpdate(requested: PlanTaskUpdateRequest, task: PlanTaskView | null): ToolAnswer {
-  if (task === null) {
-    return {
-      ok: false,
-      content: [
-        '[TaskUpdate] error: not-found',
-        `id: ${requested.id}`,
-        "message: this id is not an item of this round's plan run",
-      ].join('\n'),
-    };
-  }
-  return { ok: true, content: planTaskLines('TaskUpdate', task) };
-}
-
-/** One Plan item as the model reads it: the call's own state line, then its fields. */
-function planTaskLines(name: string, task: PlanTaskView): string {
-  return [
-    `[${name}] ok`,
-    `id: ${task.id}`,
-    `title: ${task.title}`,
-    `status: ${task.status}`,
-    `position: ${task.position}`,
-  ].join('\n');
-}
-
-/**
- * One `TeamAssign` result: the request, then the assignment's own facts and the
- * member's output. The output is the only place a sub-round's answer reaches the
- * leader — it is never persisted as a message — so the re-feed cap applies to it
- * like to any other result.
- */
-function shapeTeamAssign(requested: TeamAssignRequest, result: TeamAssignToolResult): ToolAnswer {
-  const request = [
-    `member_id: ${requested.member_id}`,
-    `instruction: ${requested.instruction}`,
-  ];
-  if (!result.ok) {
-    return {
-      ok: false,
-      content: [
-        `[TeamAssign] error: ${result.code ?? 'member_failed'}`,
-        ...request,
-        `state: ${result.state ?? 'none'}`,
-        ...(result.reason === null ? [] : [`message: ${result.reason}`]),
-      ].join('\n'),
-    };
-  }
-  return {
-    ok: true,
-    content: [
-      '[TeamAssign] ok',
-      ...request,
-      `assignment-id: ${result.assignment_id ?? 'none'}`,
-      `state: ${result.state ?? 'none'}`,
-      `jump-consumed: ${result.jump_consumed}`,
-      ...(result.reply_excerpt === null ? [] : [`excerpt: ${result.reply_excerpt}`]),
-      'output:',
-      result.output ?? '',
-    ].join('\n'),
-  };
-}
-
-/**
- * One MCP tool result as the model reads it: the tool's product name, the call
- * it answers, and — when the call failed — the stable code the round's own face
- * produced (`denied`, `tool-error`, `connection`, `unavailable`, …).
- *
- * A denial is a result here, exactly as it is for every other tool: the round
- * continues with what the model makes of `DENIED`. The server's own body is
- * kept whole rather than summarized — it is the tool's answer, and the re-feed
- * cap is what bounds its size (D6).
- */
-function shapeMcpCall(
-  server: string,
-  tool: string,
-  result: RoundMcpCallResult,
-): ToolAnswer {
-  const name = `mcp:${server}/${tool}`;
-  const call = [`server: ${server}`, `tool: ${tool}`];
-  if (!result.ok) {
-    return {
-      ok: false,
-      content: [
-        `[${name}] error: ${result.error ?? 'tool-error'}`,
-        ...call,
-        ...(result.message === undefined ? [] : [`message: ${result.message}`]),
-        ...(result.content === undefined ? [] : ['content:', result.content]),
-      ].join('\n'),
-    };
-  }
-  return {
-    ok: true,
-    content: [`[${name}] ok`, ...call, 'content:', result.content ?? ''].join('\n'),
-  };
-}
-
-/**
- * One `Bash` result as the model reads it: the command, the directory it ran in,
- * its exit code, and — **before either stream** — the one fact that would
- * otherwise be lost: the output was cut at the shell's own cap.
- *
- * The order is the point. A long output is cut by the re-feed cap at its head,
- * so a truncation notice printed after the body is the first thing the model
- * never reads (D6); stating it above the bodies is what makes it survive. The
- * same discipline as `Grep`'s cap: the model must not read a cut result as a
- * complete one.
- *
- * A completed command is a successful call whatever its exit code — the code is
- * stated rather than folded into an error — so a non-zero exit and a missing
- * binary reach the model as this one result.
- */
-function shapeShell(command: string, result: RoundShellResult, t: ToolCopy): ToolAnswer {
-  if (!result.ok) {
-    return {
-      ok: false,
-      content: [
-        `[Bash] error: ${result.error ?? 'spawn-failed'}`,
-        `command: ${command}`,
-        ...(result.message === undefined ? [] : [`message: ${result.message}`]),
-      ].join('\n'),
-    };
-  }
-  return {
-    ok: true,
-    content: [
-      '[Bash] ok',
-      `command: ${command}`,
-      ...(result.cwd === undefined ? [] : [`cwd: ${result.cwd}`]),
-      `exit-code: ${result.exit_code ?? 'none'}`,
-      ...(result.output_truncated === true
-        ? [t('tool.bash.output.truncated', { limit: MAX_SHELL_OUTPUT_BYTES })]
-        : []),
-      'stdout:',
-      result.stdout ?? '',
-      'stderr:',
-      result.stderr ?? '',
-    ].join('\n'),
-  };
 }

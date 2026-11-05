@@ -146,12 +146,23 @@ export function createModelProvider(
         const stated = structuredFields(outcome.facts);
         if (outcome.text.trim().length === 0) {
           // A round with no conclusion — including one that hit the cap before
-          // producing anything — is the existing empty-completion failure.
+          // producing anything — is the existing empty-completion failure. Only
+          // the SOP verdict travels with it: that conclusion *is* the verifier's
+          // whole protocol (`sop-executor.ts` reads nothing else), while a task
+          // action must not survive a round that produced no conclusion. The
+          // write path commits a task action without re-checking the verdict
+          // (`rounds.ts` `commitTaskAction` / `commitTransferAction`), and a
+          // `failed` round does not advance the cursor, so a transfer carried by
+          // one would run again on the next wake of the same triggering message.
+          // The team-assignment path already guards on `verdict !== 'replied'`;
+          // this is the same invariant, kept by not stating the action at all.
           return {
             verdict: 'failed',
             replies: [],
             detail: failureReason(db, 'empty completion', available.credential),
-            ...stated,
+            ...(outcome.facts.sopVerdict === undefined
+              ? {}
+              : { sopVerdict: outcome.facts.sopVerdict }),
           };
         }
         if (outcome.exhausted) {
@@ -189,21 +200,17 @@ function failureReason(db: Database.Database, message: string, secret: string): 
 
 /**
  * The structured facts a round's dedicated tools stated, as the seam's existing
- * `RoundResult` fields (D11). A fact the round did not state is absent, not
- * empty: `taskTransferMemberId` only travels with the `transfer_task` action
- * that names it, and an absent `sopVerdict` still means "the verifier answered
- * no protocol", which is what fails a SOP run.
+ * `RoundResult` fields (D11). `ToolFacts` carries exactly the names and types of
+ * the `RoundResult` fields it feeds, so the spread is the whole mapping: a fact
+ * the round did not state stays absent, not empty — `taskTransferMemberId` only
+ * travels with the `transfer_task` action that names it, and an absent
+ * `sopVerdict` still means "the verifier answered no protocol", which is what
+ * fails a SOP run.
  */
 function structuredFields(
   facts: ToolFacts,
 ): Pick<RoundResult, 'sopVerdict' | 'taskAction' | 'taskTransferMemberId'> {
-  return {
-    ...(facts.sopVerdict === undefined ? {} : { sopVerdict: facts.sopVerdict }),
-    ...(facts.taskAction === undefined ? {} : { taskAction: facts.taskAction }),
-    ...(facts.taskTransferMemberId === undefined
-      ? {}
-      : { taskTransferMemberId: facts.taskTransferMemberId }),
-  };
+  return { ...facts };
 }
 
 /**

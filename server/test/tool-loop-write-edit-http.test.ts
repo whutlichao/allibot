@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -14,6 +14,7 @@ import {
   type RecordingEndpoint,
   type RunningServer,
 } from './support.ts';
+import { PROVIDER_ROWS, type ProviderRow } from './provider-rows.ts';
 
 /**
  * 写类工具进循环 (#74 / D2 / D3 / D4 / D5 / D6 / D10): `Write` and `Edit` are
@@ -30,188 +31,6 @@ import {
  * tool result the model receives in each case. A timed-out batch is the one
  * case that must *not* look like a tool result: it closes the round failed.
  */
-
-/** The sentinel credential the recording endpoint's env carries. */
-const PROVIDER_KEY = 'sk-write-edit-0123456789abcdefghij-wxyz';
-
-/** One tool call a provider turn asks the round to run. */
-interface ToolCallShape {
-  id: string;
-  name: string;
-  input: unknown;
-}
-
-/** One tool definition a recorded request carried, normalized across providers. */
-interface ToolDefinitionShape {
-  name: string;
-  description: string;
-  schema: Record<string, unknown>;
-}
-
-/** One tool result a recorded request fed back, normalized across providers. */
-interface ToolResultShape {
-  id: string;
-  content: string;
-  isError: boolean;
-}
-
-/**
- * One provider's wire shape: how a tool call is requested, how a text answer is
- * shaped, and how the recorded request is read back. Nothing here reaches into
- * the adapter.
- */
-interface ProviderRow {
-  label: 'anthropic' | 'openai';
-  model: string;
-  provider: 'anthropic' | 'openai';
-  env: (baseUrl: string) => NodeJS.ProcessEnv;
-  path: string;
-  toolCalls: (calls: readonly ToolCallShape[], narration?: string) => RecordedReply;
-  text: (body: string) => RecordedReply;
-  toolDefinitions: (payload: Record<string, unknown>) => ToolDefinitionShape[];
-  toolResults: (payload: Record<string, unknown>) => ToolResultShape[];
-}
-
-function messagesOf(payload: Record<string, unknown>): Record<string, unknown>[] {
-  const messages = payload['messages'];
-  return Array.isArray(messages) ? (messages as Record<string, unknown>[]) : [];
-}
-
-function blocksOf(message: Record<string, unknown>): Record<string, unknown>[] {
-  const content = message['content'];
-  return Array.isArray(content) ? (content as Record<string, unknown>[]) : [];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-const ANTHROPIC: ProviderRow = {
-  label: 'anthropic',
-  model: 'anthropic:claude-sonnet-4-5',
-  provider: 'anthropic',
-  env: (baseUrl) => ({ ANTHROPIC_API_KEY: PROVIDER_KEY, ANTHROPIC_BASE_URL: baseUrl }),
-  path: '/v1/messages',
-  toolCalls: (calls, narration) => ({
-    status: 200,
-    body: {
-      content: [
-        ...(narration === undefined ? [] : [{ type: 'text', text: narration }]),
-        ...calls.map((call) => ({
-          type: 'tool_use',
-          id: call.id,
-          name: call.name,
-          input: call.input,
-        })),
-      ],
-    },
-  }),
-  text: (body) => ({ status: 200, body: { content: [{ type: 'text', text: body }] } }),
-  toolDefinitions: (payload) => {
-    const tools = payload['tools'];
-    if (!Array.isArray(tools)) {
-      return [];
-    }
-    return (tools as Record<string, unknown>[]).map((tool) => ({
-      name: String(tool['name']),
-      description: String(tool['description'] ?? ''),
-      schema: (tool['input_schema'] ?? {}) as Record<string, unknown>,
-    }));
-  },
-  toolResults: (payload) => {
-    const results: ToolResultShape[] = [];
-    for (const message of messagesOf(payload)) {
-      if (message['role'] !== 'user') {
-        continue;
-      }
-      for (const block of blocksOf(message)) {
-        if (block['type'] !== 'tool_result') {
-          continue;
-        }
-        results.push({
-          id: String(block['tool_use_id']),
-          content:
-            typeof block['content'] === 'string'
-              ? block['content']
-              : JSON.stringify(block['content']),
-          isError: block['is_error'] === true,
-        });
-      }
-    }
-    return results;
-  },
-};
-
-/**
- * The OpenAI-compatible wire shape: `tools[].function.parameters` out,
- * `choices[0].message.{content,tool_calls}` in, `role: "tool"` results back.
- * It carries no `is_error` flag, so a failed call states its stable error code
- * on the result's first line and that first line is what this row reads.
- */
-const OPENAI: ProviderRow = {
-  label: 'openai',
-  model: 'openai:gpt-5',
-  provider: 'openai',
-  env: (baseUrl) => ({ OPENAI_API_KEY: PROVIDER_KEY, OPENAI_BASE_URL: baseUrl }),
-  path: '/chat/completions',
-  toolCalls: (calls, narration) => ({
-    status: 200,
-    body: {
-      choices: [
-        {
-          message: {
-            role: 'assistant',
-            content: narration ?? null,
-            tool_calls: calls.map((call) => ({
-              id: call.id,
-              type: 'function',
-              function: { name: call.name, arguments: JSON.stringify(call.input) },
-            })),
-          },
-        },
-      ],
-    },
-  }),
-  text: (body) => ({
-    status: 200,
-    body: { choices: [{ message: { role: 'assistant', content: body } }] },
-  }),
-  toolDefinitions: (payload) => {
-    const tools = payload['tools'];
-    if (!Array.isArray(tools)) {
-      return [];
-    }
-    return (tools as Record<string, unknown>[]).map((tool) => {
-      const fn = isRecord(tool['function']) ? tool['function'] : {};
-      return {
-        name: String(fn['name']),
-        description: String(fn['description'] ?? ''),
-        schema: (fn['parameters'] ?? {}) as Record<string, unknown>,
-      };
-    });
-  },
-  toolResults: (payload) => {
-    const results: ToolResultShape[] = [];
-    for (const message of messagesOf(payload)) {
-      if (message['role'] !== 'tool') {
-        continue;
-      }
-      const content =
-        typeof message['content'] === 'string'
-          ? message['content']
-          : JSON.stringify(message['content']);
-      results.push({
-        id: String(message['tool_call_id']),
-        content,
-        isError: /^\[[^\]]+\] error: /.test(content),
-      });
-    }
-    return results;
-  },
-};
-
-/** Both rows run the same cases; this list is the matrix's only source. */
-const PROVIDER_ROWS: readonly ProviderRow[] = [ANTHROPIC, OPENAI];
 
 interface Fixture {
   tmp: string;
@@ -1036,8 +855,43 @@ for (const provider of PROVIDER_ROWS) {
     }
   });
 
-  test(`[${provider.label}] malformed write arguments are tool results and never reach the face`, async () => {
-    const fixture = await startFixture(`allibot-write-edit-shape-${provider.label}-`, provider);
+  test(`[${provider.label}] a write onto an existing directory is an io-error tool result`, async () => {
+    const fixture = await startFixture(`allibot-write-edit-io-${provider.label}-`, provider);
+    try {
+      const round = await openRound(fixture, provider, {
+        prefix: 'project',
+        withRoot: true,
+        permissionMode: 'trusted-writes',
+      });
+      assert.ok(round.project !== null);
+      const directory = path.join(round.project, 'a-directory');
+      mkdirSync(directory);
+      queueReplies(fixture.endpoint, [
+        provider.toolCalls([
+          { id: 'call-io', name: 'Write', input: { path: 'a-directory', content: 'X' } },
+        ]),
+        provider.text('那个路径是个目录，我换个名字再写'),
+      ]);
+
+      await sendMessage(fixture, round.channelId, '@写文件的成员 写到那个目录上');
+
+      const results = provider.toolResults(requestPayload(fixture.endpoint.requests[1]!));
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.id, 'call-io');
+      assert.equal(results[0]?.isError, true, "the face's own failure is an error tool result");
+      assert.ok(
+        (results[0]?.content ?? '').startsWith('[Write] error: io-error'),
+        `the io-error code reaches the model: ${results[0]?.content ?? ''}`,
+      );
+      assert.equal(statSync(directory).isDirectory(), true, 'the directory is untouched');
+      assert.deepEqual(await listApprovals(fixture), [], 'a trusted root write never asks');
+      assert.equal(roundOutcome(fixture).status, 'replied', 'the round continues');
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  test(`[${provider.label}] malformed write arguments are tool results and never reach the face`, async () => {    const fixture = await startFixture(`allibot-write-edit-shape-${provider.label}-`, provider);
     try {
       const round = await openRound(fixture, provider, {
         prefix: 'project',

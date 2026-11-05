@@ -31,7 +31,8 @@ import { readTargetKind } from './sql.js';
  *
  * Tool classification: Read / Glob / Grep read, Write / Edit write, Bash
  * execute, `mcp:<server>/<tool>` execute. TeamAssign / transfer_task / the four
- * Plan tools are orchestration-internal and never pass through this gate.
+ * Plan tools / SopVerdict are orchestration-internal and never pass through
+ * this gate.
  */
 
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'ask-writes';
@@ -52,6 +53,7 @@ const BUILTIN_TOOL_CLASSES: Readonly<Record<string, ToolClass>> = {
   TaskGet: 'internal',
   TaskList: 'internal',
   TaskUpdate: 'internal',
+  SopVerdict: 'internal',
 };
 
 /** MCP tools are `mcp:<server>/<tool>`; both halves must be non-empty. */
