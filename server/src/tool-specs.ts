@@ -6,8 +6,11 @@ import type {
   RoundFileTools,
   RoundInput,
   RoundPlanFace,
+  RoundShell,
+  RoundShellResult,
 } from './agent-seam.js';
 import { MAX_GREP_FILES } from './docker-files.js';
+import { MAX_SHELL_OUTPUT_BYTES } from './local-shell.js';
 import { classifyToolName } from './permissions.js';
 import { MAX_GREP_MATCHES } from './workspace-files.js';
 
@@ -55,10 +58,11 @@ export function capToolResultContent(content: string, t: ToolCopy): string {
  * no file tool and a round with no Plan face is offered no Plan tool — those
  * names are absent from the provider request, not refused at call time.
  *
- * This is the first batch (#59): the read-only tools `Read` / `Glob` / `Grep`
- * over the round's file face and `TaskList` / `TaskGet` over its Plan face. The
- * write, execution and orchestration tools arrive with later batches; a name
- * without a spec here is not offered, even when `RoundInput.tools` lists it.
+ * The batch's scope grew with its tickets: `Read` / `Glob` / `Grep` over the
+ * round's file face and `TaskList` / `TaskGet` over its Plan face (#59), and now
+ * `Bash` over its shell face (#75). The write and orchestration tools arrive
+ * with later batches; a name without a spec here is not offered, even when
+ * `RoundInput.tools` lists it.
  */
 
 /** One argument a tool accepts, in the order the model sees it. */
@@ -80,6 +84,7 @@ export interface ToolArgument {
 export interface RoundToolContext {
   files(): RoundFileTools;
   plan(): RoundPlanFace;
+  shell(): RoundShell;
   copy: ToolCopy;
 }
 
@@ -103,7 +108,9 @@ export interface RoundToolSpec {
   /**
    * Whether this round has the face the tool runs against (D2). `Read` / `Glob`
    * / `Grep` need the project file face, `TaskList` / `TaskGet` need the Plan
-   * face: no face, no tool.
+   * face, `Bash` needs the shell face: no face, no tool. Which rounds are handed
+   * `Bash` at all is the round assembly's rule (`RoundInput.tools`), not this
+   * accessor's: this only states that the face it would call exists.
    */
   available(input: RoundInput): boolean;
   /**
@@ -218,14 +225,43 @@ const TASK_GET: RoundToolSpec = {
   },
 };
 
+const BASH: RoundToolSpec = {
+  name: 'Bash',
+  description:
+    'Run one shell command with `/bin/bash -c`. `command` is the whole command line, and the ' +
+    'working directory is always the project root: it is not an argument and cannot be chosen. ' +
+    'Every call waits for a human decision before it runs; a refusal comes back as `denied` and ' +
+    'the command does not run. A non-zero exit code, a command that does not exist, an empty ' +
+    "stdout and a stderr body are all results of this call, never reasons to stop the round, and " +
+    'an output cut at the size cap says so before the output it shows.',
+  arguments: [
+    {
+      name: 'command',
+      description: 'The shell command line to run in the project root.',
+      required: true,
+    },
+  ],
+  available: (input) => input.workspace !== null,
+  async execute(input, context) {
+    const command = input['command']!;
+    return shapeShell(command, await context.shell().run({ command }), context.copy);
+  },
+};
+
 /** The tools this batch puts in the loop, in the order the model sees them. */
-const BATCH_TOOLS: readonly RoundToolSpec[] = [READ, GLOB, GREP, TASK_LIST, TASK_GET];
+const BATCH_TOOLS: readonly RoundToolSpec[] = [READ, GLOB, GREP, TASK_LIST, TASK_GET, BASH];
 
 /**
  * The `internal` tools this batch offers although their class is not `read`:
  * the two Plan tools that only read the current run.
  */
 const READ_ONLY_INTERNAL_TOOLS: readonly string[] = ['TaskList', 'TaskGet'];
+
+/**
+ * The `execute` tools this batch offers. `Bash` is the one execution tool here;
+ * MCP tools are `execute` too and are a later batch's subject.
+ */
+const BATCH_EXECUTE_TOOLS: readonly string[] = ['Bash'];
 
 /**
  * Whether a tool belongs to this batch's scope by its own class (D2): the `read`
@@ -241,7 +277,8 @@ function inBatchScope(name: string): boolean {
   }
   return (
     reading.tool_class === 'read' ||
-    (reading.tool_class === 'internal' && READ_ONLY_INTERNAL_TOOLS.includes(reading.tool_name))
+    (reading.tool_class === 'internal' && READ_ONLY_INTERNAL_TOOLS.includes(reading.tool_name)) ||
+    (reading.tool_class === 'execute' && BATCH_EXECUTE_TOOLS.includes(reading.tool_name))
   );
 }
 
@@ -277,6 +314,13 @@ export function roundToolContext(input: RoundInput, copy: ToolCopy): RoundToolCo
         throw new Error('tool face missing: this round has no Plan face');
       }
       return input.plan;
+    },
+    shell(): RoundShell {
+      const shell = input.workspace?.shell;
+      if (shell === undefined) {
+        throw new Error('tool face missing: this round has no local shell face');
+      }
+      return shell;
     },
     copy,
   };
@@ -465,6 +509,50 @@ function shapeTaskGet(requested: string, task: PlanTaskView | null): ToolAnswer 
       `title: ${task.title}`,
       `status: ${task.status}`,
       `position: ${task.position}`,
+    ].join('\n'),
+  };
+}
+
+/**
+ * One `Bash` result as the model reads it: the command, the directory it ran in,
+ * its exit code, and — **before either stream** — the one fact that would
+ * otherwise be lost: the output was cut at the shell's own cap.
+ *
+ * The order is the point. A long output is cut by the re-feed cap at its head,
+ * so a truncation notice printed after the body is the first thing the model
+ * never reads (D6); stating it above the bodies is what makes it survive. The
+ * same discipline as `Grep`'s cap: the model must not read a cut result as a
+ * complete one.
+ *
+ * A completed command is a successful call whatever its exit code — the code is
+ * stated rather than folded into an error — so a non-zero exit and a missing
+ * binary reach the model as this one result.
+ */
+function shapeShell(command: string, result: RoundShellResult, t: ToolCopy): ToolAnswer {
+  if (!result.ok) {
+    return {
+      ok: false,
+      content: [
+        `[Bash] error: ${result.error ?? 'spawn-failed'}`,
+        `command: ${command}`,
+        ...(result.message === undefined ? [] : [`message: ${result.message}`]),
+      ].join('\n'),
+    };
+  }
+  return {
+    ok: true,
+    content: [
+      '[Bash] ok',
+      `command: ${command}`,
+      ...(result.cwd === undefined ? [] : [`cwd: ${result.cwd}`]),
+      `exit-code: ${result.exit_code ?? 'none'}`,
+      ...(result.output_truncated === true
+        ? [t('tool.bash.output.truncated', { limit: MAX_SHELL_OUTPUT_BYTES })]
+        : []),
+      'stdout:',
+      result.stdout ?? '',
+      'stderr:',
+      result.stderr ?? '',
     ].join('\n'),
   };
 }

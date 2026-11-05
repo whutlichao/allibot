@@ -87,6 +87,22 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
   成员只读 `skills/` 第二根；越根、不存在、不可读都是回灌给模型的工具结果，不结束轮次。
 - `TaskList` / `TaskGet`：需要 Plan face（`RoundInput.plan` 非空），只读本轮 Plan run；
   `TaskGet` 查不到 id 是 `not-found` 工具结果。
+- `Bash`：执行类。条件是轮次装配已经按 M2 的既有规则把 `Bash` 放进可用集——频道
+  `allow_local_shell=1`，或者 Docker 工作区后端（容器内的 shell）；两者都需要项目根，
+  没有项目根的轮次（DM、未配置根的频道 / 任务）根本没有 shell face。Docker 不可用
+  （无 daemon / 镜像缺失 / consent 缺失 / 容器创建失败）是轮次在适配器之前就失败的
+  目标上下文事实，不是「Bash 被拒」，此时零工具调用。
+  - 参数只有 `command`（一条命令串）：工作目录固定为项目根，**不是**参数，模型无法选择；
+    多给 `cwd` 之类的参数会被参数形状检查拒绝为 `invalid-arguments` 工具结果。
+  - 每次调用都走 M2 的硬审批（`allow_local_shell=1` 之后即使 trusted-writes 或 `Bash`
+    allow 规则也要问）：批准才执行，拒绝是 `denied` 工具结果、命令不执行、轮次继续；
+    `deny` 规则与 read-only 硬顶不询问直接 `DENIED`；等满 600 秒批次超时收口 `failed`。
+  - 非零退出码、stderr、命令不存在（`exit-code: 127`）都是这次调用的结果，不是轮次失败：
+    回灌内容是 `[Bash] ok` + `command` + `cwd` + `exit-code` + `stdout` / `stderr` 两段正文。
+    已完成命令的 `exit_code` 原样陈述，不折成工具错误。
+  - 输出在 shell 侧按每条流 1 MiB 封顶（`MAX_SHELL_OUTPUT_BYTES`）；被截断时回灌结果在
+    **两段正文之前**写明「输出已截断：…超过 1048576 字节上限，超出部分未捕获」。这条事实
+    必须排在正文之前，因为 20000 字的回灌上限会在正文头部切一刀，尾部提示会先被切掉。
 - 两家 provider（`anthropic` 与 `openai:<模型>`）行为一致：工具定义与工具结果各按自己的
   wire shape 序列化（`tools[].input_schema` + `tool_use` / `tools[].function.parameters` +
   `tool_calls`），循环、上限与收口完全一致。
@@ -98,13 +114,13 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
 以下工具名在轮次可用集里，但本批没有给模型提供规格，因此真实模型调不到，只有脚本化
 provider（`--scripted-provider`）能驱动：
 
-- 写类与执行类：`Write` / `Edit` / `Bash` / MCP 工具 `mcp:<server>/<tool>`。
+- 写类：`Write` / `Edit`；MCP 工具 `mcp:<server>/<tool>`。
 - 编排类：`TeamAssign` / `transfer_task` / Plan 的写工具 `TaskCreate` / `TaskUpdate`。
 - `SopVerdict` 的结构化判定通道：通道已定（一个专用 `internal` 类工具映射到既有
   `sopVerdict`），本批未实现；`RoundResult.taskAction` 用的同一条通道同理。
 
-接入真实模型不等于 team 分派、Plan 写、SOP 判定或写类 / 执行类工具可用；本版本不能这样
-宣传。
+接入真实模型不等于 team 分派、Plan 写、SOP 判定或写类工具可用；本版本不能这样宣传。
+执行类的 `Bash` 已进循环，但它的边界是本机明文 shell + 逐次审批 + 项目根工作目录，没有沙箱。
 
 ### 上限语义
 
@@ -126,6 +142,8 @@ provider（`--scripted-provider`）能驱动：
   列出」/「还有文件未扫描」）。封顶是事实而不是计数启发式：恰好 200 条完整命中不会被说成
   封顶。
 - 命中行正文在工具侧已按 300 字截断（带省略号），回灌层不再叠加。
+- `Bash` 的输出在 shell 侧已按 1 MiB 封顶，回灌结果在正文前显式写明「输出已截断」；
+  这一条与回灌层的 20000 字上限是两件事，两条都会在结果里出现。
 
 ### 失败分层
 
@@ -156,8 +174,9 @@ provider（`--scripted-provider`）能驱动：
 - 无 deferred / 异步收口：一轮在同一个 HTTP 请求内跑完，默认最坏情况是 10 批工具执行、11 次
   模型调用 × 单次 60 秒超时，需要审批时再叠加 600 秒批次等待。
 - 无 token 级流式：文本仍一次性返回，AG-UI 的 `TEXT_MESSAGE_CONTENT` 语义不变。
-- 无每 Agent 工具白名单：模型可见工具仍只由轮次可用集（项目根 / Plan face）决定，
-  `permission_rule` 只判定调用是否放行，不是可见性过滤器；也没有新的配置面。
+- 无每 Agent 工具白名单：模型可见工具仍只由轮次可用集（项目根 / Plan face / 频道的
+  `allow_local_shell` 与工作区后端）决定，`permission_rule` 只判定调用是否放行，不是可见性
+  过滤器；也没有新的配置面。
 - 无本机 provider 通道：仍只有 `anthropic` 与 `openai` 两条线（M1 D1.10 的延后项不随本批
   引入）。
 
