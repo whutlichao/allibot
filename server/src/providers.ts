@@ -112,8 +112,13 @@ export function maskSecret(text: string, secret: string): string {
   return secret.length === 0 ? text : text.split(secret).join(maskKey(secret));
 }
 
-/** The human-face form of a credential: a head, an ellipsis and a tail. */
-function maskKey(secret: string): string {
+/**
+ * The human-face form of a credential: a head, an ellipsis and a tail. This is
+ * the one mask formatter — `maskSecret` uses it inside arbitrary text, and a
+ * reading that shows a key's own mask (a web provider credential row) calls it
+ * directly, so the two can never disagree about what a masked key looks like.
+ */
+export function maskKey(secret: string): string {
   return secret.length <= 8 ? '…' : `${secret.slice(0, 3)}…${secret.slice(-4)}`;
 }
 

@@ -1,18 +1,22 @@
-import type { WebAccessTier, WebProvider } from '@allibot/shared';
+import type { WebAccessTier } from '@allibot/shared';
 import type Database from 'better-sqlite3';
 import type {
   RoundMcpContext,
   RoundPermissionFace,
   RoundWebFace,
   RoundWebFetchResult,
-  RoundWebSearchHit,
   RoundWebSearchResult,
   WebFetchRequest,
   WebSearchRequest,
 } from './agent-seam.js';
 import { maskSecret } from './providers.js';
 import type { ToolGate } from './tool-gate.js';
-import { resolveWebSearch, type WebSearchResolution } from './web-providers.js';
+import {
+  resolveWebSearch,
+  webProviderHits,
+  webProviderSearchCall,
+  type WebSearchResolution,
+} from './web-providers.js';
 
 /**
  * 联网工具 (D5 / D8 / D10 / D13): the two calls a round's web face performs —
@@ -23,6 +27,10 @@ import { resolveWebSearch, type WebSearchResolution } from './web-providers.js';
  *
  * Two disciplines keep the boundaries from the spec:
  *
+ * - both calls pass the one tool gate **before any socket** (ADR 0007): a
+ *   `permission_rule` row on `web_search` or `fetch` is never inert, an `ask`
+ *   waits for the human in the usual 600-second batch, and a denial is a tool
+ *   result, not a round failure;
  * - `fetch` carries **no provider key and no credential header of any kind**: it
  *   is a plain GET of the scheme + host + path the model asked for. Only
  *   `web_search` resolves a provider.
@@ -31,8 +39,11 @@ import { resolveWebSearch, type WebSearchResolution } from './web-providers.js';
  *   lives no longer than the request that carries it. Provider echoes are masked
  *   before they land in a result, and a result never contains the key.
  *
- * `fetch`'s gate subject is the URL's **host** (host + port), never path or
- * query, so a `?token=…` can never reach an approval record (D5 / D14).
+ * Both gate subjects are the same spelling: `fetch` names the URL's bare
+ * **hostname** (the host `permission_rule.pattern` and `readChannelEgressHosts`
+ * read, never path, query or port), and `web_search` has no subject at all, so
+ * it uses the empty pattern — the existing "every call of that tool" semantic
+ * (D5 / D14).
  */
 
 /** The hit-count cap: past it a result states `capped: 'hits'` (D13). */
@@ -84,137 +95,6 @@ function unavailableReason(
   }
 }
 
-/** One provider's search request, as the provider's own wire shape expects it. */
-interface ProviderSearchCall {
-  url: string;
-  init: RequestInit;
-}
-
-/** Each provider's search endpoint, auth header and body (D6 / D7). */
-function providerSearchCall(
-  provider: WebProvider,
-  baseUrl: string,
-  query: string,
-  apiKey: string,
-): ProviderSearchCall {
-  switch (provider) {
-    case 'brave':
-      return {
-        url: `${baseUrl}/res/v1/web/search?q=${encodeURIComponent(query)}`,
-        init: {
-          method: 'GET',
-          headers: { accept: 'application/json', 'x-subscription-token': apiKey },
-        },
-      };
-    case 'tavily':
-      return {
-        url: `${baseUrl}/search`,
-        init: {
-          method: 'POST',
-          headers: {
-            accept: 'application/json',
-            'content-type': 'application/json',
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({ query }),
-        },
-      };
-    case 'perplexity':
-      return {
-        url: `${baseUrl}/chat/completions`,
-        init: {
-          method: 'POST',
-          headers: {
-            accept: 'application/json',
-            'content-type': 'application/json',
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({ model: 'sonar', messages: [{ role: 'user', content: query }] }),
-        },
-      };
-    case 'jina':
-      return {
-        url: `${baseUrl}/search?q=${encodeURIComponent(query)}`,
-        init: {
-          method: 'GET',
-          headers: { accept: 'application/json', authorization: `Bearer ${apiKey}` },
-        },
-      };
-    case 'exa':
-      return {
-        url: `${baseUrl}/search`,
-        init: {
-          method: 'POST',
-          headers: {
-            accept: 'application/json',
-            'content-type': 'application/json',
-            'x-api-key': apiKey,
-          },
-          body: JSON.stringify({ query }),
-        },
-      };
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function textField(value: unknown, key: string): string {
-  const raw = asRecord(value)?.[key];
-  return typeof raw === 'string' ? raw : '';
-}
-
-/** One provider's payload as the three hit fields the model reads (D13). */
-function providerHits(provider: WebProvider, payload: unknown): RoundWebSearchHit[] {
-  const root = asRecord(payload) ?? {};
-  switch (provider) {
-    case 'brave':
-      return asArray(asRecord(root['web'])?.['results']).map((entry) => ({
-        title: textField(entry, 'title'),
-        url: textField(entry, 'url'),
-        snippet: textField(entry, 'description'),
-      }));
-    case 'tavily':
-      return asArray(root['results']).map((entry) => ({
-        title: textField(entry, 'title'),
-        url: textField(entry, 'url'),
-        snippet: textField(entry, 'content'),
-      }));
-    case 'perplexity': {
-      const answer = asRecord(asArray(root['choices'])[0]);
-      const content = textField(asRecord(answer?.['message']), 'content');
-      if (content.length === 0) {
-        return [];
-      }
-      const citation = asArray(root['citations'])[0];
-      return [{
-        title: 'perplexity',
-        url: typeof citation === 'string' ? citation : '',
-        snippet: content,
-      }];
-    }
-    case 'jina':
-      return asArray(root['data']).map((entry) => ({
-        title: textField(entry, 'title'),
-        url: textField(entry, 'url'),
-        snippet: textField(entry, 'description') || textField(entry, 'content'),
-      }));
-    case 'exa':
-      return asArray(root['results']).map((entry) => ({
-        title: textField(entry, 'title'),
-        url: textField(entry, 'url'),
-        snippet: textField(entry, 'text'),
-      }));
-  }
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -226,7 +106,7 @@ async function searchViaProvider(
   doFetch: typeof fetch,
 ): Promise<RoundWebSearchResult> {
   const provider = resolution.provider;
-  const call = providerSearchCall(provider, resolution.base_url, query, resolution.api_key);
+  const call = webProviderSearchCall(provider, resolution.base_url, query, resolution.api_key);
   let response: Response;
   try {
     response = await doFetch(call.url, {
@@ -264,7 +144,7 @@ async function searchViaProvider(
       message: `${provider} answered a body that is not JSON`,
     };
   }
-  const hits = providerHits(provider, payload);
+  const hits = webProviderHits(provider, payload);
   const capped = hits.length > MAX_WEB_SEARCH_HITS;
   return {
     ok: true,
@@ -329,11 +209,12 @@ function redirectLocation(response: Response): string | null {
  * One `fetch`: gate on the host, then GET it from the host process with no
  * credential of any kind.
  *
- * A same-host redirect is followed (at most `MAX_REDIRECTS`); a redirect to a
- * different host is a failure result and is **not** followed (2026-11-05
- * decision): the approved subject was the host in the gate, so silently reading
- * another one would widen it. A completed response is a result whatever its
- * status code.
+ * A redirect whose bare hostname is the one the gate approved is followed (at
+ * most `MAX_REDIRECTS`), after the same URL guard the initial target passed; a
+ * redirect to a different host is a failure result and is **not** followed
+ * (2026-11-05 decision): the approved subject was the host in the gate, so
+ * silently reading another one would widen it. A completed response is a result
+ * whatever its status code.
  */
 async function fetchPage(
   request: WebFetchRequest,
@@ -392,16 +273,34 @@ async function fetchPage(
           message: 'the redirect names a URL this process cannot parse',
         };
       }
-      if (next.host !== target.host) {
+      // Every redirect target passes the same guard as the initial URL before
+      // it is followed: `Location: http://user:pw@same-host/` would otherwise
+      // make `fetch` send a credential header for a host the gate never
+      // approved one for, and the host comparison alone would let it through.
+      const guarded = httpUrl(next.href);
+      if (guarded === null) {
+        return {
+          ok: false,
+          error: 'invalid-url',
+          host,
+          status: response.status,
+          message:
+            'the redirect names a URL this call never requests: only absolute http / https URLs without user info are fetched',
+        };
+      }
+      // The comparison is the spelling the gate authorized — the bare hostname
+      // — so a redirect can never carry the call to a host the approval did not
+      // name (D5 / D14).
+      if (guarded.hostname !== host) {
         return {
           ok: false,
           error: 'cross-host-redirect',
           host,
           status: response.status,
-          message: `redirected to another host (${next.hostname}); a cross-host redirect is never followed`,
+          message: `redirected to another host (${guarded.hostname}); a cross-host redirect is never followed`,
         };
       }
-      current = next;
+      current = guarded;
       continue;
     }
     try {
@@ -432,9 +331,10 @@ export interface RoundWebOptions {
 }
 
 /**
- * The round's web face. `search` resolves the one provider order per call; an
- * unusable resolution throws `WebToolUnavailableError` (D8) and an unusable
- * `fetch` is impossible by construction — it needs no provider at all.
+ * The round's web face. Both calls ask the round's tool gate first; `search`
+ * then resolves the one provider order per call (an unusable resolution throws
+ * `WebToolUnavailableError`, D8) and an unusable `fetch` is impossible by
+ * construction — it needs no provider at all.
  */
 export function createRoundWebFace(options: RoundWebOptions): RoundWebFace {
   const doFetch = options.fetch ?? fetch;
@@ -447,6 +347,23 @@ export function createRoundWebFace(options: RoundWebOptions): RoundWebFace {
     tier: options.tier,
     permission,
     async search(request: WebSearchRequest): Promise<RoundWebSearchResult> {
+      // D3 / D5.5: `web_search` is a tool like every other one, so it asks the
+      // same gate before anything leaves this process. An `ask` blocks here for
+      // the human exactly like a file or shell call; a denial is a result and
+      // never reaches the resolution at all.
+      const authorized = await options.gate.authorize({
+        tool_name: 'web_search',
+        pattern: '',
+        arguments: { query: request.query },
+      });
+      if (authorized === 'denied') {
+        return {
+          ok: false,
+          source: 'tool-gate',
+          error: 'denied',
+          message: 'the tool gate denied this web_search; nothing was requested',
+        };
+      }
       const resolution = resolveWebSearch(options.db, options.env, options.mcp);
       if (resolution.kind === 'unusable') {
         throw new WebToolUnavailableError(unavailableReason(resolution));

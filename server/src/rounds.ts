@@ -52,10 +52,7 @@ import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
 import { createLocalShell } from './local-shell.js';
 import { createToolGate } from './tool-gate.js';
-import {
-  readTargetPermissionContext,
-  readTargetWebAccessContext,
-} from './permissions.js';
+import { readTargetPermissionContext } from './permissions.js';
 import { createRoundWebFace } from './web-tools.js';
 import { resolveWebSearch } from './web-providers.js';
 import { createRoundFileTools } from './workspace-files.js';
@@ -1324,6 +1321,10 @@ interface RoundWebAssembly {
  * The gate is built here, not on the workspace face: a DM / rootless round has
  * no `RoundWorkspaceContext` but does have a target permission context, and a
  * `fetch` in such a round still has to be authorized (D2).
+ *
+ * The tier comes off that same permission context: `readTargetPermissionContext`
+ * already resolves the Agent override, the channel value and the default, so the
+ * assembly reads one context rather than a second join of its own.
  */
 function readRoundWeb(
   db: Database.Database,
@@ -1338,12 +1339,8 @@ function readRoundWeb(
     mcp: RoundInput['mcp'];
   },
 ): RoundWebAssembly | null {
-  const access = readTargetWebAccessContext(db, options.memberId, options.targetId);
-  if (access === null || access.tier === 'off') {
-    return null;
-  }
   const permission = readTargetPermissionContext(db, options.memberId, options.targetId);
-  if (permission === null) {
+  if (permission === null || permission.webAccessTier === 'off') {
     return null;
   }
   const tools: string[] = [];
@@ -1351,7 +1348,7 @@ function readRoundWeb(
     tools.push('web_search');
   }
   if (
-    access.tier === 'search+fetch' &&
+    permission.webAccessTier === 'search+fetch' &&
     options.targetKind !== 'dm' &&
     permission.effective !== 'read-only'
   ) {
@@ -1372,7 +1369,7 @@ function readRoundWeb(
     web: createRoundWebFace({
       db,
       env: process.env,
-      tier: access.tier,
+      tier: permission.webAccessTier,
       gate,
       mcp: options.mcp,
     }),

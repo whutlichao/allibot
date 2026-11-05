@@ -16,8 +16,8 @@ import {
   DEFAULT_PERMISSION_MODE,
   isPermissionMode,
   isWebAccessTier,
+  optionalWebAccessTier,
   requirePermissionMode,
-  requireWebAccessTier,
   resolveWebAccessTier,
 } from './permissions.js';
 import { credentialStatus, parseModelIdentifier } from './providers.js';
@@ -492,15 +492,6 @@ function optionalPermissionMode(value: unknown): PermissionMode | null {
   }
   const mode = requirePermissionMode(value);
   return mode;
-}
-
-/**
- * `null` clears the Agent override (follow the channel); a string must be one of
- * the three stored tiers. The null is accepted here and nowhere else in an
- * Agent PATCH, which is why the other nullable-looking fields stay 400s.
- */
-function optionalWebAccessTier(value: unknown): WebAccessTier | null {
-  return value === null ? null : requireWebAccessTier(value);
 }
 
 function optionalWorkspaceBackend(value: unknown): WorkspaceBackend | null {

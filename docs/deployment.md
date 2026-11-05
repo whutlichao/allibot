@@ -391,8 +391,11 @@ Agent 级没有这个字段（与 `allow_local_shell` 同形）。
   热改网络；新事实作用于本进程此后创建的下一个容器（改项目根会导致重建，改开关不会立即重建）。
 
 最后是本仓一贯的验证缺口：**真机 Docker daemon 与真实容器网络不在自动化 seam 内**。自动化只断言
-假运行时收到的运行时参数（create 的 argv 里有没有 `--network none`、白名单是哪些 host），真实容器
-里能不能出网需要部署者手工冒烟；这与 M2 的既有缺口一致，不能读成「已经证明容器无网」。
+两件事：假运行时收到的 create argv 里有没有 `--network none`（也就是上面那两态本身），以及白名单
+就是唯一那份推导 `readChannelEgressHosts`（`server/src/docker-egress.ts`）从 `fetch` 的 `allow`
+规则读出的 host 集合——host 不是从 create 参数里读回来的，create argv 只承载 `--network` 这一个
+事实。真实容器里能不能出网需要部署者手工冒烟；这与 M2 的既有缺口一致，不能读成「已经证明容器无
+网」。
 
 ## 备份边界
 
