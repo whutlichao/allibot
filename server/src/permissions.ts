@@ -243,6 +243,16 @@ export function requireWebAccessTier(value: unknown): WebAccessTier {
 }
 
 /**
+ * The nullable 联网档 write input both faces share: a channel PATCH may clear
+ * the column back to "unconfigured", and an Agent PATCH may clear its override
+ * back to "follow the channel". `null` is that clear; every string still has to
+ * be one of the three stored tiers.
+ */
+export function optionalWebAccessTier(value: unknown): WebAccessTier | null {
+  return value === null ? null : requireWebAccessTier(value);
+}
+
+/**
  * The effective 联网档 of one target context (D1): the Agent override wins when
  * it is set, then the channel value, then the `search` default. A DM has no
  * channel, so its caller passes `null` there and the Agent level plus the
@@ -254,61 +264,6 @@ export function resolveWebAccessTier(
   channelWebAccess: WebAccessTier | null,
 ): WebAccessTier {
   return agentOverride ?? channelWebAccess ?? DEFAULT_WEB_ACCESS_TIER;
-}
-
-/** A target context's 联网档 facts (D1). */
-export interface TargetWebAccessContext {
-  agentOverride: WebAccessTier | null;
-  /** The channel value, or null for a DM (there is no channel). */
-  channelWebAccess: WebAccessTier | null;
-  /** The value this target context resolves to. */
-  tier: WebAccessTier;
-}
-
-/**
- * Resolve one target's effective 联网档 the same way `readTargetPermissionContext`
- * resolves its mode: a DM has no channel, so the Agent override and the default
- * are the whole chain; a task follows its channel. T4's tool assembly and the
- * gate's tier exemption read this one function.
- */
-export function readTargetWebAccessContext(
-  db: Database.Database,
-  memberId: string,
-  targetId: string,
-): TargetWebAccessContext | null {
-  const kind = readTargetKind(db, targetId);
-  if (kind === null) {
-    return null;
-  }
-  const agentOverride = readAgentWebAccessOverride(db, memberId);
-  if (kind === 'dm') {
-    return {
-      agentOverride,
-      channelWebAccess: null,
-      tier: resolveWebAccessTier(agentOverride, null),
-    };
-  }
-  const row =
-    kind === 'channel'
-      ? (db.prepare('SELECT web_access FROM channel WHERE id = ?').get(targetId) as
-          | { web_access: string | null }
-          | undefined)
-      : (db
-          .prepare(
-            `SELECT c.web_access
-               FROM task t JOIN channel c ON c.id = t.channel_id
-              WHERE t.target_id = ?`,
-          )
-          .get(targetId) as { web_access: string | null } | undefined);
-  if (row === undefined) {
-    return null;
-  }
-  const channelWebAccess = isWebAccessTier(row.web_access) ? row.web_access : null;
-  return {
-    agentOverride,
-    channelWebAccess,
-    tier: resolveWebAccessTier(agentOverride, channelWebAccess),
-  };
 }
 
 /** The raw Agent 联网档 override (NULL = follow the channel / default). */
@@ -336,9 +291,10 @@ export interface TargetPermissionContext {
   /** The mode this target context resolves to. */
   effective: PermissionMode;
   /**
-   * The 联网档 this target context resolves to (D1 / D4). The gate reads it for
-   * one exemption only: `fetch` on a `search+fetch` target is allowed without an
-   * approval once no rule matched.
+   * The 联网档 this target context resolves to (D1 / D4). Two readers: the
+   * round assembly decides which web tools to offer, and the gate reads it for
+   * one exemption only — `fetch` on a `search+fetch` target is allowed without
+   * an approval once no rule matched.
    */
   webAccessTier: WebAccessTier;
   allowLocalShell: 0 | 1;

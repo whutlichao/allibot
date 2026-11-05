@@ -19,8 +19,8 @@ import {
 import {
   DEFAULT_PERMISSION_MODE,
   isWebAccessTier,
+  optionalWebAccessTier,
   requirePermissionMode,
-  requireWebAccessTier,
 } from './permissions.js';
 import { validateWorkspaceRoot } from './workspace-root.js';
 
@@ -508,11 +508,6 @@ function requireAutonomousCreateMode(value: unknown): void {
       { field: 'mode', value },
     );
   }
-}
-
-/** `null` is the stored "unconfigured" value; a string must be one of three tiers. */
-function optionalWebAccessTier(value: unknown): WebAccessTier | null {
-  return value === null ? null : requireWebAccessTier(value);
 }
 
 /** The explicit local-shell switch (#46 / D5.4): exactly 0 or 1. */
