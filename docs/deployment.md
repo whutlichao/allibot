@@ -87,24 +87,107 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
   成员只读 `skills/` 第二根；越根、不存在、不可读都是回灌给模型的工具结果，不结束轮次。
 - `TaskList` / `TaskGet`：需要 Plan face（`RoundInput.plan` 非空），只读本轮 Plan run；
   `TaskGet` 查不到 id 是 `not-found` 工具结果。
+- `Write` / `Edit`：需要项目根（`RoundInput.workspace` 非空），且只能写在项目根内——相对
+  路径从根起算，绝对路径只在 realpath 落在根内时接受，`..` 一律拒绝；无项目根的轮次（DM、
+  未设根的频道）拿不到这两个工具。`ask-writes`（默认档）下每次写调用都触发既有的 600 秒
+  审批批次（见下方「审批语义」）：批准即写、拒绝回 `denied` 工具结果、超时收口 `failed`；
+  越根、父目录不存在、`old_string` 未命中、写失败都是回灌给模型的工具结果，轮次继续。
+- `Bash`：执行类。条件是轮次装配已经按 M2 的既有规则把 `Bash` 放进可用集——频道
+  `allow_local_shell=1`，或者 Docker 工作区后端（容器内的 shell）；两者都需要项目根，
+  没有项目根的轮次（DM、未配置根的频道 / 任务）根本没有 shell face。Docker 不可用
+  （无 daemon / 镜像缺失 / consent 缺失 / 容器创建失败）是轮次在适配器之前就失败的
+  目标上下文事实，不是「Bash 被拒」，此时零工具调用。
+  - 参数只有 `command`（一条命令串）：工作目录固定为项目根，**不是**参数，模型无法选择；
+    多给 `cwd` 之类的参数会被参数形状检查拒绝为 `invalid-arguments` 工具结果。
+  - 每次调用都走 M2 的硬审批（`allow_local_shell=1` 之后即使 trusted-writes 或 `Bash`
+    allow 规则也要问）：批准才执行，拒绝是 `denied` 工具结果、命令不执行、轮次继续；
+    `deny` 规则与 read-only 硬顶不询问直接 `DENIED`；等满 600 秒批次超时收口 `failed`。
+  - 非零退出码、stderr、命令不存在（`exit-code: 127`）都是这次调用的结果，不是轮次失败：
+    回灌内容是 `[Bash] ok` + `command` + `cwd` + `exit-code` + `stdout` / `stderr` 两段正文。
+    已完成命令的 `exit_code` 原样陈述，不折成工具错误。
+  - 输出在 shell 侧按每条流 1 MiB 封顶（`MAX_SHELL_OUTPUT_BYTES`）；被截断时回灌结果在
+    **两段正文之前**写明「输出已截断：…超过 1048576 字节上限，超出部分未捕获」。这条事实
+    必须排在正文之前，因为 20000 字的回灌上限会在正文头部切一刀，尾部提示会先被切掉。
+- `mcp:<server>/<tool>`：执行类，名字是契约（D3）——它同时是模型可见的工具名、
+  `permission_rule.tool_name` 与审批载荷里的那个字符串，改名等于三处一起改。工具集**不是**
+  硬编码清单，而是本轮实际装配出来的 server 用 `tools/list` 答出的工具，按
+  「内置工具在前、MCP 在后」的固定顺序追加：
+  - `mcp.json` 是唯一正本（M2 D6.1）：文件缺失 = 零 MCP 工具、不报错；文件非法 = 整份不
+    装配（连合法的兄弟条目也不连）；启用但未做 `('mcp', server)` 一次性远端确认的 http /
+    sse server 零连接（`/api/remote-data-flow/consent`，`scope_kind = 'mcp'`，stdio 不需要）；
+    server 连不上或 `tools/list` 取不到 = 零该 server 的工具。另外，名字拼不出合法
+    `mcp:<server>/<tool>` 的工具（`server` 或工具名里含 `/` 或空白）不会被装配给模型：
+    闸门的 execute 类正则只认 `mcp:<非斜杠非空白>/<非斜杠非空白>`，装配层不为它发明另一个
+    名字。以上任一情况轮次都照常用剩下的工具跑完，不报轮次错，可读诊断只进
+    `RoundOutcome.reason` 与 MCP 管理面。
+  - 参数形状由 server 自己声明：本轮不持有那份 schema（`RoundMcpTool` 只有名字与描述），
+    所以请求里的工具定义是开放式对象（`type: object` + `additionalProperties: true`），模型
+    给的对象**原样转交**给 server，不套用文件工具那套扁平字符串检查；被 server 自己拒绝的
+    参数是工具结果，不是轮次失败。
+  - 每次调用都过 M2 的 execute 闸门：`permission_rule(  mcp:<server>/<tool>, <pattern> )`，
+    pattern 匹配的是参数的 stable JSON（键递归排序后的 JSON，`*` 匹配任意内容，空 pattern
+    匹配该工具的所有调用）。`deny` 与 read-only 硬顶不询问直接 `DENIED`；`ask` 在循环内
+    **阻塞**进 600 秒审批批次：批准即调用，拒绝回 `DENIED` 工具结果、轮次继续，等满超时
+    收口 `failed`。
+  - server 返回 `isError`、连接中断、server 未装配都是工具结果（`error: tool-error` /
+    `connection` / `unavailable`），轮次继续；回灌内容是 `[mcp:<server>/<tool>] ok` 或
+    `error: <code>` + `server` / `tool` + server 正文，同样受 20000 字回灌上限约束。
+- `TaskCreate` / `TaskUpdate`：Plan 写工具，需要 Plan face（`RoundInput.plan` 非空）——
+  也就是说任务线程与 team 目标有，DM 与 autonomous 频道的普通轮次没有（请求里根本不带这两个
+  名字）。`TaskCreate{title}` 追加到本轮 Plan run；`TaskUpdate{id, title?, status?}` 改标题
+  和/或三词状态（`pending` / `in_progress` / `completed`）。`status` 是闭集：Schema 里带
+  `enum`，其它值在进入 Plan face 之前就被拒成 `invalid-arguments` 工具结果（不是轮次失败，
+  也不会改到任何一行）。查不到的 id 是 `not-found` 工具结果。
+- `TeamAssign`：队长专用，需要队长的分派 face（`RoundInput.team.assign` 非空，只有真实队长轮次
+  有）。`TeamAssign{member_id, instruction}` 走 M2 既有分派路径：成员子轮次在**同一个队长轮次内**
+  跑完，assignment 记录、jump 消耗、子轮次产物全部按 M2 既有行为产生；成员输出只作为**工具结果**
+  回给队长，不落成频道消息。队长不可用、`target_self`、成员不可用、预算耗尽等既有判定不变，
+  失败是带稳定码（`not_leader` / `target_self` / `target_unavailable` / `budget_exhausted` /
+  `member_failed`）的错误工具结果，轮次继续。
+- `transfer_task`：任务当前受派者专用（`RoundInput.tools` 只在受派者轮次里给这个名字）。
+  `transfer_task{member_id}` 不直接写库，它把本轮结论映射成既有的结构化任务动作
+  `RoundResult.taskAction='transfer_task'` + `taskTransferMemberId`，真正的转派由既有写路径做
+  （受派者变更、任务线程成员、系统变更记录、team 频道的 `team-change` 唤醒全部照旧）。
+  目标不是本频道另一个存活 Agent 成员时写路径拒绝并在轮次原因里说明，写路径不动任何行。
+- `SopVerdict`：**只在 verifier 轮**（`RoundInput.sop.role === 'verifier'`）装配的专用
+  `internal` 工具，`SopVerdict{verdict: 'pass'|'fail'}` 由适配器映射到既有
+  `RoundResult.sopVerdict`。判定的来源是**工具调用**：正文里写 pass 不算，不解析 `replies`；
+  也不为两家 provider 各写一套结构化输出（OpenAI 的 `response_format` / Anthropic 的文本协议
+  都不用）。没有调用这个工具时 `sopVerdict` 为空，SOP 运行按既有词条
+  `sop.run.verifier.noVerdict` 失败。这个工具不对应任何 face、不进 `permission_rule` 词汇，
+  因此没有审批批次。
 - 两家 provider（`anthropic` 与 `openai:<模型>`）行为一致：工具定义与工具结果各按自己的
   wire shape 序列化（`tools[].input_schema` + `tool_use` / `tools[].function.parameters` +
-  `tool_calls`），循环、上限与收口完全一致。
+  `tool_calls`），循环、上限与收口完全一致；结构化事实（`sopVerdict` / `taskAction` /
+  `taskTransferMemberId`）两家走同一条通道，没有各自的解析分支。
 - 没有工具面（DM、无项目根、无 Plan face）时，请求里根本不带 `tools`，行为与原来的单次
   补全相同。
 
-### 仍属脚本化专用的工具
+### 结构化事实的生命周期
 
-以下工具名在轮次可用集里，但本批没有给模型提供规格，因此真实模型调不到，只有脚本化
-provider（`--scripted-provider`）能驱动：
+`SopVerdict` 与 `transfer_task` 记下的事实属于**轮次**，不属于正文：它们在循环里累积，本轮
+无论以哪种方式收口都会带上——正常答复、撞 `max_iterations`、以及"模型说了判定但没有正文"。
+最后一种按既有 empty completion 收口 `failed`，此时只保留 `sopVerdict`：判定就是 verifier 的
+全部协议（`sop-executor` 只读这个字段）；转派动作**不**随一个没有产出的轮次走，因为写路径提交
+任务动作时不看 verdict，而 `failed` 轮次不推进游标——否则同一条触发消息下次唤醒会再转派一次
+（团队分派路径本来就有 `verdict !== 'replied'` 的守卫，这里是同一条不变量）。这不是新的可观测
+面：映射目标是 `RoundResult` 的既有字段，没有新字段、没有新事件、工具调用本身不入库。
 
-- 写类与执行类：`Write` / `Edit` / `Bash` / MCP 工具 `mcp:<server>/<tool>`。
-- 编排类：`TeamAssign` / `transfer_task` / Plan 的写工具 `TaskCreate` / `TaskUpdate`。
-- `SopVerdict` 的结构化判定通道：通道已定（一个专用 `internal` 类工具映射到既有
-  `sopVerdict`），本批未实现；`RoundResult.taskAction` 用的同一条通道同理。
+同一轮里同一个事实被陈述多次时，后一次覆盖前一次。
 
-接入真实模型不等于 team 分派、Plan 写、SOP 判定或写类 / 执行类工具可用；本版本不能这样
-宣传。
+### 仍属脚本化专用的能力
+
+以下能力只有脚本化 provider（`--scripted-provider`）能驱动：
+
+- `continue_task`（自动续跑，结构化任务动作的另一半）：`RoundInput.tools` 里**没有**对应的
+  工具名，本批也没有为它发明一个（工具名是对外契约，改名 / 新增等于同时改模型可见列表、
+  `permission_rule.tool_name` 与审批载荷三处）。因此真实模型目前无法请求续跑，续跑仍由脚本化
+  provider 驱动；这是本批如实保留的缺口。`transfer_task` 已经可用，`continue_task` 待定。
+
+接入真实模型不等于自动续跑可用；本版本不能这样宣传。写类、执行类、MCP 工具、team 分派、
+Plan 写、转派与 SOP 判定都已进循环，但边界仍是真实的：写只在项目根内；`Bash` 是本机明文
+shell + 逐次审批 + 项目根工作目录，没有沙箱；MCP 工具只在 `mcp.json` 正本、远端一次性确认
+与实际连上的 server 上可用，零 server 就是零 MCP 工具。
 
 ### 上限语义
 
@@ -126,12 +209,14 @@ provider（`--scripted-provider`）能驱动：
   列出」/「还有文件未扫描」）。封顶是事实而不是计数启发式：恰好 200 条完整命中不会被说成
   封顶。
 - 命中行正文在工具侧已按 300 字截断（带省略号），回灌层不再叠加。
+- `Bash` 的输出在 shell 侧已按 1 MiB 封顶，回灌结果在正文前显式写明「输出已截断」；
+  这一条与回灌层的 20000 字上限是两件事，两条都会在结果里出现。
 
 ### 失败分层
 
 - **工具面失败**（越根、不存在、不可读、参数形状不合、未知工具、审批拒绝）是回灌给模型的
   工具结果，带稳定错误码（`outside-root` / `not-found` / `invalid-arguments` /
-  `unknown-tool` / `denied`），轮次继续，由模型自己改道。
+  `unknown-tool` / `denied` / `old-string-not-found`），轮次继续，由模型自己改道。
 - **provider 链路失败**（HTTP 非 2xx、响应不可解析、单次调用 60 秒超时）收口 `failed`，
   reason 走「模型调用失败：{message}」，错误体里的密钥已掩码。
 - 缺 consent、缺凭证、未配置模型仍是**零远端调用** + `failed`，reason 点名 provider /
@@ -146,18 +231,28 @@ provider（`--scripted-provider`）能驱动：
   上限。
 - 只读工具在默认路径上不触达审批（`read` 类落到 `mode-allow`），但一条
   `permission_rule(Read, …, ask)` 会让它们触达：此时同样阻塞等待、超时同样收口 `failed`。
-- 本批没有「一轮内审批批次数」上限，所以一条 `ask` 规则可以让一个只读轮次占满一个 600 秒
-  批次。这是接受的风险，不是遗漏。
+- 写类（`Write` / `Edit`）在 `ask-writes` 下按模式默认问，`trusted-writes` 下根内写直接放行、
+  根外效果仍问；一条 reply 里的多次写调用沿用 ADR-0007 决定 5：同一 `approval_request` 行里
+  合并 `tool_calls`，重开只发布新调用、保留历史决策，判据是全部历史决策。
+- 本批没有「一轮内审批批次数」上限，所以一条 `ask` 规则或 `ask-writes` 下的一次写调用都可以
+  让一个轮次占满一个 600 秒批次。这是接受的风险，不是遗漏。
 
 ### 仍不提供的能力
 
 - AG-UI 不发工具调用事件（没有 `TOOL_CALL_*`），前端看不到轮内工具进度。
 - 工具调用不入库：没有审计面，也没有新表 / 新列，`SCHEMA_VERSION` 仍为 21，本批无迁移步骤。
 - 无 deferred / 异步收口：一轮在同一个 HTTP 请求内跑完，默认最坏情况是 10 批工具执行、11 次
-  模型调用 × 单次 60 秒超时，需要审批时再叠加 600 秒批次等待。
+  模型调用 × 单次 60 秒超时，需要审批时再叠加 600 秒批次等待。**这个上界只在每条 `Bash`
+  命令都会自己退出时成立**——命令执行没有超时（见下一条），一条不退出的命令会让这个请求
+  无界等待。
+- `Bash` 没有命令级超时：`local-shell` 接缝（`RunShellRequest` / `RoundShellResult`）没有超时
+  字段，`spawn` 也没有 timer，所以一条不退出或等 stdin 的命令会让这一轮的 HTTP 请求无界
+  等待：既不回灌工具结果，也不收口。#75 里的「超时」在本批只覆盖 600 秒**审批批次**超时
+  （等满收口 `failed`），不含命令执行本身；补上它要改接缝与错误码，属后续票。
 - 无 token 级流式：文本仍一次性返回，AG-UI 的 `TEXT_MESSAGE_CONTENT` 语义不变。
-- 无每 Agent 工具白名单：模型可见工具仍只由轮次可用集（项目根 / Plan face）决定，
-  `permission_rule` 只判定调用是否放行，不是可见性过滤器；也没有新的配置面。
+- 无每 Agent 工具白名单：模型可见工具仍只由轮次可用集（项目根 / Plan face / 频道的
+  `allow_local_shell` 与工作区后端）决定，`permission_rule` 只判定调用是否放行，不是可见性
+  过滤器；也没有新的配置面。
 - 无本机 provider 通道：仍只有 `anthropic` 与 `openai` 两条线（M1 D1.10 的延后项不随本批
   引入）。
 

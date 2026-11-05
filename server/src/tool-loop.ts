@@ -6,6 +6,7 @@ import {
   type RoundToolSpec,
   type ToolAnswer,
   type ToolCopy,
+  type ToolFacts,
 } from './tool-specs.js';
 
 /**
@@ -92,6 +93,14 @@ export interface ToolLoopOutcome {
    * executed.
    */
   exhausted: boolean;
+  /**
+   * The structured facts the executed calls stated (结构化通道, D11), collected
+   * across every batch the loop ran and off every way it ended: a conclusion the
+   * model stated through its dedicated tool is a fact about the round, so the
+   * adapter maps it whether the round then answered, hit the cap or landed no
+   * text at all. Nothing filled in means the round stated nothing.
+   */
+  facts: ToolFacts;
 }
 /**
  * The round's tool executor: the round's offered tool specs, the context they
@@ -125,6 +134,7 @@ export function createRoundToolExecutor(
       // Only the copy the model reads is capped (D6); the tool's own result is
       // untouched, and a capped result still carries its state and request.
       content: capToolResultContent(answer.content, copy),
+      ...(answer.facts === undefined ? {} : { facts: answer.facts }),
     };
   };
 }
@@ -151,18 +161,26 @@ export async function runToolLoop(
   options: { timeoutMs: number; maxIterations: number },
 ): Promise<ToolLoopOutcome> {
   let batches = 0;
+  // 结构化通道 (D11): the facts the executed calls stated, kept off the text so
+  // every way out of the loop can carry them. A tool that states the same fact
+  // twice leaves the later statement standing.
+  const facts: ToolFacts = {};
   for (;;) {
     const turn = await conversation.send(options.timeoutMs);
     if (turn.kind === 'text') {
-      return { text: turn.text, exhausted: false };
+      return { text: turn.text, exhausted: false, facts };
     }
     if (batches >= options.maxIterations) {
-      return { text: turn.text, exhausted: true };
+      return { text: turn.text, exhausted: true, facts };
     }
     batches += 1;
     const results: ToolCallResult[] = [];
     for (const call of turn.calls) {
-      results.push(await execute(call));
+      const result = await execute(call);
+      if (result.facts !== undefined) {
+        Object.assign(facts, result.facts);
+      }
+      results.push(result);
     }
     conversation.appendToolResults(results);
   }

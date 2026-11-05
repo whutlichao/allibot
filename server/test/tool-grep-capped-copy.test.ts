@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import { t } from '@allibot/shared';
 import type { RoundFileToolResult } from '../dist/agent-seam.js';
 import { MAX_GREP_FILES } from '../dist/docker-files.js';
-import { shapeGrep, type ToolCopy } from '../dist/tool-specs.js';
+import { shapeGrep } from '../dist/tool-result-shaping.js';
+import type { ToolCopy } from '../dist/tool-specs.js';
 import { MAX_GREP_MATCHES } from '../dist/workspace-files.js';
 
 /**
@@ -15,8 +16,8 @@ import { MAX_GREP_MATCHES } from '../dist/workspace-files.js';
  * result carries neither sentence.
  *
  * The seam is the shaping function the `Grep` spec calls
- * (`shapeGrep`), plus the one translation entry point every backend string uses;
- * no provider, no process, no container.
+ * (`shapeGrep`, in `tool-result-shaping.ts`), plus the one translation entry
+ * point every backend string uses; no provider, no process, no container.
  */
 
 const copy: ToolCopy = (key, values) => t('zh-CN', key, values ?? {});
