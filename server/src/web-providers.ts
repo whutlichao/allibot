@@ -10,7 +10,7 @@ import { ApiFailure } from './api-error.js';
 // `providers.ts` owns the shared primitives (the one consent row and the mask)
 // and imports this module back for the reading. The two use each other only
 // inside function bodies, so the module cycle has no initializer dependency.
-import { confirmRemoteConsent, maskSecret } from './providers.js';
+import { confirmRemoteConsent, maskKey } from './providers.js';
 
 /**
  * 联网 provider 凭据 (D6 / D7 / D11, ADR 0010): the five credential providers,
@@ -19,8 +19,8 @@ import { confirmRemoteConsent, maskSecret } from './providers.js';
  *
  * This is the one place in the repository that stores a plaintext secret. The
  * boundary ADR 0010 draws is kept by shape: nothing here hands a credential
- * value to a reading — `api_key_mask` is the `maskSecret` form, and the value
- * only leaves through the resolution result the round adapter uses.
+ * value to a reading — `api_key_mask` is `maskKey`'s form, and the value only
+ * leaves through the resolution result the round adapter uses.
  */
 
 /** The provider named first in the resolution order (D6). */
@@ -301,17 +301,19 @@ function credentialView(
   provider: WebProvider,
   env: NodeJS.ProcessEnv,
 ): WebProviderCredentialView {
+  // One row read per provider: the row is the mask's source, the default flag
+  // and — when it exists — the reason the status is `present`; only a provider
+  // with no row needs the environment fallback looked at.
   const stored = readStoredCredential(db, provider);
-  const status: CredentialStatus = webProviderCredentialValue(db, provider, env) === null
-    ? 'missing'
-    : 'present';
+  const status: CredentialStatus =
+    stored !== null || credentialFromEnv(provider, env) !== null ? 'present' : 'missing';
   return {
     provider,
     credential_env: webProviderCredentialEnv(provider),
     credential_status: status,
-    // The mask is `maskSecret`'s own form: feeding it the key as its own text
-    // yields the head-ellipsis-tail reading and nothing of the body.
-    api_key_mask: stored === null ? null : maskSecret(stored.api_key, stored.api_key),
+    // The one mask formatter, so the reading and `maskSecret`'s masking inside
+    // arbitrary text can never disagree about what a masked key looks like.
+    api_key_mask: stored === null ? null : maskKey(stored.api_key),
     is_default: stored?.is_default === 1 ? 1 : 0,
     receiver: webProviderBaseUrl(provider, env),
     confirmed_at: readWebProviderConsent(db, provider),
@@ -382,6 +384,18 @@ export function confirmWebProviderConsent(
   return credentialView(db, provider, env);
 }
 
+/** One provider's key and where it came from (ADR 0010 §4). */
+export interface WebProviderCredential {
+  value: string;
+  source: 'db' | 'env';
+}
+
+/** A provider's key from the process environment, or null when unset / blank. */
+function credentialFromEnv(provider: WebProvider, env: NodeJS.ProcessEnv): string | null {
+  const raw = env[webProviderCredentialEnv(provider)];
+  return raw === undefined || raw.trim().length === 0 ? null : raw;
+}
+
 /**
  * A provider's credential value: the stored row first, the environment
  * variable as the fallback (ADR 0010 §4). The value is for the round adapter
@@ -391,16 +405,13 @@ export function webProviderCredentialValue(
   db: Database.Database,
   provider: WebProvider,
   env: NodeJS.ProcessEnv,
-): { value: string; source: 'db' | 'env' } | null {
+): WebProviderCredential | null {
   const stored = readStoredCredential(db, provider);
   if (stored !== null) {
     return { value: stored.api_key, source: 'db' };
   }
-  const raw = env[webProviderCredentialEnv(provider)];
-  if (raw === undefined || raw.trim().length === 0) {
-    return null;
-  }
-  return { value: raw, source: 'env' };
+  const value = credentialFromEnv(provider, env);
+  return value === null ? null : { value, source: 'env' };
 }
 
 /**
