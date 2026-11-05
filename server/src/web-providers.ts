@@ -525,12 +525,16 @@ export function resolveWebSearch(
 ): WebSearchResolution {
   let stop: WebProviderStop | null = null;
 
-  /** This candidate's verdict: either the chosen provider or why it stopped. */
+  /**
+   * This candidate's verdict: either the chosen provider or why it stopped. The
+   * credential is handed in rather than read here, so a step that has already
+   * read the row resolves its candidate once instead of twice.
+   */
   const attempt = (
     provider: WebProvider,
     chosenBy: 'env-provider' | 'default' | 'order',
+    credential: WebProviderCredential | null,
   ): { chosen: WebSearchResolution } | WebProviderStop => {
-    const credential = webProviderCredentialValue(db, provider, env);
     if (credential === null) {
       return { reason: 'credential-missing', provider };
     }
@@ -555,7 +559,7 @@ export function resolveWebSearch(
   // worse trade than falling back to the stored facts.
   const named = namedWebProvider(env);
   if (named !== null) {
-    const tried = attempt(named, 'env-provider');
+    const tried = attempt(named, 'env-provider', webProviderCredentialValue(db, named, env));
     if ('chosen' in tried) {
       return tried.chosen;
     }
@@ -565,7 +569,11 @@ export function resolveWebSearch(
   // 2. The stored default row (at most one, by the partial unique index).
   const storedDefault = defaultWebProvider(db);
   if (storedDefault !== null && storedDefault !== named) {
-    const tried = attempt(storedDefault, 'default');
+    const tried = attempt(
+      storedDefault,
+      'default',
+      webProviderCredentialValue(db, storedDefault, env),
+    );
     if ('chosen' in tried) {
       return tried.chosen;
     }
@@ -573,15 +581,21 @@ export function resolveWebSearch(
   }
 
   // 3. The configured providers, in the fixed order that is also the reading
-  // order: brave → tavily → perplexity → jina → exa.
+  // order: brave → tavily → perplexity → jina → exa. "Configured" is the stored
+  // fact: a provider with no credential at all is not one of the candidates this
+  // step lists, so an empty credential table still resolves to
+  // `provider-missing` (D8) instead of blaming the first name in the order. The
+  // row read once here is what `attempt` resolves, so the candidate is never
+  // looked up twice.
   for (const provider of WEB_PROVIDERS) {
     if (provider === named || provider === storedDefault) {
       continue;
     }
-    if (webProviderCredentialValue(db, provider, env) === null) {
+    const credential = webProviderCredentialValue(db, provider, env);
+    if (credential === null) {
       continue;
     }
-    const tried = attempt(provider, 'order');
+    const tried = attempt(provider, 'order', credential);
     if ('chosen' in tried) {
       return tried.chosen;
     }
