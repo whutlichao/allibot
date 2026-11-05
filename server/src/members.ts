@@ -5,6 +5,7 @@ import {
   type AgentView,
   type OwnerView,
   type PermissionMode,
+  type WebAccessTier,
   type WorkspaceBackend,
 } from '@allibot/shared';
 import type Database from 'better-sqlite3';
@@ -16,6 +17,7 @@ import {
   isPermissionMode,
   isWebAccessTier,
   requirePermissionMode,
+  requireWebAccessTier,
   resolveWebAccessTier,
 } from './permissions.js';
 import { credentialStatus, parseModelIdentifier } from './providers.js';
@@ -208,7 +210,7 @@ export function updateAgent(
       `UPDATE agent_config
           SET role = ?, model = ?, system_prompt = ?, enabled = ?, context_window = ?,
               compression_threshold = ?, max_iterations = ?, auto_claim = ?,
-              workspace_backend = ?, permission_mode = ?
+              workspace_backend = ?, permission_mode = ?, web_access = ?
         WHERE member_id = ?`,
     ).run(
       patch.role ?? current.role,
@@ -223,6 +225,7 @@ export function updateAgent(
         ? patch.workspaceBackend
         : current.workspace_backend,
       patch.permissionMode !== undefined ? patch.permissionMode : current.permission_mode,
+      patch.webAccess !== undefined ? patch.webAccess : current.web_access,
       id,
     );
     if (patch.displayName !== undefined) {
@@ -298,6 +301,8 @@ interface PatchInput {
   autoClaim?: number;
   workspaceBackend?: WorkspaceBackend | null;
   permissionMode?: PermissionMode | null;
+  /** `null` clears the override (follow the channel); a string must be a tier. */
+  webAccess?: WebAccessTier | null;
 }
 
 const FIELD_KEYS = {
@@ -312,6 +317,7 @@ const FIELD_KEYS = {
   auto_claim: 'autoClaim',
   workspace_backend: 'workspaceBackend',
   permission_mode: 'permissionMode',
+  web_access: 'webAccess',
 } as const;
 
 type FieldKey = keyof typeof FIELD_KEYS;
@@ -380,6 +386,9 @@ function parsePatchInput(body: unknown): PatchInput {
   }
   if (record['permission_mode'] !== undefined) {
     patch.permissionMode = optionalPermissionMode(record['permission_mode']);
+  }
+  if (record['web_access'] !== undefined) {
+    patch.webAccess = optionalWebAccessTier(record['web_access']);
   }
   return patch;
 }
@@ -483,6 +492,15 @@ function optionalPermissionMode(value: unknown): PermissionMode | null {
   }
   const mode = requirePermissionMode(value);
   return mode;
+}
+
+/**
+ * `null` clears the Agent override (follow the channel); a string must be one of
+ * the three stored tiers. The null is accepted here and nowhere else in an
+ * Agent PATCH, which is why the other nullable-looking fields stay 400s.
+ */
+function optionalWebAccessTier(value: unknown): WebAccessTier | null {
+  return value === null ? null : requireWebAccessTier(value);
 }
 
 function optionalWorkspaceBackend(value: unknown): WorkspaceBackend | null {

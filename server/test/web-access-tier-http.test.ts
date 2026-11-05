@@ -327,3 +327,109 @@ test('GET /api/agents/{id} reads the override and the effective tier without a c
     await fixture.stop();
   }
 });
+
+test('PATCH /api/agents/{id} sets and clears the web-access override; another explicit null is still 400', async () => {
+  const fixture = await startWebAccessFixture('allibot-web-access-agent-write-');
+  try {
+    const agentId = await createAgent(fixture, { role: '研究助理' });
+
+    const set = await patchJson(fixture, `/api/agents/${agentId}`, {
+      web_access: 'search+fetch',
+    });
+    assert.equal(set.status, 200, await set.clone().text());
+    const setBody = await readJson(set);
+    assert.equal(setBody['web_access'], 'search+fetch', 'the PATCH returns the raw override');
+    assert.equal(setBody['effective_web_access'], 'search+fetch');
+    assert.equal(
+      queryDatabase<{ web_access: string | null }>(
+        fixture.dataDir,
+        'SELECT web_access FROM agent_config WHERE member_id = ?',
+        [agentId],
+      )?.web_access,
+      'search+fetch',
+    );
+
+    const detail = await readJson(await fetch(`${fixture.base}/api/agents/${agentId}`));
+    assert.equal(detail['web_access'], 'search+fetch');
+    assert.equal(detail['effective_web_access'], 'search+fetch');
+
+    const cleared = await patchJson(fixture, `/api/agents/${agentId}`, { web_access: null });
+    assert.equal(cleared.status, 200, await cleared.clone().text());
+    const clearedBody = await readJson(cleared);
+    assert.equal(
+      clearedBody['web_access'],
+      null,
+      'an explicit null clears the override back to follow-the-channel',
+    );
+    assert.equal(
+      clearedBody['effective_web_access'],
+      'search',
+      'with the override cleared the effective tier is the channel value or the default',
+    );
+    assert.equal(
+      queryDatabase<{ web_access: string | null }>(
+        fixture.dataDir,
+        'SELECT web_access FROM agent_config WHERE member_id = ?',
+        [agentId],
+      )?.web_access,
+      null,
+    );
+    assert.equal(clearedBody['role'], '研究助理', 'clearing the override leaves role alone');
+
+    // The nullable field does not make every field nullable: the same body with
+    // a second explicit null is refused whole, and nothing is written.
+    const restored = await patchJson(fixture, `/api/agents/${agentId}`, { web_access: 'off' });
+    assert.equal(restored.status, 200, await restored.clone().text());
+    const withRoleNull = await patchJson(fixture, `/api/agents/${agentId}`, {
+      web_access: null,
+      role: null,
+    });
+    assert.equal(withRoleNull.status, 400, await withRoleNull.clone().text());
+    assert.equal(errorCode(await readJson(withRoleNull)), 'validation_failed');
+    const stored = queryDatabase<{ web_access: string | null; role: string }>(
+      fixture.dataDir,
+      'SELECT web_access, role FROM agent_config WHERE member_id = ?',
+      [agentId],
+    );
+    assert.equal(stored?.web_access, 'off', 'the refused PATCH wrote no web_access');
+    assert.equal(stored?.role, '研究助理', 'the refused PATCH wrote no role');
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test('an Agent web-access value outside the three tiers is 400 validation_failed and writes nothing', async () => {
+  const fixture = await startWebAccessFixture('allibot-web-access-agent-invalid-');
+  try {
+    const agentId = await createAgent(fixture);
+    const stored = await patchJson(fixture, `/api/agents/${agentId}`, { web_access: 'off' });
+    assert.equal(stored.status, 200, await stored.clone().text());
+
+    const rejected: unknown[] = ['all', 7, 'search ', 'SEARCH', true, ['search']];
+    for (const value of rejected) {
+      const response = await patchJson(fixture, `/api/agents/${agentId}`, { web_access: value });
+      assert.equal(
+        response.status,
+        400,
+        `web_access ${JSON.stringify(value)} must be refused; body: ${await response
+          .clone()
+          .text()}`,
+      );
+      assert.equal(errorCode(await readJson(response)), 'validation_failed');
+      assert.equal(
+        queryDatabase<{ web_access: string | null }>(
+          fixture.dataDir,
+          'SELECT web_access FROM agent_config WHERE member_id = ?',
+          [agentId],
+        )?.web_access,
+        'off',
+        `a refused ${JSON.stringify(value)} leaves the stored override alone`,
+      );
+    }
+    const detail = await readJson(await fetch(`${fixture.base}/api/agents/${agentId}`));
+    assert.equal(detail['web_access'], 'off');
+    assert.equal(detail['effective_web_access'], 'off');
+  } finally {
+    await fixture.stop();
+  }
+});
