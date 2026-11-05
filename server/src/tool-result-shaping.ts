@@ -7,6 +7,8 @@ import type {
   RoundFileToolResult,
   RoundMcpCallResult,
   RoundShellResult,
+  RoundWebFetchResult,
+  RoundWebSearchResult,
   TeamAssignRequest,
   TeamAssignToolResult,
   WriteFileRequest,
@@ -14,6 +16,7 @@ import type {
 import { MAX_GREP_FILES } from './docker-files.js';
 import { MAX_SHELL_OUTPUT_BYTES } from './local-shell.js';
 import type { ToolAnswer, ToolCopy } from './tool-specs.js';
+import { MAX_WEB_SEARCH_HITS } from './web-tools.js';
 import { MAX_GREP_MATCHES } from './workspace-files.js';
 
 /**
@@ -332,6 +335,78 @@ export function shapeShell(command: string, result: RoundShellResult, t: ToolCop
       result.stdout ?? '',
       'stderr:',
       result.stderr ?? '',
+    ].join('\n'),
+  };
+}
+
+/**
+ * One `web_search` result as the model reads it: the query, the provider that
+ * answered, the hit count and one numbered `title / url / snippet` block per
+ * hit — the read-result shape, not a JSON dump (D13). The `capped` line is
+ * printed only when the face said the hit-count cap cut the list, so a result
+ * that holds exactly the cap's worth of hits never claims to be cut.
+ */
+export function shapeWebSearch(query: string, result: RoundWebSearchResult): ToolAnswer {
+  const request = [`query: ${query}`, `source: ${result.source}`];
+  if (!result.ok) {
+    return {
+      ok: false,
+      content: [
+        `[web_search] error: ${result.error ?? 'provider-error'}`,
+        ...request,
+        ...(result.message === undefined ? [] : [`message: ${result.message}`]),
+      ].join('\n'),
+    };
+  }
+  const lines = ['[web_search] ok', ...request];
+  if (result.hits !== undefined) {
+    lines.push(`hits: ${result.hits.length}`);
+    if (result.capped === 'hits') {
+      lines.push(`capped: hits (limit ${MAX_WEB_SEARCH_HITS})`);
+    }
+    lines.push(
+      ...(result.hits.length === 0
+        ? ['(no hit)']
+        : result.hits.flatMap((hit, index) => [
+            `${index + 1}. ${hit.title}`,
+            `   url: ${hit.url}`,
+            `   ${hit.snippet}`,
+          ])),
+    );
+  }
+  if (result.content !== undefined) {
+    lines.push('content:', result.content);
+  }
+  return { ok: true, content: lines.join('\n') };
+}
+
+/**
+ * One `fetch` result as the model reads it: the host, the status and the body
+ * the page returned. The URL itself is not echoed — the host is the call's
+ * subject (D5), and the body is the answer. A denial or a refused cross-host
+ * redirect states its stable code on the first line like every other tool
+ * error.
+ */
+export function shapeFetch(result: RoundWebFetchResult): ToolAnswer {
+  if (!result.ok) {
+    return {
+      ok: false,
+      content: [
+        `[fetch] error: ${result.error ?? 'request-failed'}`,
+        ...(result.host === undefined ? [] : [`host: ${result.host}`]),
+        ...(result.status === undefined ? [] : [`status: ${result.status}`]),
+        ...(result.message === undefined ? [] : [`message: ${result.message}`]),
+      ].join('\n'),
+    };
+  }
+  return {
+    ok: true,
+    content: [
+      '[fetch] ok',
+      `host: ${result.host ?? ''}`,
+      `status: ${result.status ?? 0}`,
+      'content:',
+      result.content ?? '',
     ].join('\n'),
   };
 }

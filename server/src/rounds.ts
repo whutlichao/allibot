@@ -14,6 +14,7 @@ import type {
   RoundResult,
   RoundTargetKind,
   RoundTeamContext,
+  RoundWebFace,
   RoundWorkspaceContext,
   TeamAssignRequest,
   TeamAssignToolResult,
@@ -50,7 +51,12 @@ import { liveMemberClause, readOwnerId } from './members.js';
 import { readTargetKind } from './sql.js';
 import { createLocalShell } from './local-shell.js';
 import { createToolGate } from './tool-gate.js';
-import { readTargetPermissionContext } from './permissions.js';
+import {
+  readTargetPermissionContext,
+  readTargetWebAccessContext,
+} from './permissions.js';
+import { createRoundWebFace } from './web-tools.js';
+import { resolveWebSearch } from './web-providers.js';
 import { createRoundFileTools } from './workspace-files.js';
 import {
   agentHomeRoot,
@@ -1224,6 +1230,15 @@ async function readAssignmentRoundInput(
     env: process.env,
     stdioContainer: workspaceResult.container,
   });
+  const webAssembly = readRoundWeb(db, {
+    memberId: member.id,
+    targetId: params.team.targetId,
+    targetKind,
+    replyId: params.replyId,
+    contextKind: 'team-assignment',
+    contextId: params.assignmentId,
+    mcp,
+  });
   const messages = readContextWindow(db, params.team.targetId, 'window');
   const memories = recallForRound(db, member.id, params.team.targetId, messages);
   const prompt = composeSystemPrompt(db, member, targetKind, false, params.reason, memories, {
@@ -1249,12 +1264,14 @@ async function readAssignmentRoundInput(
         true,
         workspace !== null,
         shellToolAvailable(workspace),
+        webAssembly?.tools ?? [],
       ),
       ...mcpToolNames(mcp),
     ],
     plan: createPlanFace(db, params.team.targetId, member.id),
     workspace,
     mcp,
+    web: webAssembly?.web ?? null,
     maxIterations: member.max_iterations,
     team: {
       leader_member_id:
@@ -1282,6 +1299,84 @@ async function readAssignmentRoundInput(
 /** The data directory of the one SQLite file (mcp-hosts lives beside it). */
 function readRoundDataDir(db: Database.Database): string {
   return path.dirname(db.name);
+}
+
+/** One round's web assembly: the face its specs run against and the tool names it offers. */
+interface RoundWebAssembly {
+  web: RoundWebFace;
+  tools: readonly string[];
+}
+
+/**
+ * The round's 联网工具面 (D1 / D2 / D8). The effective 联网档 decides the scope:
+ * `off` assembles nothing (and no face); `search` offers `web_search`; `search+fetch`
+ * offers `fetch` too — except where D2 withholds it (a read-only context, a DM).
+ *
+ * `web_search` is additionally withheld when the one provider resolution is
+ * unusable (no credential, no default, no `exa` MCP, or an unconfirmed
+ * provider). This is D8's **assembly layer**: an unrelated round in a default
+ * (`search`) channel must not be handed a tool that could only fail. The call
+ * point still fails loudly for a stale assembly / rule-direct call — see
+ * `web-tools.ts` `WebToolUnavailableError` — so the split is deliberate:
+ * assembly withholds, the call point refuses.
+ *
+ * The gate is built here, not on the workspace face: a DM / rootless round has
+ * no `RoundWorkspaceContext` but does have a target permission context, and a
+ * `fetch` in such a round still has to be authorized (D2).
+ */
+function readRoundWeb(
+  db: Database.Database,
+  options: {
+    memberId: string;
+    targetId: string;
+    targetKind: RoundTargetKind;
+    replyId: string;
+    contextKind: 'round' | 'team-assignment' | 'sop';
+    contextId: string | null;
+    approvalTargetId?: string | null;
+    mcp: RoundInput['mcp'];
+  },
+): RoundWebAssembly | null {
+  const access = readTargetWebAccessContext(db, options.memberId, options.targetId);
+  if (access === null || access.tier === 'off') {
+    return null;
+  }
+  const permission = readTargetPermissionContext(db, options.memberId, options.targetId);
+  if (permission === null) {
+    return null;
+  }
+  const tools: string[] = [];
+  if (resolveWebSearch(db, process.env, options.mcp).kind !== 'unusable') {
+    tools.push('web_search');
+  }
+  if (
+    access.tier === 'search+fetch' &&
+    options.targetKind !== 'dm' &&
+    permission.effective !== 'read-only'
+  ) {
+    tools.push('fetch');
+  }
+  if (tools.length === 0) {
+    return null;
+  }
+  const gate = createToolGate({
+    db,
+    permission,
+    replyId: options.replyId,
+    contextKind: options.contextKind,
+    contextId: options.contextId,
+    approvalTargetId: options.approvalTargetId,
+  });
+  return {
+    web: createRoundWebFace({
+      db,
+      env: process.env,
+      tier: access.tier,
+      gate,
+      mcp: options.mcp,
+    }),
+    tools,
+  };
 }
 
 /** MCP tools the adapter may call, in the stable built-in-then-MCP order. */
@@ -1376,6 +1471,16 @@ export async function readSopRoundInput(
     onApprovalWait: params.onApprovalWait,
     onApprovalSettled: params.onApprovalSettled,
   });
+  const webAssembly = readRoundWeb(db, {
+    memberId: member.id,
+    targetId: params.channelId,
+    targetKind: 'channel',
+    replyId: params.replyId,
+    contextKind: 'sop',
+    contextId: params.runId,
+    approvalTargetId: null,
+    mcp,
+  });
   const messages = readContextWindow(db, params.channelId, 'window');
   const prompt = composeSystemPrompt(db, member, 'channel', false, 'channel-message', [], {
     isLeader: false,
@@ -1409,6 +1514,7 @@ export async function readSopRoundInput(
         // the explicit local switch or the Docker container shell adds Bash,
         // still behind the per-call gate.
         shellToolAvailable(workspace),
+        webAssembly?.tools ?? [],
       ),
       ...mcpToolNames(mcp),
     ],
@@ -1416,6 +1522,7 @@ export async function readSopRoundInput(
     plan: null,
     workspace,
     mcp,
+    web: webAssembly?.web ?? null,
     maxIterations: member.max_iterations,
     replyId: params.replyId,
     sop: {
@@ -1730,6 +1837,15 @@ async function readRoundInput(
     env: process.env,
     stdioContainer: workspaceResult.container,
   });
+  const webAssembly = readRoundWeb(db, {
+    memberId: member.id,
+    targetId: wake.targetId,
+    targetKind,
+    replyId: context.replyId,
+    contextKind: 'round',
+    contextId: null,
+    mcp,
+  });
   const tools = [
     ...readRoundTools(
       db,
@@ -1740,6 +1856,7 @@ async function readRoundInput(
       planAvailable,
       workspace !== null,
       shellToolAvailable(workspace),
+      webAssembly?.tools ?? [],
     ),
     ...mcpToolNames(mcp),
   ];
@@ -1775,6 +1892,7 @@ async function readRoundInput(
     plan,
     workspace,
     mcp,
+    web: webAssembly?.web ?? null,
     maxIterations: member.max_iterations,
     replyId: context.replyId,
     sop: null,
@@ -1805,6 +1923,7 @@ function readRoundTools(
   planAvailable: boolean,
   fileToolsAvailable: boolean,
   shellAvailable: boolean,
+  webTools: readonly string[],
 ): readonly string[] {
   const tools: string[] = [];
   if (isLeader) {
@@ -1832,6 +1951,8 @@ function readRoundTools(
     // alone does not skip the per-call approval: the gate still asks (D5.4).
     tools.push('Bash');
   }
+  // 联网工具 (#70 / D1 / D2 / D8) were already narrowed by the assembly.
+  tools.push(...webTools);
   return tools;
 }
 

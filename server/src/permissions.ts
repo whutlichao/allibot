@@ -26,15 +26,21 @@ import { readTargetKind } from './sql.js';
  *    module (the file tools return a hard tool error first);
  * 2. rule merge — for one call, a same-key Agent row replaces the channel row,
  *    different keys coexist, and every matching row merges `deny > ask > allow`;
+ * 2b. 联网档豁免 — `fetch` on a `search+fetch` target is allowed when no rule
+ *    matched (the merge still tightens it);
  * 3. mode default — read-only reads; ask-writes asks writes / execution;
  *    trusted-writes auto-allows a root-internal write and asks the rest;
  * 4. hard approval — the local shell always asks once it is enabled, unless a
  *    deny rule matches.
  *
- * Tool classification: Read / Glob / Grep read, Write / Edit write, Bash
- * execute, `mcp:<server>/<tool>` execute. TeamAssign / transfer_task / the four
- * Plan tools / SopVerdict are orchestration-internal and never pass through
- * this gate.
+ * Tool classification: Read / Glob / Grep / web_search read, Write / Edit
+ * write, Bash / fetch execute, `mcp:<server>/<tool>` execute. TeamAssign /
+ * transfer_task / the four Plan tools / SopVerdict are orchestration-internal
+ * and never pass through this gate.
+ *
+ * 联网档豁免 (#70 / D4) is the one rule inside the gate that reads a capability
+ * switch: `fetch` on a `search+fetch` target is allowed with no approval, but
+ * only after the rule merge, so an explicit `deny` / `ask` rule still wins.
  */
 
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'ask-writes';
@@ -52,6 +58,8 @@ const BUILTIN_TOOL_CLASSES: Readonly<Record<string, ToolClass>> = {
   Write: 'write',
   Edit: 'write',
   Bash: 'execute',
+  fetch: 'execute',
+  web_search: 'read',
   TeamAssign: 'internal',
   transfer_task: 'internal',
   TaskCreate: 'internal',
@@ -248,6 +256,72 @@ export function resolveWebAccessTier(
   return agentOverride ?? channelWebAccess ?? DEFAULT_WEB_ACCESS_TIER;
 }
 
+/** A target context's 联网档 facts (D1). */
+export interface TargetWebAccessContext {
+  agentOverride: WebAccessTier | null;
+  /** The channel value, or null for a DM (there is no channel). */
+  channelWebAccess: WebAccessTier | null;
+  /** The value this target context resolves to. */
+  tier: WebAccessTier;
+}
+
+/**
+ * Resolve one target's effective 联网档 the same way `readTargetPermissionContext`
+ * resolves its mode: a DM has no channel, so the Agent override and the default
+ * are the whole chain; a task follows its channel. T4's tool assembly and the
+ * gate's tier exemption read this one function.
+ */
+export function readTargetWebAccessContext(
+  db: Database.Database,
+  memberId: string,
+  targetId: string,
+): TargetWebAccessContext | null {
+  const kind = readTargetKind(db, targetId);
+  if (kind === null) {
+    return null;
+  }
+  const agentOverride = readAgentWebAccessOverride(db, memberId);
+  if (kind === 'dm') {
+    return {
+      agentOverride,
+      channelWebAccess: null,
+      tier: resolveWebAccessTier(agentOverride, null),
+    };
+  }
+  const row =
+    kind === 'channel'
+      ? (db.prepare('SELECT web_access FROM channel WHERE id = ?').get(targetId) as
+          | { web_access: string | null }
+          | undefined)
+      : (db
+          .prepare(
+            `SELECT c.web_access
+               FROM task t JOIN channel c ON c.id = t.channel_id
+              WHERE t.target_id = ?`,
+          )
+          .get(targetId) as { web_access: string | null } | undefined);
+  if (row === undefined) {
+    return null;
+  }
+  const channelWebAccess = isWebAccessTier(row.web_access) ? row.web_access : null;
+  return {
+    agentOverride,
+    channelWebAccess,
+    tier: resolveWebAccessTier(agentOverride, channelWebAccess),
+  };
+}
+
+/** The raw Agent 联网档 override (NULL = follow the channel / default). */
+export function readAgentWebAccessOverride(
+  db: Database.Database,
+  memberId: string,
+): WebAccessTier | null {
+  const row = db
+    .prepare('SELECT web_access FROM agent_config WHERE member_id = ?')
+    .get(memberId) as { web_access: string | null } | undefined;
+  return isWebAccessTier(row?.web_access) ? row.web_access : null;
+}
+
 /** A target context's permission facts (D5.5). */
 export interface TargetPermissionContext {
   targetId: string;
@@ -261,6 +335,12 @@ export interface TargetPermissionContext {
   agentOverride: PermissionMode | null;
   /** The mode this target context resolves to. */
   effective: PermissionMode;
+  /**
+   * The 联网档 this target context resolves to (D1 / D4). The gate reads it for
+   * one exemption only: `fetch` on a `search+fetch` target is allowed without an
+   * approval once no rule matched.
+   */
+  webAccessTier: WebAccessTier;
   allowLocalShell: 0 | 1;
   /**
    * The shell runs inside the Docker workspace container (#49 / D5.3) rather
@@ -296,17 +376,20 @@ export function readTargetPermissionContext(
       channelMode: null,
       agentOverride: override,
       effective: override ?? DEFAULT_PERMISSION_MODE,
+      webAccessTier: resolveWebAccessTier(readAgentWebAccessOverride(db, memberId), null),
       allowLocalShell: 0,
     };
   }
   const row =
     kind === 'channel'
       ? (db
-          .prepare('SELECT id, permission_mode, allow_local_shell FROM channel WHERE id = ?')
+          .prepare(
+            'SELECT id, permission_mode, allow_local_shell, web_access FROM channel WHERE id = ?',
+          )
           .get(targetId) as ChannelPermissionRow | undefined)
       : (db
           .prepare(
-            `SELECT c.id, c.permission_mode, c.allow_local_shell
+            `SELECT c.id, c.permission_mode, c.allow_local_shell, c.web_access
                FROM task t JOIN channel c ON c.id = t.channel_id
               WHERE t.target_id = ?`,
           )
@@ -326,6 +409,10 @@ export function readTargetPermissionContext(
     channelMode,
     agentOverride: override,
     effective: override ?? channelMode,
+    webAccessTier: resolveWebAccessTier(
+      readAgentWebAccessOverride(db, memberId),
+      isWebAccessTier(row.web_access) ? row.web_access : null,
+    ),
     allowLocalShell: row.allow_local_shell === 1 ? 1 : 0,
   };
 }
@@ -334,6 +421,7 @@ interface ChannelPermissionRow {
   id: string;
   permission_mode: string;
   allow_local_shell: number;
+  web_access: string | null;
 }
 
 /** The raw Agent override (NULL = follow the channel / default). */
@@ -385,14 +473,22 @@ export interface PermissionDecision {
   decision: 'allow' | 'deny' | 'ask';
   /**
    * The reason code that produced the decision:
-   * `read-only` / `shell-disabled` / `rule-deny` / `rule-ask` / `mode-ask` /
-   * `mode-allow` / `trusted-root-write` / `shell-approval`.
+   * `read-only` / `read-only-tool` / `shell-disabled` / `rule-deny` /
+   * `rule-ask` / `web-fetch-tier` / `mode-ask` / `mode-allow` /
+   * `trusted-root-write` / `shell-approval`.
+   *
+   * `read-only-tool` is the hard boundary for `fetch` (D2): it is stated apart
+   * from the general `read-only` so a reader can tell "execution under
+   * read-only" from "the one tool read-only never permits". `web-fetch-tier` is
+   * the `search+fetch` exemption (D4), which sits after the rule merge.
    */
   reason:
     | 'read-only'
+    | 'read-only-tool'
     | 'shell-disabled'
     | 'rule-deny'
     | 'rule-ask'
+    | 'web-fetch-tier'
     | 'mode-ask'
     | 'mode-allow'
     | 'trusted-root-write'
@@ -426,7 +522,14 @@ export function checkPermission(
     }
   }
   if (context.effective === 'read-only' && reading.tool_class !== 'read') {
-    return { decision: 'deny', reason: 'read-only' };
+    // `fetch` is stated apart: read-only never permits pulling remote bytes,
+    // and a DM never assembles it either (D2).
+    return request.tool_name === 'fetch'
+      ? { decision: 'deny', reason: 'read-only-tool' }
+      : { decision: 'deny', reason: 'read-only' };
+  }
+  if (request.tool_name === 'fetch' && context.targetKind === 'dm') {
+    return { decision: 'deny', reason: 'read-only-tool' };
   }
 
   // 2. Rule merge: same-key Agent rows replace channel rows, then every
@@ -446,6 +549,17 @@ export function checkPermission(
   }
   if (merged === 'allow') {
     return { decision: 'allow', reason: 'mode-allow' };
+  }
+
+  // 2b. 联网档豁免 (D4): the human chose `search+fetch`, so a fetch with no
+  //     matching rule runs without a per-call approval. It sits after the merge
+  //     on purpose — a `deny` / `ask` rule above still wins.
+  if (
+    reading.tool_name === 'fetch' &&
+    context.targetKind !== 'dm' &&
+    context.webAccessTier === 'search+fetch'
+  ) {
+    return { decision: 'allow', reason: 'web-fetch-tier' };
   }
 
   // 3. Mode default.
