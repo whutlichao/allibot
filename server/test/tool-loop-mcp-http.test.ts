@@ -16,6 +16,7 @@ import {
   type RecordingEndpoint,
   type RunningServer,
 } from './support.ts';
+import { messagesOf } from './provider-rows.ts';
 
 /**
  * MCP 工具进轮内循环 (#76 / T10 / D2 / D3 / D5 / D6 / D10): the tools a round's
@@ -68,11 +69,6 @@ interface ToolResultShape {
   id: string;
   content: string;
   isError: boolean;
-}
-
-function messagesOf(payload: Record<string, unknown>): Record<string, unknown>[] {
-  const messages = payload['messages'];
-  return Array.isArray(messages) ? (messages as Record<string, unknown>[]) : [];
 }
 
 /** One assistant turn that requests the given tool calls, optionally with narration. */
