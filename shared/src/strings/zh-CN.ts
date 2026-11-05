@@ -1085,4 +1085,10 @@ export const ZH_CN = {
     text: '（扫描文件数已封顶：只扫描了前 {limit} 个文件，还有文件未扫描）',
     params: ['limit'],
   },
+  // Bash 输出上限（#75 / D6）：shell 侧已截断的事实必须显式回灌，否则模型会把
+  // 「只看到一段」读成「命令就输出这么多」。
+  'tool.bash.output.truncated': {
+    text: '（输出已截断：单次调用的输出超过 {limit} 字节上限，超出部分未捕获）',
+    params: ['limit'],
+  },
 } as const satisfies Record<string, CatalogEntry>;
