@@ -87,6 +87,11 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
   成员只读 `skills/` 第二根；越根、不存在、不可读都是回灌给模型的工具结果，不结束轮次。
 - `TaskList` / `TaskGet`：需要 Plan face（`RoundInput.plan` 非空），只读本轮 Plan run；
   `TaskGet` 查不到 id 是 `not-found` 工具结果。
+- `Write` / `Edit`：需要项目根（`RoundInput.workspace` 非空），且只能写在项目根内——相对
+  路径从根起算，绝对路径只在 realpath 落在根内时接受，`..` 一律拒绝；无项目根的轮次（DM、
+  未设根的频道）拿不到这两个工具。`ask-writes`（默认档）下每次写调用都触发既有的 600 秒
+  审批批次（见下方「审批语义」）：批准即写、拒绝回 `denied` 工具结果、超时收口 `failed`；
+  越根、父目录不存在、`old_string` 未命中、写失败都是回灌给模型的工具结果，轮次继续。
 - 两家 provider（`anthropic` 与 `openai:<模型>`）行为一致：工具定义与工具结果各按自己的
   wire shape 序列化（`tools[].input_schema` + `tool_use` / `tools[].function.parameters` +
   `tool_calls`），循环、上限与收口完全一致。
@@ -98,13 +103,12 @@ Docker 是容器隔离，不是网络隔离。M2 **不交付**以下 T12 能力�
 以下工具名在轮次可用集里，但本批没有给模型提供规格，因此真实模型调不到，只有脚本化
 provider（`--scripted-provider`）能驱动：
 
-- 写类与执行类：`Write` / `Edit` / `Bash` / MCP 工具 `mcp:<server>/<tool>`。
+- 执行类：`Bash` / MCP 工具 `mcp:<server>/<tool>`。
 - 编排类：`TeamAssign` / `transfer_task` / Plan 的写工具 `TaskCreate` / `TaskUpdate`。
 - `SopVerdict` 的结构化判定通道：通道已定（一个专用 `internal` 类工具映射到既有
   `sopVerdict`），本批未实现；`RoundResult.taskAction` 用的同一条通道同理。
 
-接入真实模型不等于 team 分派、Plan 写、SOP 判定或写类 / 执行类工具可用；本版本不能这样
-宣传。
+接入真实模型不等于 team 分派、Plan 写、SOP 判定或执行类工具可用；本版本不能这样宣传。
 
 ### 上限语义
 
@@ -131,7 +135,7 @@ provider（`--scripted-provider`）能驱动：
 
 - **工具面失败**（越根、不存在、不可读、参数形状不合、未知工具、审批拒绝）是回灌给模型的
   工具结果，带稳定错误码（`outside-root` / `not-found` / `invalid-arguments` /
-  `unknown-tool` / `denied`），轮次继续，由模型自己改道。
+  `unknown-tool` / `denied` / `old-string-not-found`），轮次继续，由模型自己改道。
 - **provider 链路失败**（HTTP 非 2xx、响应不可解析、单次调用 60 秒超时）收口 `failed`，
   reason 走「模型调用失败：{message}」，错误体里的密钥已掩码。
 - 缺 consent、缺凭证、未配置模型仍是**零远端调用** + `failed`，reason 点名 provider /
@@ -146,8 +150,11 @@ provider（`--scripted-provider`）能驱动：
   上限。
 - 只读工具在默认路径上不触达审批（`read` 类落到 `mode-allow`），但一条
   `permission_rule(Read, …, ask)` 会让它们触达：此时同样阻塞等待、超时同样收口 `failed`。
-- 本批没有「一轮内审批批次数」上限，所以一条 `ask` 规则可以让一个只读轮次占满一个 600 秒
-  批次。这是接受的风险，不是遗漏。
+- 写类（`Write` / `Edit`）在 `ask-writes` 下按模式默认问，`trusted-writes` 下根内写直接放行、
+  根外效果仍问；一条 reply 里的多次写调用沿用 ADR-0007 决定 5：同一 `approval_request` 行里
+  合并 `tool_calls`，重开只发布新调用、保留历史决策，判据是全部历史决策。
+- 本批没有「一轮内审批批次数」上限，所以一条 `ask` 规则或 `ask-writes` 下的一次写调用都可以
+  让一个轮次占满一个 600 秒批次。这是接受的风险，不是遗漏。
 
 ### 仍不提供的能力
 
