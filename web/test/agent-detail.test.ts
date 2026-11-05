@@ -182,6 +182,8 @@ const REMOTE_DATA_FLOW: RemoteDataFlowReadView = {
   ],
   mcp_consents: [],
   docker_consents: [],
+  web_consents: [],
+  web_providers: [],
 };
 
 test('the Agent detail renders the three tabs in the fixed order', () => {

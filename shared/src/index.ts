@@ -177,12 +177,39 @@ export interface RemoteDataFlowView {
 }
 
 /**
- * The three remote data-flow consent kinds (#47 / v21). `model` is M1's
- * provider consent; `mcp` confirms one remote MCP server by name; `docker`
- * confirms one image reference before a pull. All three store only the scope
- * and when it was confirmed — never a URL, command, env value or credential.
+ * The five credential providers of 联网 provider 凭据 (D6 / ADR 0010). The order
+ * is also the third step of the resolution order: `brave` → `tavily` →
+ * `perplexity` → `jina` → `exa`. A sixth name is not a provider.
  */
-export const REMOTE_CONSENT_SCOPE_KINDS = ['model', 'mcp', 'docker'] as const;
+export const WEB_PROVIDERS = ['brave', 'tavily', 'perplexity', 'jina', 'exa'] as const;
+export type WebProvider = (typeof WEB_PROVIDERS)[number];
+
+/**
+ * One web provider as the human face reads it. ADR 0010 draws the boundary
+ * here: the reading carries the mask, the status and the default flag, never
+ * the credential value.
+ */
+export interface WebProviderCredentialView {
+  provider: WebProvider;
+  /** The environment variable that is only the fallback once a row is stored. */
+  credential_env: string;
+  credential_status: CredentialStatus;
+  /** The stored key in `sk-…abcd` form, or null when no row is stored. */
+  api_key_mask: string | null;
+  is_default: 0 | 1;
+  /** Where a call would go: the endpoint override or the provider default. */
+  receiver: string;
+  confirmed_at: string | null;
+}
+
+/**
+ * The four remote data-flow consent kinds (#47 / v21, widened by M3 v25).
+ * `model` is M1's provider consent; `mcp` confirms one remote MCP server by
+ * name; `docker` confirms one image reference before a pull; `web` confirms one
+ * 联网 provider by name. All four store only the scope and when it was
+ * confirmed — never a URL, command, env value or credential.
+ */
+export const REMOTE_CONSENT_SCOPE_KINDS = ['model', 'mcp', 'docker', 'web'] as const;
 export type RemoteConsentScopeKind = (typeof REMOTE_CONSENT_SCOPE_KINDS)[number];
 
 /** One consent row as the human face reads it: scope and time only. */
@@ -201,6 +228,10 @@ export interface RemoteDataFlowReadView {
   mcp_consents: RemoteConsentScopeView[];
   /** Confirmed Docker image references (reference + time only; D5.3). */
   docker_consents: RemoteConsentScopeView[];
+  /** Confirmed 联网 providers (provider name + time only; D11). */
+  web_consents: RemoteConsentScopeView[];
+  /** The five 联网 providers, masked and in the fixed order (ADR 0010). */
+  web_providers: WebProviderCredentialView[];
 }
 
 /**

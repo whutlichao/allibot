@@ -100,6 +100,12 @@ import {
 } from './skills.js';
 import { listTeamRuns, parseTeamRunQuery, prepareTeamChangeWake } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
+import {
+  confirmWebProviderConsent,
+  parseWebProviderCredential,
+  parseWebProviderParam,
+  writeWebProviderCredential,
+} from './web-providers.js';
 import { readWorkspace } from './workspace.js';
 
 export const HOST = '127.0.0.1';
@@ -595,7 +601,7 @@ const ROUTES: readonly Route[] = [
     },
   },
   {
-    // 通用一次性确认 (#47 / D2.3): model / mcp / docker all write the same
+    // 通用一次性确认 (#47 / D2.3): model / mcp / docker / web all write the same
     // `remote_consent_scope` row and keep the first confirmation time.
     method: 'POST',
     pattern: /^\/api\/remote-data-flow\/consent$/,
@@ -610,6 +616,28 @@ const ROUTES: readonly Route[] = [
     handle: async (_request, response, { db }, ...params) => {
       const provider = parseProviderParam(decodeId(params[0]));
       sendJson(response, 200, confirmProviderConsent(db, provider));
+    },
+  },
+  {
+    // 联网 provider 凭据写面 (D11): saving the key and saying yes to the
+    // `('web', provider)` data flow are one call, so no UI can forget the
+    // second half. The reading that comes back is the mask only.
+    method: 'PUT',
+    pattern: /^\/api\/web-providers\/([^/]+)\/credential$/,
+    handle: async (request, response, { db, env }, ...params) => {
+      const provider = parseWebProviderParam(decodeId(params[0]));
+      const input = parseWebProviderCredential(await readJsonBody(request));
+      sendJson(response, 200, writeWebProviderCredential(db, provider, input, env));
+    },
+  },
+  {
+    // The separate confirmation: a provider can be told once without touching
+    // the key, and a replay keeps the first instant.
+    method: 'POST',
+    pattern: /^\/api\/web-providers\/([^/]+)\/consent$/,
+    handle: async (_request, response, { db, env }, ...params) => {
+      const provider = parseWebProviderParam(decodeId(params[0]));
+      sendJson(response, 200, confirmWebProviderConsent(db, provider, env));
     },
   },
   {
