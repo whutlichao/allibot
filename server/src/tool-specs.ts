@@ -1,11 +1,13 @@
 import type { MessageKey, MessageValues, PlanTaskView } from '@allibot/shared';
 import type {
+  EditFileRequest,
   GlobFileRequest,
   GrepFileRequest,
   RoundFileToolResult,
   RoundFileTools,
   RoundInput,
   RoundPlanFace,
+  WriteFileRequest,
 } from './agent-seam.js';
 import { MAX_GREP_FILES } from './docker-files.js';
 import { classifyToolName } from './permissions.js';
@@ -55,10 +57,11 @@ export function capToolResultContent(content: string, t: ToolCopy): string {
  * no file tool and a round with no Plan face is offered no Plan tool — those
  * names are absent from the provider request, not refused at call time.
  *
- * This is the first batch (#59): the read-only tools `Read` / `Glob` / `Grep`
- * over the round's file face and `TaskList` / `TaskGet` over its Plan face. The
- * write, execution and orchestration tools arrive with later batches; a name
- * without a spec here is not offered, even when `RoundInput.tools` lists it.
+ * The read-only batch (#59) is `Read` / `Glob` / `Grep` over the round's file
+ * face and `TaskList` / `TaskGet` over its Plan face. The write batch (#74) adds
+ * `Write` / `Edit` over the same file face, behind the tool gate the face itself
+ * applies. The execution and orchestration tools arrive with later batches; a
+ * name without a spec here is not offered, even when `RoundInput.tools` lists it.
  */
 
 /** One argument a tool accepts, in the order the model sees it. */
@@ -191,6 +194,57 @@ const GREP: RoundToolSpec = {
   },
 };
 
+const WRITE: RoundToolSpec = {
+  name: 'Write',
+  description:
+    "Write one UTF-8 text file inside this round's project root, creating it when it does not " +
+    'exist. `path` is relative to the project root; an absolute path is accepted only when it ' +
+    'resolves inside that root, and `..` is always refused. A path outside the root, a missing ' +
+    'parent directory and a failed write each come back as an error result. The call passes the ' +
+    "round's permission gate first, so a mode or rule that asks waits for the human decision and " +
+    'a denial comes back as a `denied` result; none of those ends the round.',
+  arguments: [
+    { name: 'path', description: 'The project-root-relative file to write.', required: true },
+    { name: 'content', description: 'The UTF-8 text to write, replacing the file.', required: true },
+  ],
+  available: (input) => input.workspace !== null,
+  async execute(input, context) {
+    // The shape check proved both required arguments present.
+    const request: WriteFileRequest = { path: input['path']!, content: input['content']! };
+    return shapeWrite(request, await context.files().Write(request));
+  },
+};
+
+const EDIT: RoundToolSpec = {
+  name: 'Edit',
+  description:
+    "Replace every occurrence of `old_string` with `new_string` in one UTF-8 text file inside " +
+    "this round's project root. `path` is relative to the project root; an absolute path is " +
+    'accepted only when it resolves inside that root, and `..` is always refused. The file must ' +
+    'already exist and `old_string` must occur in it. A path outside the root, a missing file and ' +
+    "an `old_string` that does not occur each come back as an error result. The call passes the " +
+    "round's permission gate first, so a mode or rule that asks waits for the human decision and " +
+    'a denial comes back as a `denied` result; none of those ends the round.',
+  arguments: [
+    { name: 'path', description: 'The project-root-relative file to edit.', required: true },
+    {
+      name: 'old_string',
+      description: 'The exact text to replace; every occurrence is replaced.',
+      required: true,
+    },
+    { name: 'new_string', description: 'The text to replace it with.', required: true },
+  ],
+  available: (input) => input.workspace !== null,
+  async execute(input, context) {
+    const request: EditFileRequest = {
+      path: input['path']!,
+      old_string: input['old_string']!,
+      new_string: input['new_string']!,
+    };
+    return shapeEdit(request, await context.files().Edit(request));
+  },
+};
+
 const TASK_LIST: RoundToolSpec = {
   name: 'TaskList',
   description:
@@ -219,7 +273,15 @@ const TASK_GET: RoundToolSpec = {
 };
 
 /** The tools this batch puts in the loop, in the order the model sees them. */
-const BATCH_TOOLS: readonly RoundToolSpec[] = [READ, GLOB, GREP, TASK_LIST, TASK_GET];
+const BATCH_TOOLS: readonly RoundToolSpec[] = [
+  READ,
+  GLOB,
+  GREP,
+  WRITE,
+  EDIT,
+  TASK_LIST,
+  TASK_GET,
+];
 
 /**
  * The `internal` tools this batch offers although their class is not `read`:
@@ -229,10 +291,11 @@ const READ_ONLY_INTERNAL_TOOLS: readonly string[] = ['TaskList', 'TaskGet'];
 
 /**
  * Whether a tool belongs to this batch's scope by its own class (D2): the `read`
- * class, plus the read-only internal tools, read off the product's one
- * classification (`classifyToolName`). This is a scope filter, not a permission
- * decision: it decides what the round's request offers, and the tool gate still
- * decides every call that reaches a face.
+ * class, the `write` class (#74), plus the read-only internal tools, read off
+ * the product's one classification (`classifyToolName`). This is a scope filter,
+ * not a permission decision: it decides what the round's request offers, and the
+ * tool gate still decides every call that reaches a face — which is where an
+ * `ask` becomes a 600-second approval batch and a `deny` becomes `DENIED`.
  */
 function inBatchScope(name: string): boolean {
   const reading = classifyToolName(name);
@@ -241,6 +304,7 @@ function inBatchScope(name: string): boolean {
   }
   return (
     reading.tool_class === 'read' ||
+    reading.tool_class === 'write' ||
     (reading.tool_class === 'internal' && READ_ONLY_INTERNAL_TOOLS.includes(reading.tool_name))
   );
 }
@@ -431,6 +495,41 @@ export function shapeGrep(
       ? ['(no line matched)']
       : matches.map((match) => `${match.path}:${match.line}: ${match.text}`)),
   );
+  return { ok: true, content: lines.join('\n') };
+}
+
+/**
+ * One `Write` result: the request, then how much landed. The face's own result
+ * carries no content echo, so a write of a huge file never doubles the re-feed.
+ */
+function shapeWrite(requested: WriteFileRequest, result: RoundFileToolResult): ToolAnswer {
+  const request = [`path: ${requested.path}`];
+  if (!result.ok) {
+    return shapeFileFailure('Write', request, result);
+  }
+  const lines = [statusLine('Write', result), `path: ${result.path ?? requested.path}`];
+  if (result.scope !== undefined) {
+    lines.push(`root: ${result.scope}`);
+  }
+  if (result.bytes !== undefined) {
+    lines.push(`bytes: ${result.bytes}`);
+  }
+  return { ok: true, content: lines.join('\n') };
+}
+
+/** One `Edit` result: the request, then how many occurrences were replaced. */
+function shapeEdit(requested: EditFileRequest, result: RoundFileToolResult): ToolAnswer {
+  const request = [`path: ${requested.path}`];
+  if (!result.ok) {
+    return shapeFileFailure('Edit', request, result);
+  }
+  const lines = [statusLine('Edit', result), `path: ${result.path ?? requested.path}`];
+  if (result.scope !== undefined) {
+    lines.push(`root: ${result.scope}`);
+  }
+  if (result.replacements !== undefined) {
+    lines.push(`replacements: ${result.replacements}`);
+  }
   return { ok: true, content: lines.join('\n') };
 }
 
