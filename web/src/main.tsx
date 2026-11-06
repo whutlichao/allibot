@@ -62,6 +62,8 @@ import {
 } from './workspace/sops.ts';
 import {
   confirmProviderDataFlow,
+  createAgent,
+  createChannel,
   deleteAgent,
   createSopDefinition,
   joinChannelMember,
@@ -77,6 +79,7 @@ import {
   importAllAgentSkills,
   installAgentSkill,
   readTargetMembers,
+  readWorkspace,
   setAgentSkillEnabled,
   saveAgentConfig,
   saveAgentMcp,
@@ -399,6 +402,18 @@ async function deleteAgentAction(agentId: string): Promise<void> {
   await refreshWorkspace();
 }
 
+/**
+ * 空状态里的两个创建（D9）：动作自己带回刷新后的工作台读数，宿主直接采用，
+ * 不再多读一次；名字就是用户输入的名字，空名字已由表单拦下。
+ */
+async function createChannelAction(name: string): Promise<void> {
+  await adoptWorkspaceReading(await createChannel(fetch, name));
+}
+
+async function createAgentAction(name: string): Promise<void> {
+  await adoptWorkspaceReading(await createAgent(fetch, name));
+}
+
 /** One one-time provider consent; the workspace re-read refreshes the status point. */
 async function confirmProviderConsentAction(provider: AgentProvider): Promise<void> {
   await confirmProviderDataFlow(fetch, provider);
@@ -531,6 +546,8 @@ function render(): void {
             .catch(() => false)
         }
         onJoinMember={joinChannelMemberAction}
+        onCreateChannel={createChannelAction}
+        onCreateAgent={createAgentAction}
         onSaveAgent={saveAgentAction}
         onChannelConfigChange={channelConfigAction}
         onCreateSop={createSopAction}
@@ -636,21 +653,10 @@ function render(): void {
 }
 
 /**
- * Re-read the one workspace reading (D1.9): SSE frames carry facts, not the
- * reading itself, so unread / task / status changes re-fetch the snapshot
- * instead of growing a local count.
+ * 采用一份新的工作台读数：先换正本，再按需重读跟随它的读数（权限规则、
+ * 审批、远端数据流、当前 target 的成员表 / team / plan / SOP），最后渲染。
  */
-async function refreshWorkspace(): Promise<void> {
-  const generation = ++refreshGeneration;
-  const response = await fetch('/api/workspace');
-  if (!response.ok) {
-    throw new Error(`GET /api/workspace failed with ${response.status}`);
-  }
-  const reading = (await response.json()) as WorkspaceView;
-  if (generation !== refreshGeneration) {
-    return;
-  }
-
+async function adoptWorkspaceReading(reading: WorkspaceView): Promise<void> {
   currentWorkspace = reading;
   currentSettings = reading.settings;
   // 读数又读到了：兜底设置面的「设置读取失败」随之消失。
@@ -697,6 +703,20 @@ async function refreshWorkspace(): Promise<void> {
     }
   }
   render();
+}
+
+/**
+ * Re-read the one workspace reading (D1.9): SSE frames carry facts, not the
+ * reading itself, so unread / task / status changes re-fetch the snapshot
+ * instead of growing a local count.
+ */
+async function refreshWorkspace(): Promise<void> {
+  const generation = ++refreshGeneration;
+  const reading = await readWorkspace(fetch);
+  if (generation !== refreshGeneration) {
+    return;
+  }
+  await adoptWorkspaceReading(reading);
 }
 
 window.addEventListener('resize', () => {

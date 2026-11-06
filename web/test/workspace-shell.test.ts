@@ -49,6 +49,16 @@ import {
   shouldRefreshWorkspace,
   toChatMessage,
 } from '../src/workspace/message-sync.ts';
+import {
+  InlineCreateForm,
+  canCreateInline,
+  editInlineCreateName,
+  initialInlineCreate,
+  runInlineCreate,
+  submitInlineCreate,
+  type InlineCreateState,
+} from '../src/workspace/inline-create.ts';
+import { createChannel } from '../src/workspace-actions.ts';
 import { TargetNav } from '../src/workspace/TargetNav.ts';
 import { ContextPanel } from '../src/workspace/ContextPanel.ts';
 import {
@@ -77,6 +87,7 @@ const DM_ID = '33333333-3333-4333-8333-333333333333';
 const ARCHIVED_DM_ID = '44444444-4444-4444-8444-444444444444';
 const TASK_ID = '55555555-5555-4555-8555-555555555555';
 const TASK_TARGET_ID = '66666666-6666-4666-8666-666666666666';
+const NEW_CHANNEL_ID = '77777777-7777-4777-8777-777777777777';
 
 const WEB_ROOT = new URL('../', import.meta.url);
 const WEB_SRC = new URL('../src/', import.meta.url);
@@ -517,6 +528,238 @@ test('the left navigation lists every target group and the local Agents from the
   assert.match(html, /data-action="open-agent-detail" data-member-id="agent-1"/);
 });
 
+function emptyWorkspace(): WorkspaceView {
+  return {
+    ...workspace(),
+    agents: [],
+    channels: [],
+    dms: [],
+    tasks: [],
+    pending_approvals: 0,
+    unread_total: 0,
+    unread_by_target: {},
+    status_points: {},
+  };
+}
+
+function sectionRegion(html: string, section: string): string {
+  const start = html.indexOf(`data-section="${section}"`);
+  assert.notEqual(start, -1, `missing the ${section} section`);
+  const next = html.indexOf('data-section="', start + 1);
+  return html.slice(start, next === -1 ? undefined : next);
+}
+
+test('an empty workspace states the next step for channels and local Agents', () => {
+  const html = renderToStaticMarkup(
+    createElement(TargetNav, {
+      workspace: emptyWorkspace(),
+      activeTargetId: null,
+      locale: 'zh-CN',
+      onCreateChannel: async () => {},
+      onCreateAgent: async () => {},
+    }),
+  );
+
+  const channels = sectionRegion(html, 'channels');
+  assert.ok(
+    channels.includes(ZH_CN['workspace.nav.channelsEmpty'].text),
+    'the empty channel list says what to do next',
+  );
+  assert.match(channels, /data-empty-state="channels"/, 'the guidance is its own empty state');
+  assert.match(channels, /<input[^>]*aria-label="频道名"/, 'the form has one name input');
+  assert.match(channels, /data-action="create-channel"/, 'the form has one create button');
+  assert.match(
+    channels,
+    /data-action="create-channel"[^>]*disabled/,
+    'an empty name cannot be submitted',
+  );
+
+  const agents = sectionRegion(html, 'agents');
+  assert.ok(
+    agents.includes(ZH_CN['workspace.nav.agentsEmpty'].text),
+    'the empty Agent list says what to do next',
+  );
+  assert.match(agents, /data-empty-state="agents"/);
+  assert.match(agents, /<input[^>]*aria-label="Agent 名"/);
+  assert.match(agents, /data-action="create-agent"/);
+  assert.match(agents, /data-action="create-agent"[^>]*disabled/);
+
+  for (const section of ['archived-channels', 'dms', 'archived-dms', 'tasks']) {
+    assert.ok(
+      sectionRegion(html, section).includes(ZH_CN['workspace.nav.empty'].text),
+      `the ${section} section keeps the plain 暂无 empty line`,
+    );
+  }
+});
+
+test('a populated workspace carries no create entry', () => {
+  const html = renderToStaticMarkup(
+    createElement(TargetNav, {
+      workspace: workspace(),
+      activeTargetId: CHANNEL_ID,
+      locale: 'zh-CN',
+      onCreateChannel: async () => {},
+      onCreateAgent: async () => {},
+    }),
+  );
+
+  assert.doesNotMatch(html, /data-action="create-channel"/, 'a non-empty channel list has no create entry');
+  assert.doesNotMatch(html, /data-action="create-agent"/, 'a non-empty Agent list has no create entry');
+});
+
+test('the inline create form never posts an empty or invented name', async () => {
+  const posted: string[] = [];
+  const create = async (name: string): Promise<void> => {
+    posted.push(name);
+  };
+
+  const empty = initialInlineCreate();
+  assert.equal(canCreateInline(empty), false, 'an empty name cannot be submitted');
+  assert.deepEqual(
+    await submitInlineCreate(empty, create),
+    empty,
+    'an empty name changes nothing',
+  );
+
+  const blank = editInlineCreateName(empty, '   ');
+  assert.equal(canCreateInline(blank), false, 'a whitespace-only name cannot be submitted');
+  assert.deepEqual(await submitInlineCreate(blank, create), blank);
+  assert.deepEqual(posted, [], 'no name, no request');
+
+  const named = editInlineCreateName(blank, ' 发布环 ');
+  assert.equal(canCreateInline(named), true);
+  assert.deepEqual(await submitInlineCreate(named, create), initialInlineCreate());
+  assert.deepEqual(posted, ['发布环'], 'the typed name is sent trimmed, never a default name');
+});
+
+test('the create entry marks submitting, then settles the draft it started from', async () => {
+  const states: InlineCreateState[] = [];
+  const posted: string[] = [];
+  const create = async (name: string): Promise<void> => {
+    posted.push(name);
+  };
+
+  await runInlineCreate(
+    editInlineCreateName(initialInlineCreate(), ' 发布环 '),
+    create,
+    (next) => states.push(next),
+  );
+
+  assert.deepEqual(posted, ['发布环'], 'the button path posts the typed name once');
+  assert.deepEqual(
+    states.map((state) => [state.submitting, state.failed, state.name]),
+    [
+      [true, false, ' 发布环 '],
+      [false, false, ''],
+    ],
+    'the button is disabled while the request is open, then the draft is cleared',
+  );
+
+  const failedStates: InlineCreateState[] = [];
+  await runInlineCreate(
+    editInlineCreateName(initialInlineCreate(), '发布环'),
+    async () => {
+      throw new Error('POST /api/channels failed with 400');
+    },
+    (next) => failedStates.push(next),
+  );
+  assert.deepEqual(
+    failedStates.map((state) => [state.submitting, state.failed, state.name]),
+    [
+      [true, false, '发布环'],
+      [false, true, '发布环'],
+    ],
+    'a rejected create keeps the name and flags the failure',
+  );
+
+  const emptyStates: InlineCreateState[] = [];
+  await runInlineCreate(initialInlineCreate(), create, (next) => emptyStates.push(next));
+  assert.deepEqual(emptyStates, [], 'an empty name never leaves the form');
+  assert.deepEqual(posted, ['发布环'], 'an empty name posts nothing');
+});
+
+test('the inline create form shows its error inside the empty state', () => {
+  const html = renderToStaticMarkup(
+    createElement(InlineCreateForm, {
+      state: { name: '发布环', submitting: false, failed: true },
+      locale: 'zh-CN',
+      nameLabel: '频道名',
+      submitLabel: '新建频道',
+      action: 'create-channel',
+      onChange: () => {},
+      onSubmit: () => {},
+    }),
+  );
+
+  assert.ok(
+    html.includes(ZH_CN['workspace.nav.createFailed'].text),
+    'a failed create states the failure inside the empty state',
+  );
+  assert.match(html, /role="alert"/);
+  assert.match(html, /<input[^>]*value="发布环"/, 'the typed name stays for a retry');
+});
+
+test('creating a channel from the empty state posts the typed name and re-reads the workspace', async () => {
+  const calls: string[] = [];
+  const created = channel({ id: NEW_CHANNEL_ID, name: '发布环' });
+  const after: WorkspaceView = { ...emptyWorkspace(), channels: [created] };
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    calls.push(`${init?.method ?? 'GET'} ${url} ${String(init?.body ?? '')}`.trim());
+    if (url === '/api/channels' && init?.method === 'POST') {
+      return new Response(JSON.stringify(created), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url === '/api/workspace') {
+      return new Response(JSON.stringify(after), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    throw new Error(`unexpected request ${init?.method ?? 'GET'} ${url}`);
+  }) as typeof fetch;
+
+  const state = editInlineCreateName(initialInlineCreate(), '发布环');
+  const settled = await submitInlineCreate(state, (name) => createChannel(fetchImpl, name));
+
+  assert.equal(settled.failed, false, 'the create is reported as done');
+  assert.deepEqual(
+    calls,
+    ['POST /api/channels {"name":"发布环"}', 'GET /api/workspace'],
+    'the create posts the typed name, then re-reads the workspace snapshot',
+  );
+  assert.deepEqual(
+    await createChannel(fetchImpl, '发布环'),
+    after,
+    'the action answers with the refreshed snapshot',
+  );
+});
+
+test('a rejected create stays in the empty state with its error and reads no snapshot', async () => {
+  const calls: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    calls.push(`${init?.method ?? 'GET'} ${url} ${String(init?.body ?? '')}`.trim());
+    return new Response(JSON.stringify({ error: { code: 'validation', message: 'name is required' } }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  const state = editInlineCreateName(initialInlineCreate(), '发布环');
+  const settled = await submitInlineCreate(state, (name) => createChannel(fetchImpl, name));
+
+  assert.equal(settled.failed, true, 'the failure is kept in the empty state');
+  assert.equal(settled.name, '发布环', 'the typed name stays for a retry');
+  assert.deepEqual(
+    calls,
+    ['POST /api/channels {"name":"发布环"}'],
+    'a rejected create never reads a success snapshot',
+  );
+});
+
 test('the context panel reads the selected target from the same workspace snapshot', () => {
   const channelHtml = renderToStaticMarkup(
     createElement(ContextPanel, {
@@ -707,6 +950,23 @@ test('the app shell renders the workspace reading into the one workbench', () =>
   }
 });
 
+test('the app shell hands the empty-state create entries down to the navigation', () => {
+  const empty = emptyWorkspace();
+  const html = renderToStaticMarkup(
+    createElement(App, {
+      workspace: empty,
+      settings: empty.settings,
+      activeTargetId: null,
+      viewportWidth: 1280,
+      onCreateChannel: async () => {},
+      onCreateAgent: async () => {},
+    }),
+  );
+
+  assert.match(html, /data-action="create-channel"/, 'the app wired the channel create entry');
+  assert.match(html, /data-action="create-agent"/, 'the app wired the Agent create entry');
+});
+
 test('the repository has one React workbench entry and no retired studio routes', async () => {
   const indexHtml = await readFile(new URL('index.html', WEB_ROOT), 'utf8');
   const scriptSources = [...indexHtml.matchAll(/<script[^>]+src="([^"]+)"/g)].map(
@@ -715,8 +975,10 @@ test('the repository has one React workbench entry and no retired studio routes'
   assert.deepEqual(scriptSources, ['/src/main.tsx'], 'index.html has one React entry');
 
   const main = await readFile(new URL('main.tsx', WEB_SRC), 'utf8');
-  assert.match(main, /['"]\/api\/workspace['"]/, 'the shell reads GET /api/workspace');
+  assert.match(main, /\breadWorkspace\b/, 'the shell reads the one workspace reading');
   assert.match(main, /from '\.\/App(\.ts|\.tsx)?'/, 'main.tsx renders the App shell');
+  const actions = await readFile(new URL('workspace-actions.ts', WEB_SRC), 'utf8');
+  assert.match(actions, /['"]\/api\/workspace['"]/, 'GET /api/workspace is the one workspace read');
 
   for (const file of await sourceFiles(WEB_SRC)) {
     const source = await readFile(file, 'utf8');
