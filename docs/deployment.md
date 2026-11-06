@@ -4,6 +4,9 @@
 provider 凭据、容器出网）。它可以在 **local** 或 **Docker** 工作区后端上运行；它不是完整沙箱，
 容器网络只有「默认无网 / 显式白名单」两态，按 host 的判定在联网工具层而不是网络层。
 
+M4 只改投递面，不改上面这些边界：`serve` 同时托管工作台的静态产物，`npm start` 是一条命令起整套，
+`npm run upgrade` 是一条命令升级（见「起服务」与「升级」两节）；工作区后端与 Schema（仍是 25）不变。
+
 ## 本地开发
 
 四步各有一条命令：构建 → 一次性迁移 → 起后端 → 起前端 dev。后端两条命令跑的都是根
@@ -20,7 +23,7 @@ provider 凭据、容器出网）。它可以在 **local** 或 **Docker** 工作
    `~/.allibot/data`，可用 `--data-dir <path>` 或 `allibot_DATA_DIR` 改。迁移不塞进 `serve`：
    迁移是一次性动作，起服务是每次动作；`serve` 在库缺失或 schema 落后时明确失败，不隐式迁移。
 3. **起后端**：`npm run dev:server`（即 `node dist/cli.js serve --port 3000`），只绑定
-   `127.0.0.1:3000`。
+   `127.0.0.1:3000`。这是**开发**入口；构建产物齐全后的日常起服务用 `npm start`，见下一节。
 4. **起前端 dev**：`npm run dev:web`（即 `npm run build --workspace shared && npm run dev --workspace web`），
    浏览器打开 `http://localhost:5173`。改完 `shared/src` 要**重启** dev，只刷新页面不够：
    Vite 把 `@allibot/shared` 预打包在 `web/node_modules/.vite` 里，重启前一直是旧产物；
@@ -49,6 +52,108 @@ allibot_API_ORIGIN=http://127.0.0.1:3010 npm run dev:web
 页面退回设置面板并显示「设置读取失败，请确认后端已启动。」（词条 `settings.error.load`）。
 这条读失败文案与写入失败（`settings.error.save`，「设置未保存」）是两条不同的失败，
 不要把前者当成后者排查。
+
+## 起服务：一条命令与一个静态宿主（M4）
+
+`serve` 现在同时是 API 与工作台的静态宿主：同一个进程、同一个 origin，没有第二个服务，也不需要
+反向代理。构建产物齐全之后的日常起服务就一条命令：
+
+```sh
+npm start
+```
+
+它等价于 `node dist/cli.js serve`，只绑定 `127.0.0.1:3000`，浏览器打开 `http://127.0.0.1:3000`。
+`npm start` 是**起整套**的入口，不是开发流程的替代：「本地开发」那几步（尤其 `dev:server` 与
+`dev:web` 的 5173 热重载）一行未改，仍照旧使用。两者用的是同一份 `web/dist`，区别只是 dev 前端由
+Vite 在 5173 上提供、后端在 3000 上提供 `/api`。
+
+### `/api` 前缀与 SPA fallback 的分界
+
+`startHttpServer` 里的判定顺序写死成三段：CopilotKit handler → 静态宿主 → `ROUTES`。静态分支的
+条件只有一条：方法 `GET` / `HEAD`，且 `pathname` **不在** `/api` 前缀下（前缀判定，`/api` 本身也
+算）。所以 `/api` 下的路径永远不进静态分支，没命中也仍由既有的 `ROUTES` 兜底。
+
+进入静态分支后按顺序求值，首个命中即返回：
+
+| 条件 | 结果 |
+| --- | --- |
+| `pathname` 落在 `/api` 前缀下 | 不进入静态分支，交给 `ROUTES` 与既有 `not_found` 信封 |
+| `web/dist` 下存在该文件 | 返回文件（MIME 按扩展名，未知扩展名 `application/octet-stream`） |
+| 以 `/assets/` 开头但文件不存在 | `404`，**不**回退 `index.html` |
+| 最后一段含点（`/nope.css`、`/x.map`） | `404` |
+| 其余（`/`、`/channels/abc`、`/tasks/123`） | `index.html`（SPA fallback） |
+
+最后一行是前端路由能直接刷新、能贴地址就能直达的原因。倒数第二行的判据是**最后一段含点**而不是
+扩展名白名单，所以 Vite 产物里的 `.js` / `.css` / `.woff2` / `.svg` / `.ico` / `.map` 缺失都是硬
+`404`：一个写错的样式表不能静默变成一份 HTML，否则浏览器只会报「样式不生效」。同理，倒数第三行
+与第一行是两条独立的护栏 —— `/assets/` 下最容易被误判成前端路由。静态根之外的读取（`..` 段、
+`%2e%2e%2f` 这类编码过的斜线、拼完后跑出 `web/dist` 的路径）一律 `404` 而不是 `403`：不向探测者
+提供「这个文件存在但你不该看」这一位信息。
+
+`/assets/` 下的文件名带内容 hash，回 `cache-control: public, max-age=31536000, immutable`；
+`index.html` 与其它文件回 `no-cache`，所以升级之后刷新页面就能拿到新的 asset 引用。
+
+**`/api` 的未命中仍是 JSON，不是页壳。** 这是本仓已经踩过的事故形态：`/api` 的路径一旦被 SPA
+fallback 吞成 `text/html`，前端的 `response.json()` 就在解析处抛错、而不是读到错误码 —— 一个拼错
+的接口看起来会像「后端没起」或「设置读取失败」（词条 `settings.error.load`），排查方向直接跑偏。
+所以 `/api` 的未命中保持既有信封：
+
+```sh
+curl -s http://127.0.0.1:3000/api/nope
+# {"error":{"code":"not_found","message":"unknown route: GET /api/nope"}}
+```
+
+响应头是 `application/json; charset=utf-8` + `404`；静态宿主的 `404` 则是 `text/plain` 的
+`not found: <pathname>`。两者形状不同是刻意的，用来区分「后端没有这条路由」与「前端没有这个文件」。
+
+### `web/dist` 缺失：`serve` 明确失败，不启动成「只有 API」
+
+启动前检查 `<web/dist>/index.html` 是否存在，缺失就直接失败退出（退出码 1），文案点名构建命令：
+
+```sh
+$ npm start
+...
+allibot：找不到前端构建产物 /<仓库根>/web/dist/index.html；启动服务前先在仓库根执行 `npm run build`，它会构建工作台的 web/dist。
+```
+
+词条键是 `cli.serve.webRootMissing`，与库缺失（`cli.serve.databaseMissing`）同形。检查发生在拿
+数据目录锁、打开库之前；`startHttpServer` 里还有同一个断言，所以任何调用方都启不了一个只有 API
+的服务。**不降级成「只提供 API」**：那会把「打开是 404」变成一个需要读源码才能解释的谜。修法是
+在仓库根跑一次 `npm run build`（它会把 `shared`、`server`、根 `dist/cli.js` 与 `web/dist` 一起
+构建出来）。
+
+静态根由模块位置解析（相对 `server/src` 与 `server/dist` 定位到仓库根的 `web/dist`），不按
+`process.cwd()`：从仓库外启动也照样找得到，不会静默变成「打开全是 404」。
+
+## 升级：`npm run upgrade`
+
+```sh
+npm run upgrade
+```
+
+它就是根 `package.json` 里的这一行，四步、按顺序：
+
+```sh
+git pull --ff-only && npm install && npm run build && npm run migrate
+```
+
+1. `git pull --ff-only`：只接受快进。本地有分叉（本地提交、或历史被改写）时**明确失败**，不会产生
+   一个合并提交。
+2. `npm install`：按锁文件更新依赖。
+3. `npm run build`：重建 `shared`、`server`、根 `dist/cli.js` 与 `web/dist`。少了这一步，`npm
+   start` 会继续跑旧的 `dist`，所以它不能跳。
+4. `npm run migrate`：一次性迁移（默认数据目录；换过数据目录就手动用 `--data-dir`，见「本地开发」
+   第 2 步）。本里程碑零 Schema 变更，这一步是幂等的 no-op：已是最新时只回一句「数据目录 … 已是
+   Schema 版本 25。」。
+
+边界写死在这里，免得把它读成更宽的东西：
+
+- **不做备份**：脚本不复制数据目录、不额外打包。备份仍是「备份边界」那一节的手工动作；迁移自身在
+  需要改 schema 时会在数据目录同级建 `<data-dir>.backup-*`，`upgrade` 不在其上再加一层。
+- **不改数据目录**：不带 `--data-dir`、不改 `allibot_DATA_DIR` / `allibot_HOME_DIR`；用哪个目录
+  取决于你自己的环境。
+- **不自动回滚**：任一步失败就停在那一步，已经落地的 `git pull` 不会退回去。
+- **分叉即失败**：`--ff-only` 是刻意的 —— 一条「方便」的脚本不该替你合并或改写历史。
 
 ## 工作区后端
 
