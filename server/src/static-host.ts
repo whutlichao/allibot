@@ -18,8 +18,8 @@ export const DEFAULT_WEB_ROOT = fileURLToPath(new URL('../../web/dist', import.m
  * 构建产物缺失即失败 (M4 / D5)：静态根里没有 `index.html` 就没有工作台。
  *
  * 不降级成「只提供 API」：那会把「打开是 404」变成一个需要读源码才能解释的
- * 谜。`serve` 用它做启动闸门（拿数据目录锁之前就早失败）；`startHttpServer`
- * 只用它校验调用方注入的静态根 (D6)，默认路径不在那一层断言。
+ * 谜。两处调用同一个实现 —— `serve` 在拿数据目录锁之前就早失败，
+ * `startHttpServer` 也断言解析后的静态根（含测试注入的那个）。
  */
 export function assertWebRootBuilt(webRoot: string): void {
   const indexPath = path.join(webRoot, 'index.html');
