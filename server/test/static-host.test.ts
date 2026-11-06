@@ -31,7 +31,7 @@ function assertNotShell(body: string): void {
   assert.ok(!body.includes('<div id="root">'), `404 响应体不应是 SPA 页壳：${body}`);
 }
 
-/** The adapter is never called here: only the static branch is under test. */
+/** 这个适配器在这里永远不会被调用：被测的只有静态分支。 */
 const PROVIDER: RoundProvider = {
   deferred: false,
   name: 'stub:not-called',
@@ -60,7 +60,7 @@ async function startStaticFixture(prefix: string): Promise<StaticFixture> {
     await writeFile(path.join(webBase, 'outside.txt'), OUTSIDE_TXT);
 
     const migration = runCli(['--migrate', '--data-dir', dataDir]);
-    assert.equal(migration.exitCode, 0, `migrate should exit 0; output: ${migration.output}`);
+    assert.equal(migration.exitCode, 0, `migrate 应退出 0；输出：${migration.output}`);
 
     const db = openDatabase(dataDir);
     const { server, port } = await startHttpServer(

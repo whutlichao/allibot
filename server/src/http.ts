@@ -183,11 +183,14 @@ export async function startHttpServer(
     env: options.env ?? process.env,
   };
   const writeError = options.writeError ?? defaultWriteError;
+  // 静态根没有构建产物即失败 (M4 / D5 / D6)：`serve` 的启动闸门在 `cli.ts`
+  // 里（D5 的用户可观察失败由它承担）；这一层只校验调用方注入的静态根，把
+  // 「注入了一个空目录」变成启动即失败。默认路径不在这里断言，否则任何聚焦
+  // HTTP 面的调用方都隐含依赖 `web/dist` —— 那是 gitignore 的构建产物。
+  if (options.webRoot !== undefined) {
+    assertWebRootBuilt(options.webRoot);
+  }
   const webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
-  // 构建产物缺失即失败 (M4 / D5)：与 `cli.ts` 的启动前检查是同一个断言。两处都
-  // 要有 —— 前者让 `serve` 在拿到锁、打开库之前早失败，而这里让任何聚焦这个
-  // seam 的调用方（含测试）都无法启一个只有 API 的服务。
-  assertWebRootBuilt(webRoot);
   // The CopilotKit multi-route handler owns everything under its base path;
   // its routes are not part of the human-face REST table below.
   const copilotKitHandler = createCopilotKitHandler(db, orchestration);
