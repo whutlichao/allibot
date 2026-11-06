@@ -71,7 +71,7 @@ M1–M3 把这个产品做成了**能跑**的东西：协作域、真实模型�
 
 **D7 单命令启动。** 根 `package.json` 增加 `"start": "node dist/cli.js serve"`。保留 `dev:server`（既有）与 `dev:web`（dev 流程，见 D12）。**不**新增 `bin` 字段、不安装全局命令：M4 不做分发，装一个全局命令会把「怎么升级」变成另一个问题。
 
-**D8 可执行提示（修正既有缺陷）。** `cli.schema.tooOld` 的文案从 `allibot --migrate --data-dir {data_dir}` 改为仓库里真实存在的两条：默认数据目录用 `npm run migrate`；显式目录用 `node dist/cli.js --migrate --data-dir {data_dir}`，并写明「在仓库根执行」。`cli.schema.tooNew` 同样纠正（它当前也指向 `allibot`）。验收是 **`test:strings` 断言 zh-CN 目录里不再出现 `` `allibot --migrate `` / `` `allibot ` `` 形式的命令行**，再补一条断言文案里出现 `npm run migrate`。
+**D8 可执行提示（修正既有缺陷）。** `cli.schema.tooOld` 的文案从 `allibot --migrate --data-dir {data_dir}` 改为仓库里真实存在的两条：默认数据目录用 `npm run migrate`；显式目录用 `node dist/cli.js --migrate --data-dir {data_dir}`，并写明「在仓库根执行」。`cli.schema.tooNew` 不含命令行，保持原样；本次只修 `cli.schema.tooOld` 与 `cli.serve.databaseMissing` 两处指向不存在命令的文案。验收是 **`test:strings` 断言 zh-CN 目录里不再出现 `` `allibot --migrate `` / `` `allibot ` `` 形式的命令行**，再补一条断言文案里出现 `npm run migrate`。
 
 **D9 空状态引导三处。** 只改三处，不铺开：
 
