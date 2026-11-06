@@ -27,6 +27,7 @@ import { startReminderScheduler } from './reminders.js';
 import { createInFlightRounds } from './rounds.js';
 import { createScriptedProvider } from './scripted-provider.js';
 import { closeInterruptedSopRuns } from './sop-executor.js';
+import { assertWebRootBuilt, DEFAULT_WEB_ROOT } from './static-host.js';
 import { closeInterruptedTeamRuns } from './team-runs.js';
 
 const SHUTDOWN_GRACE_MS = 5_000;
@@ -166,6 +167,10 @@ async function run(argv: readonly string[]): Promise<number> {
   }
 
   assertServeableSchemaVersion(resolution.dataDir);
+
+  // 构建产物缺失即失败 (M4 / D5)：在拿数据目录锁、打开库之前就拒绝，比等前端
+  // 打开才发现全是 404 要早且可说。与 `startHttpServer` 里的断言是同一个实现。
+  assertWebRootBuilt(DEFAULT_WEB_ROOT);
 
   const lock = await acquireDataDirLock(resolution.dataDir);
   const db = openDatabase(resolution.dataDir);

@@ -98,7 +98,12 @@ import {
   scanSkillCandidates,
   setSkillEnabled,
 } from './skills.js';
-import { DEFAULT_WEB_ROOT, isStaticRequest, serveStaticRequest } from './static-host.js';
+import {
+  assertWebRootBuilt,
+  DEFAULT_WEB_ROOT,
+  isStaticRequest,
+  serveStaticRequest,
+} from './static-host.js';
 import { listTeamRuns, parseTeamRunQuery, prepareTeamChangeWake } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
 import {
@@ -179,6 +184,10 @@ export async function startHttpServer(
   };
   const writeError = options.writeError ?? defaultWriteError;
   const webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
+  // 构建产物缺失即失败 (M4 / D5)：与 `cli.ts` 的启动前检查是同一个断言。两处都
+  // 要有 —— 前者让 `serve` 在拿到锁、打开库之前早失败，而这里让任何聚焦这个
+  // seam 的调用方（含测试）都无法启一个只有 API 的服务。
+  assertWebRootBuilt(webRoot);
   // The CopilotKit multi-route handler owns everything under its base path;
   // its routes are not part of the human-face REST table below.
   const copilotKitHandler = createCopilotKitHandler(db, orchestration);

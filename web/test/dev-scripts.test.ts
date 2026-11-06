@@ -122,6 +122,29 @@ test('dev:web rebuilds shared before starting vite', async () => {
   );
 });
 
+test('root start runs the production serve entry, and the dev scripts stay as they are', async () => {
+  const root = await readJson(ROOT_PACKAGE);
+  // 单命令启动 (M4 / D7)：一个进程既托管前端又提供 API。不加 `bin`、不装
+  // 全局命令，所以启动入口只能是仓库里真实存在的 dist/cli.js。
+  assert.equal(
+    root.scripts?.['start'],
+    'node dist/cli.js serve',
+    `root start must run the production serve entry, got: ${String(root.scripts?.['start'])}`,
+  );
+  // 只增生产路径 (D12)：热重载是维护这个仓库的手段，不是产品功能，两行 dev
+  // 脚本不能被 start 顺手改掉或取代。
+  assert.equal(
+    root.scripts?.['dev:server'],
+    'node dist/cli.js serve --port 3000',
+    `dev:server must stay as it was, got: ${String(root.scripts?.['dev:server'])}`,
+  );
+  assert.equal(
+    root.scripts?.['dev:web'],
+    'npm run build --workspace shared && npm run dev --workspace web',
+    `dev:web must stay as it was, got: ${String(root.scripts?.['dev:web'])}`,
+  );
+});
+
 test('shared is consumed through its dist build, not its sources', async () => {
   const shared = await readJson(SHARED_PACKAGE);
   const entry = shared.exports?.['.'];
