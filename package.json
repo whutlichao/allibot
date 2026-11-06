@@ -38,6 +38,7 @@
     "test:agent-skills": "npm run build --workspace shared && npm run test:agent-skills --workspace web",
     "test:workspace-backend": "npm run build && node --test server/test/docker-workspace-http.test.ts && npm run test:workspace-backend --workspace web",
     "test:m2-e2e": "npm run build && node --test server/test/m2-e2e.test.ts && npm run test:m2-e2e --workspace web && npm run test:strings",
+    "start": "node dist/cli.js serve",
     "migrate": "node dist/cli.js --migrate",
     "upgrade": "git pull --ff-only && npm install && npm run build && npm run migrate",
     "dev:server": "node dist/cli.js serve --port 3000",

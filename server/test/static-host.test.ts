@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import type { RoundProvider } from '../dist/agent-seam.js';
 import { openDatabase } from '../dist/db.js';
-import { startHttpServer } from '../dist/http.js';
+import { startHttpServer, type StartedServer } from '../dist/http.js';
 import { createInFlightRounds } from '../dist/rounds.js';
 import { DEFAULT_WEB_ROOT } from '../dist/static-host.js';
 import { makeTempDir, removeTempDir, REPO_ROOT, runCli } from './support.ts';
@@ -257,6 +257,60 @@ test('/assets/ 下的缺失文件与带扩展名的缺失路径都是硬 404，�
     }
   } finally {
     await fixture.stop();
+  }
+});
+
+test('静态根没有 index.html 时 startHttpServer 拒绝启动，文案给出构建命令 (D5)', async () => {
+  const dataDir = await makeTempDir('allibot-static-unbuilt-');
+  const webRoot = await makeTempDir('allibot-static-unbuilt-web-');
+  const db = openDatabase(dataDir);
+  let started: StartedServer | undefined;
+  try {
+    // 空目录就是「忘了构建」的形状：没有 index.html。降级成「只有 API」会
+    // 把「打开是 404」变成需要读源码才能解释的谜，所以这里必须直接拒绝。
+    //
+    // 先把可能 resolve 的监听器接住：这条断言一旦不成立（拒绝丢失），那个已
+    // 经 listen 的 server 就没人关了，测试进程会挂着一个打开的 handle 不退出。
+    const attempted = startHttpServer(
+      0,
+      db,
+      dataDir,
+      { provider: PROVIDER, inFlight: createInFlightRounds() },
+      { webRoot },
+    );
+    void attempted.then(
+      (server) => {
+        started = server;
+      },
+      () => undefined,
+    );
+    await assert.rejects(
+      attempted,
+      /npm run build/,
+      '缺前端构建产物时必须拒绝启动，并在文案里给出构建命令',
+    );
+
+    // 同一 seam 的另一侧：补上 index.html 就能启动，说明被拒的是产物缺失本身。
+    await writeFile(path.join(webRoot, 'index.html'), INDEX_HTML);
+    started = await startHttpServer(
+      0,
+      db,
+      dataDir,
+      { provider: PROVIDER, inFlight: createInFlightRounds() },
+      { webRoot },
+    );
+  } finally {
+    if (started !== undefined) {
+      const toClose = started;
+      await new Promise<void>((resolve) => {
+        toClose.server.close(() => {
+          resolve();
+        });
+      });
+    }
+    db.close();
+    await removeTempDir(dataDir);
+    await removeTempDir(webRoot);
   }
 });
 
