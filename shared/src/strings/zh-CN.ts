@@ -354,6 +354,22 @@ export const ZH_CN = {
   'workspace.nav.tasks': { text: '任务', params: [] },
   'workspace.nav.agents': { text: '本机 Agent', params: [] },
   'workspace.nav.empty': { text: '暂无', params: [] },
+  // 空状态引导（D9）：频道与 Agent 两处各自专用一条键，说清下一步做什么；
+  // 其余 section（私信 / 任务）仍用上面的「暂无」。名字由用户输入，空名字
+  // 不能提交，所以这里没有默认名可回落。
+  'workspace.nav.channelsEmpty': {
+    text: '还没有频道。先建一个频道，再建 Agent 并加入，才能开始对话。',
+    params: [],
+  },
+  'workspace.nav.agentsEmpty': {
+    text: '还没有 Agent。每个 Agent 有角色、模型与系统提示，可由你点名唤醒。',
+    params: [],
+  },
+  'workspace.nav.channelName': { text: '频道名', params: [] },
+  'workspace.nav.agentName': { text: 'Agent 名', params: [] },
+  'workspace.nav.createChannel': { text: '新建频道', params: [] },
+  'workspace.nav.createAgent': { text: '新建 Agent', params: [] },
+  'workspace.nav.createFailed': { text: '创建失败，请重试。', params: [] },
   'workspace.nav.open': { text: '导航', params: [] },
   'workspace.nav.unread': { text: '{count} 条未读', params: ['count'] },
   'workspace.context.title': { text: '成员与上下文', params: [] },
@@ -409,8 +425,21 @@ export const ZH_CN = {
   'workspace.agentDetail.field.maxIterations': { text: '迭代上限', params: [] },
   'workspace.agentDetail.field.autoClaim': { text: '自动认领', params: [] },
   'workspace.agentDetail.credential.present': { text: '已设置', params: [] },
-  'workspace.agentDetail.credential.missing': { text: '缺失', params: [] },
-  'workspace.agentDetail.model.unset': { text: '未配置', params: [] },
+  // 缺模型 / 缺凭证（D9）：不说「未配置」，而是点名密钥从哪里来；
+  // {credential_env} 只来自 `/api/remote-data-flow` 的 providers[].credential_env，
+  // 与后端 round.credential.missing 同源。
+  'workspace.agentDetail.credential.env': {
+    text: '模型密钥从环境变量读，不写库：需要 {credential_env}。设置后需重启后端。',
+    params: ['credential_env'],
+  },
+  'workspace.agentDetail.credential.envUnknown': {
+    text: '模型密钥从环境变量读，不写库：具体变量名由模型的 provider 决定。设置后需重启后端。',
+    params: [],
+  },
+  'workspace.agentDetail.model.unset': {
+    text: '还没有配置模型（provider:model）。模型密钥从环境变量读，不写库。',
+    params: [],
+  },
   'workspace.agentDetail.enabled.on': { text: '已启用', params: [] },
   'workspace.agentDetail.enabled.off': { text: '已停用', params: [] },
   'workspace.agentDetail.yes': { text: '是', params: [] },
@@ -521,6 +550,7 @@ export const ZH_CN = {
   'workspace.member.joinFailed': { text: '加入失败，请重试。', params: [] },
   'workspace.member.loading': { text: '正在读取频道成员…', params: [] },
   'workspace.member.empty': { text: '暂无成员。', params: [] },
+  'workspace.member.modelMissing': { text: '还没有配置模型', params: [] },
   'workspace.member.channelOnly': { text: '成员面板只属于频道。', params: [] },
   'workspace.member.reason.disabled': { text: '已停用', params: [] },
   'workspace.member.reason.modelMissing': { text: '未配置模型', params: [] },

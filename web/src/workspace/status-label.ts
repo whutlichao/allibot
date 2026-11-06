@@ -56,6 +56,22 @@ export function credentialEnvFor(
 }
 
 /**
+ * 「模型密钥从环境变量读」这条点名事实。{env} 只来自 `/api/remote-data-flow`
+ * 的 providers[].credential_env（与后端 round.credential.missing 同源）；
+ * 未配置模型或读数未到时，只说密钥从哪里来，不编造 provider 与变量名。
+ */
+export function credentialEnvFact(
+  locale: Locale,
+  model: string | null,
+  remoteDataFlow: RemoteDataFlowReadView | undefined,
+): string {
+  const credentialEnv = credentialEnvFor(model, remoteDataFlow);
+  return credentialEnv === null
+    ? t(locale, 'workspace.agentDetail.credential.envUnknown')
+    : t(locale, 'workspace.agentDetail.credential.env', { credential_env: credentialEnv });
+}
+
+/**
  * 「为什么未启用」的可读原因。原因本身是后端给的可用性事实
  * （model-missing / consent-missing / credential-missing），前端只按取值
  * 取词条，不从状态点反推。缺凭证时点名 `/api/remote-data-flow` 给出的环境

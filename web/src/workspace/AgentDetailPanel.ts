@@ -30,7 +30,7 @@ import type { McpSaveBody } from './mcp-tab.ts';
 import { PermissionRulesEditor } from './PermissionRulesEditor.ts';
 import { agentPermissionModePatch, permissionModeOptions } from './permissions.ts';
 import { StatusPoint } from './StatusPoint.ts';
-import { offlineReasonLabel, providerFromModel } from './status-label.ts';
+import { credentialEnvFact, offlineReasonLabel, providerFromModel } from './status-label.ts';
 import {
   agentBackendChangePatch,
   workspaceBackendLabel,
@@ -228,7 +228,7 @@ export function AgentDetailPanel({
           t(locale, 'workspace.agentDetail.field.credential'),
           agent.credential_status === 'present'
             ? t(locale, 'workspace.agentDetail.credential.present')
-            : t(locale, 'workspace.agentDetail.credential.missing'),
+            : credentialEnvFact(locale, agent.model, remoteDataFlow),
         ),
       ),
       consentProvider === null || onConfirmConsent === undefined
