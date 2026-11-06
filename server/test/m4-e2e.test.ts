@@ -5,10 +5,13 @@ import path from 'node:path';
 import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import {
+  getJson,
+  ok,
   REPO_ROOT,
   removeTempDir,
   runCli,
   startServer,
+  waitFor,
   type RunningServer,
 } from './support.ts';
 
@@ -28,66 +31,6 @@ const AGENT_MODEL = 'openai:gpt-5';
 const SCRIPTED_REPLY = '第一条消息的回复';
 /** 真实构建产物：`GET /` 必须回的正是这个文件。 */
 const REAL_INDEX_HTML = path.join(REPO_ROOT, 'web', 'dist', 'index.html');
-
-interface HttpResult {
-  status: number;
-  text: string;
-  body: Record<string, unknown>;
-}
-
-async function request(
-  base: string,
-  method: string,
-  route: string,
-  body?: unknown,
-): Promise<HttpResult> {
-  const response = await fetch(`${base}${route}`, {
-    method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await response.text();
-  const parsed: unknown = text.length === 0 ? {} : JSON.parse(text);
-  assert.ok(typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed));
-  return { status: response.status, text, body: parsed as Record<string, unknown> };
-}
-
-async function ok(
-  base: string,
-  method: string,
-  route: string,
-  body?: unknown,
-): Promise<Record<string, unknown>> {
-  const result = await request(base, method, route, body);
-  assert.ok(
-    result.status >= 200 && result.status < 300,
-    `${method} ${route} -> ${result.status}: ${result.text}`,
-  );
-  return result.body;
-}
-
-async function getJson(base: string, route: string): Promise<Record<string, unknown>> {
-  return await ok(base, 'GET', route);
-}
-
-async function waitFor<T>(
-  read: () => Promise<T> | T,
-  done: (value: T) => boolean,
-  what: string,
-  timeoutMs = 8_000,
-): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const value = await read();
-    if (done(value)) {
-      return value;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`等待 ${what} 超时；最后一次读到：${JSON.stringify(value)}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-}
 
 function openDatabase(dataDir: string): Database.Database {
   return new Database(path.join(dataDir, 'allibot.db'), { readonly: true, timeout: 2_000 });

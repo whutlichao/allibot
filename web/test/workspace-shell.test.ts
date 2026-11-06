@@ -59,6 +59,7 @@ import {
   type InlineCreateState,
 } from '../src/workspace/inline-create.ts';
 import { createChannel } from '../src/workspace-actions.ts';
+import { createReadingTickets } from '../src/workspace/reading-tickets.ts';
 import { TargetNav } from '../src/workspace/TargetNav.ts';
 import { ContextPanel } from '../src/workspace/ContextPanel.ts';
 import {
@@ -722,7 +723,9 @@ test('creating a channel from the empty state posts the typed name and re-reads 
   }) as typeof fetch;
 
   const state = editInlineCreateName(initialInlineCreate(), '发布环');
-  const settled = await submitInlineCreate(state, (name) => createChannel(fetchImpl, name));
+  const settled = await submitInlineCreate(state, async (name) => {
+    await createChannel(fetchImpl, name);
+  });
 
   assert.equal(settled.failed, false, 'the create is reported as done');
   assert.deepEqual(
@@ -749,7 +752,9 @@ test('a rejected create stays in the empty state with its error and reads no sna
   }) as typeof fetch;
 
   const state = editInlineCreateName(initialInlineCreate(), '发布环');
-  const settled = await submitInlineCreate(state, (name) => createChannel(fetchImpl, name));
+  const settled = await submitInlineCreate(state, async (name) => {
+    await createChannel(fetchImpl, name);
+  });
 
   assert.equal(settled.failed, true, 'the failure is kept in the empty state');
   assert.equal(settled.name, '发布环', 'the typed name stays for a retry');
@@ -996,4 +1001,69 @@ test('opening a drawer writes nothing: no POST or message write lives in the she
     assert.doesNotMatch(source, /method:\s*['"]PATCH['"]/, `${name} writes through PATCH`);
     assert.doesNotMatch(source, /\/api\/targets\/[^`'"]*\/messages['"`]\s*,\s*\{/, `${name} posts a message`);
   }
+});
+
+/** main.tsx 里一个顶层函数的源码片段：从它的声明到下一个顶层函数声明。 */
+function functionSource(source: string, name: string): string {
+  const start = source.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `main.tsx has no ${name}()`);
+  const rest = source.slice(start + 1);
+  const nextDeclaration = rest.search(/\n(?:async )?function /);
+  return nextDeclaration === -1
+    ? source.slice(start)
+    : source.slice(start, start + 1 + nextDeclaration + 1);
+}
+
+/**
+ * 创建动作带回的读数用票据作废在飞的刷新（D9 空状态首建路径）：一次在创建
+ * 之前起飞的刷新读到的读数里还没有新频道，它若仍是最新票据，就会把刚建好的
+ * 频道 / Agent 从导航里抹掉，直到下一次 SSE 或手动刷新。
+ */
+test('一次新的读数作废此前所有在飞的读数，旧刷新不会覆盖刚建好的列表', () => {
+  const tickets = createReadingTickets();
+
+  // 一次 SSE 刷新起飞。
+  const inFlightRefresh = tickets.begin();
+  assert.equal(tickets.isCurrent(inFlightRefresh), true, '没有更新的读数时，这张票据是最新的');
+
+  // 创建动作带回自己的读数并采用：它先开一张新票据。
+  const createdReading = tickets.begin();
+  assert.equal(tickets.isCurrent(createdReading), true, '创建动作采用的是最新票据');
+  assert.equal(
+    tickets.isCurrent(inFlightRefresh),
+    false,
+    '在飞刷新的票据已作废，它的旧读数在采用之前就被丢弃',
+  );
+
+  // 只有最后一次 begin 算最新：后来的刷新同样作废创建动作那一张。
+  const nextRefresh = tickets.begin();
+  assert.equal(tickets.isCurrent(createdReading), false, '只有最后一次 begin 算最新');
+  assert.equal(tickets.isCurrent(nextRefresh), true);
+});
+
+test('the create actions adopt their own reading through a ticket, so an in-flight refresh cannot overwrite it', async () => {
+  const main = await readFile(new URL('main.tsx', WEB_SRC), 'utf8');
+
+  for (const action of ['createChannelAction', 'createAgentAction']) {
+    const body = functionSource(main, action);
+    assert.match(body, /adoptOwnedReading/, `${action} adopts its reading through the owned-reading entry`);
+    assert.doesNotMatch(
+      body,
+      /adoptWorkspaceReading/,
+      `${action} must not adopt a reading that an in-flight refresh can still overwrite`,
+    );
+  }
+
+  // 作废机制本身也钉住：一次刷新只开一张票据，过期就在采用之前返回。
+  const refresh = functionSource(main, 'refreshWorkspace');
+  const staleCheck = refresh.indexOf('isCurrent(');
+  const adopt = refresh.indexOf('adoptWorkspaceReading(');
+  assert.notEqual(staleCheck, -1, 'refreshWorkspace checks its ticket');
+  assert.notEqual(adopt, -1, 'refreshWorkspace still adopts a fresh reading');
+  assert.ok(staleCheck < adopt, 'the ticket check comes before the adopt');
+  assert.match(
+    refresh.slice(staleCheck, adopt),
+    /\breturn\b/,
+    'a stale reading returns before it is adopted',
+  );
 });

@@ -1,16 +1,12 @@
 import { t, type Locale } from '@allibot/shared';
 import { createElement, type ReactNode } from 'react';
+import type { AsyncAction1 } from '../async-action.ts';
 
 /**
  * 空状态里的单行创建表单：无频道与无 Agent 两处共用一个形状 —— 一个名字输入
  * 加一个按钮。名字就是用户输入的名字：空名字（含只有空白）不能提交，任何情况下
  * 都不回落到默认名。写路径由宿主注入的动作承担，表单自己不拼 fetch。
  */
-
-/** 宿主注入的创建动作：成功即兑现，失败即拒绝。 */
-export interface InlineCreateAction {
-  (name: string): Promise<unknown>;
-}
 
 export interface InlineCreateState {
   name: string;
@@ -32,16 +28,21 @@ export function canCreateInline(state: InlineCreateState): boolean {
 }
 
 /**
- * 提交的唯一路径：成功后清空输入（宿主已刷新读数），失败时把名字留在原地并
- * 标记失败 —— 错误显示在这条空状态内，不静默吞掉。
+ * 提交的唯一路径，`canCreateInline` 也只在这里判一次：空名字什么都不发，
+ * 草稿也不动 —— 返回的是传进来的**同一个对象**，调用方据此知道什么都没发生。
+ * 能提交时先通过 `onSubmitting` 挂上「提交中」（按钮随之禁用，避免二次提交），
+ * 再把最终草稿返回给调用方写回：成功后清空输入（宿主已刷新读数），失败时把
+ * 名字留在原地并标记失败 —— 错误显示在这条空状态内，不静默吞掉。
  */
 export async function submitInlineCreate(
   state: InlineCreateState,
-  create: InlineCreateAction,
+  create: AsyncAction1<string>,
+  onSubmitting?: (next: InlineCreateState) => void,
 ): Promise<InlineCreateState> {
   if (!canCreateInline(state)) {
     return state;
   }
+  onSubmitting?.({ ...state, submitting: true, failed: false });
   try {
     await create(state.name.trim());
     return initialInlineCreate();
@@ -51,19 +52,19 @@ export async function submitInlineCreate(
 }
 
 /**
- * 表单按钮与提交事件的落点：先挂上「提交中」（按钮随之禁用，避免二次提交），
- * 再把结果写回草稿。空名字在这里就被拦下，什么也不发。
+ * 表单按钮与提交事件的落点：把「提交中」与最终草稿两个状态写回表单。能否提交
+ * 不在这里判 —— 那个守卫只在 `submitInlineCreate` 里存在；空名字时它原样返回
+ * 传进来的状态，所以这里一次也不写，草稿不会白闪一下。
  */
 export async function runInlineCreate(
   state: InlineCreateState,
-  create: InlineCreateAction,
+  create: AsyncAction1<string>,
   setState: (next: InlineCreateState) => void,
 ): Promise<void> {
-  if (!canCreateInline(state)) {
-    return;
+  const settled = await submitInlineCreate(state, create, setState);
+  if (settled !== state) {
+    setState(settled);
   }
-  setState({ ...state, submitting: true, failed: false });
-  setState(await submitInlineCreate(state, create));
 }
 
 export interface InlineCreateFormProps {

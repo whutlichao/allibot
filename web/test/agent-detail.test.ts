@@ -586,7 +586,9 @@ test('creating an Agent from the empty state posts the typed name and re-reads t
   }) as typeof fetch;
 
   const state = editInlineCreateName(initialInlineCreate(), '新同事');
-  const settled = await submitInlineCreate(state, (name) => createAgent(fetchImpl, name));
+  const settled = await submitInlineCreate(state, async (name) => {
+    await createAgent(fetchImpl, name);
+  });
 
   assert.equal(settled.failed, false, 'the create is reported as done');
   assert.deepEqual(
@@ -618,7 +620,9 @@ test('a rejected Agent create stays in the empty state with its error', async ()
   }) as typeof fetch;
 
   const state = editInlineCreateName(initialInlineCreate(), '新同事');
-  const settled = await submitInlineCreate(state, (name) => createAgent(fetchImpl, name));
+  const settled = await submitInlineCreate(state, async (name) => {
+    await createAgent(fetchImpl, name);
+  });
 
   assert.equal(settled.failed, true, 'the failure stays in the empty state');
   assert.deepEqual(calls, ['POST /api/agents {"display_name":"新同事"}'], 'no snapshot after a failure');

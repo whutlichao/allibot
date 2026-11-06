@@ -184,9 +184,14 @@ export async function startHttpServer(
   };
   const writeError = options.writeError ?? defaultWriteError;
   const webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
-  // 构建产物缺失即失败 (M4 / D5)：与 `cli.ts` 的启动前检查是同一个断言。两处都
-  // 要有 —— 前者让 `serve` 在拿到锁、打开库之前早失败，而这里让任何聚焦这个
-  // seam 的调用方（含测试）都无法启一个只有 API 的服务。
+  // 静态根没有构建产物即失败 (M4 / D5 / D6)：`serve` 的启动闸门在 `cli.ts`
+  // 里（D5 的用户可观察失败由它承担，且在拿数据目录锁之前）；这一层再断言
+  // 解析后的静态根，任何调用方都启不了一个只有 API 的服务。
+  //
+  // 代价是 spawn CLI 的 server 套件隐含依赖 `web/dist`（gitignore 的构建产物）。
+  // 那是 D5 的必然结果而非本断言的副作用：实测把本断言收窄成「只在注入
+  // webRoot 时执行」后，拿掉 `web/dist` 仍让 `server/test/agents-http.test.ts`
+  // 9/9 失败 —— 因为 cli 的闸门同样要求产物存在。
   assertWebRootBuilt(webRoot);
   // The CopilotKit multi-route handler owns everything under its base path;
   // its routes are not part of the human-face REST table below.

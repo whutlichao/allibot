@@ -14,10 +14,14 @@ import { test } from 'node:test';
 import Database from 'better-sqlite3';
 import { ZH_CN } from '../../shared/dist/index.js';
 import {
+  getJson,
+  ok,
   removeTempDir,
   REPO_ROOT,
+  request,
   runCli,
   startServer,
+  waitFor,
   type RunningServer,
 } from './support.ts';
 
@@ -119,47 +123,6 @@ async function restartFixture(
   fixture.base = `http://127.0.0.1:${fixture.running.port}`;
 }
 
-interface HttpResult {
-  status: number;
-  body: Record<string, unknown>;
-  text: string;
-}
-
-async function request(
-  base: string,
-  method: string,
-  route: string,
-  body?: unknown,
-): Promise<HttpResult> {
-  const response = await fetch(`${base}${route}`, {
-    method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await response.text();
-  const parsed: unknown = text.length === 0 ? {} : JSON.parse(text);
-  assert.ok(typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed));
-  return { status: response.status, body: parsed as Record<string, unknown>, text };
-}
-
-async function ok(
-  base: string,
-  method: string,
-  route: string,
-  body?: unknown,
-): Promise<Record<string, unknown>> {
-  const result = await request(base, method, route, body);
-  assert.ok(
-    result.status >= 200 && result.status < 300,
-    `${method} ${route} -> ${result.status}: ${result.text}`,
-  );
-  return result.body;
-}
-
-async function getJson(base: string, route: string): Promise<Record<string, unknown>> {
-  return await ok(base, 'GET', route);
-}
-
 async function createChannel(base: string, name: string): Promise<string> {
   const created = await ok(base, 'POST', '/api/channels', {
     name,
@@ -216,26 +179,6 @@ function queryAll<T>(db: Database.Database, sql: string, params: unknown[] = [])
 
 function queryOne<T>(db: Database.Database, sql: string, params: unknown[] = []): T | undefined {
   return queryAll<T>(db, sql, params)[0];
-}
-
-async function waitFor<T>(
-  read: () => Promise<T> | T,
-  done: (value: T) => boolean,
-  what: string,
-  timeoutMs = 8_000,
-): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-  let last: T | undefined;
-  for (;;) {
-    last = await read();
-    if (done(last)) {
-      return last;
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`timed out waiting for ${what}; last: ${JSON.stringify(last)}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
 }
 
 // --- the one global SSE stream -------------------------------------------------

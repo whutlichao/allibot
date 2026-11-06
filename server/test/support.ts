@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -205,6 +206,70 @@ export function readLedger(dataDir: string): Record<string, unknown>[] {
     .split('\n')
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** 一次 HTTP 面的原始回答：状态码、正文与解析后的信封。 */
+export interface HttpResult {
+  status: number;
+  text: string;
+  body: Record<string, unknown>;
+}
+
+/** 发一个请求并把正文解析成 JSON 信封；空正文读成 `{}`。 */
+export async function request(
+  base: string,
+  method: string,
+  route: string,
+  body?: unknown,
+): Promise<HttpResult> {
+  const response = await fetch(`${base}${route}`, {
+    method,
+    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  const parsed: unknown = text.length === 0 ? {} : JSON.parse(text);
+  assert.ok(typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed));
+  return { status: response.status, text, body: parsed as Record<string, unknown> };
+}
+
+/** 同 `request`，但 2xx 之外直接失败；返回的是信封本身。 */
+export async function ok(
+  base: string,
+  method: string,
+  route: string,
+  body?: unknown,
+): Promise<Record<string, unknown>> {
+  const result = await request(base, method, route, body);
+  assert.ok(
+    result.status >= 200 && result.status < 300,
+    `${method} ${route} -> ${result.status}: ${result.text}`,
+  );
+  return result.body;
+}
+
+export async function getJson(base: string, route: string): Promise<Record<string, unknown>> {
+  return await ok(base, 'GET', route);
+}
+
+/** 轮询到 `done` 为真为止；超时抛出的错误带着最后一次读到的值。 */
+export async function waitFor<T>(
+  read: () => Promise<T> | T,
+  done: (value: T) => boolean,
+  what: string,
+  timeoutMs = 8_000,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await read();
+    if (done(value)) {
+      return value;
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`等待 ${what} 超时；最后一次读到：${JSON.stringify(value)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
 }
 
 /** One request a recording endpoint saw, kept verbatim for assertions. */

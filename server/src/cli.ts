@@ -168,8 +168,9 @@ async function run(argv: readonly string[]): Promise<number> {
 
   assertServeableSchemaVersion(resolution.dataDir);
 
-  // 构建产物缺失即失败 (M4 / D5)：在拿数据目录锁、打开库之前就拒绝，比等前端
-  // 打开才发现全是 404 要早且可说。与 `startHttpServer` 里的断言是同一个实现。
+  // 构建产物缺失即失败 (M4 / D5)：`serve` 的启动闸门 —— 在拿数据目录锁、打开
+  // 库之前就拒绝，比等前端打开才发现全是 404 要早且可说。不降级成「只提供
+  // API」：降级把「打开是 404」变成一个需要读源码才能解释的谜。
   assertWebRootBuilt(DEFAULT_WEB_ROOT);
 
   const lock = await acquireDataDirLock(resolution.dataDir);

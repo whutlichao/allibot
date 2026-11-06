@@ -6,6 +6,7 @@ import {
   editInlineCreateName,
   initialInlineCreate,
   runInlineCreate,
+  type InlineCreateState,
 } from './inline-create.ts';
 import { buildWorkspaceNav, type TargetNavEntry } from './model.ts';
 import { StatusPoint } from './StatusPoint.ts';
@@ -52,54 +53,62 @@ export function TargetNav({
 
   /**
    * 空状态引导（D9）：先说下一步做什么，再给一个单行创建表单。表单只在
-   * 列表真为空、且宿主提供了创建动作时出现；非空状态不给第二入口。
+   * 列表真为空、且宿主提供了创建动作时出现；非空状态不给第二入口。频道与
+   * 本机 Agent 两处是同一种形状，只有词条、动作名与各自的草稿不同。
    */
-  const channelEmptyState = createElement(
-    'div',
-    { className: 'target-nav__empty-state', 'data-empty-state': 'channels' },
-    createElement(
-      'p',
-      { className: 'target-nav__empty' },
-      t(locale, 'workspace.nav.channelsEmpty'),
-    ),
-    onCreateChannel === undefined
-      ? null
-      : createElement(InlineCreateForm, {
-          state: channelCreate,
-          locale,
-          nameLabel: t(locale, 'workspace.nav.channelName'),
-          submitLabel: t(locale, 'workspace.nav.createChannel'),
-          action: 'create-channel',
-          onChange: (name: string) =>
-            setChannelCreate(editInlineCreateName(channelCreate, name)),
-          onSubmit: () => {
-            void runInlineCreate(channelCreate, onCreateChannel, setChannelCreate);
-          },
-        }),
-  );
+  function emptyState(options: {
+    section: string;
+    text: string;
+    action: string;
+    submitLabel: string;
+    nameLabel: string;
+    create: AsyncAction1<string> | undefined;
+    state: InlineCreateState;
+    setState: (next: InlineCreateState) => void;
+  }): ReactNode {
+    const create = options.create;
+    return createElement(
+      'div',
+      { className: 'target-nav__empty-state', 'data-empty-state': options.section },
+      createElement('p', { className: 'target-nav__empty' }, options.text),
+      create === undefined
+        ? null
+        : createElement(InlineCreateForm, {
+            state: options.state,
+            locale,
+            nameLabel: options.nameLabel,
+            submitLabel: options.submitLabel,
+            action: options.action,
+            onChange: (name: string) =>
+              options.setState(editInlineCreateName(options.state, name)),
+            onSubmit: () => {
+              void runInlineCreate(options.state, create, options.setState);
+            },
+          }),
+    );
+  }
 
-  const agentEmptyState = createElement(
-    'div',
-    { className: 'target-nav__empty-state', 'data-empty-state': 'agents' },
-    createElement(
-      'p',
-      { className: 'target-nav__empty' },
-      t(locale, 'workspace.nav.agentsEmpty'),
-    ),
-    onCreateAgent === undefined
-      ? null
-      : createElement(InlineCreateForm, {
-          state: agentCreate,
-          locale,
-          nameLabel: t(locale, 'workspace.nav.agentName'),
-          submitLabel: t(locale, 'workspace.nav.createAgent'),
-          action: 'create-agent',
-          onChange: (name: string) => setAgentCreate(editInlineCreateName(agentCreate, name)),
-          onSubmit: () => {
-            void runInlineCreate(agentCreate, onCreateAgent, setAgentCreate);
-          },
-        }),
-  );
+  const channelEmptyState = emptyState({
+    section: 'channels',
+    text: t(locale, 'workspace.nav.channelsEmpty'),
+    action: 'create-channel',
+    submitLabel: t(locale, 'workspace.nav.createChannel'),
+    nameLabel: t(locale, 'workspace.nav.channelName'),
+    create: onCreateChannel,
+    state: channelCreate,
+    setState: setChannelCreate,
+  });
+
+  const agentEmptyState = emptyState({
+    section: 'agents',
+    text: t(locale, 'workspace.nav.agentsEmpty'),
+    action: 'create-agent',
+    submitLabel: t(locale, 'workspace.nav.createAgent'),
+    nameLabel: t(locale, 'workspace.nav.agentName'),
+    create: onCreateAgent,
+    state: agentCreate,
+    setState: setAgentCreate,
+  });
 
   function targetButton(entry: TargetNavEntry): ReactNode {
     return createElement(
