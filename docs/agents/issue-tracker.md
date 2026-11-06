@@ -1,6 +1,12 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Issues live as GitHub issues. Use the `gh` CLI for all operations.
+
+**Settled specs and ADRs are repo files, not issue bodies** — `docs/spec/*.md` and `docs/adr/*.md`.
+An issue carries the ticket side: scope, decisions to rule on, and implementation tickets as
+sub-issues; it cites spec sections (e.g. `D1 / D6 / D12`), never the other way round. The spec
+file is what implementation tickets are read against, so it lives where it can be diffed, blamed
+and updated alongside the code it describes — including the line numbers it cites.
 
 ## Conventions
 
