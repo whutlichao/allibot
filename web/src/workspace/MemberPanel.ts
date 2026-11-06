@@ -85,7 +85,7 @@ export function MemberPanel({
         createElement(
           'span',
           { className: 'member-panel__model' },
-          row.model ?? t(locale, 'workspace.member.modelMissing'),
+          row.model ?? t(locale, 'workspace.member.modelUnset'),
         ),
         reason === null
           ? null
