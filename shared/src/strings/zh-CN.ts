@@ -41,6 +41,12 @@ export const ZH_CN = {
       '`node dist/cli.js --migrate --data-dir {data_dir}`。',
     params: ['path', 'data_dir'],
   },
+  'cli.serve.webRootMissing': {
+    text:
+      '找不到前端构建产物 {path}；启动服务前先在仓库根执行 `npm run build`，' +
+      '它会构建工作台的 web/dist。',
+    params: ['path'],
+  },
   'cli.error': {
     text: 'allibot：{message}',
     params: ['message'],
