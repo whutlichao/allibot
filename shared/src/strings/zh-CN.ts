@@ -556,7 +556,7 @@ export const ZH_CN = {
   'workspace.member.joinFailed': { text: '加入失败，请重试。', params: [] },
   'workspace.member.loading': { text: '正在读取频道成员…', params: [] },
   'workspace.member.empty': { text: '暂无成员。', params: [] },
-  'workspace.member.modelMissing': { text: '还没有配置模型', params: [] },
+  'workspace.member.modelUnset': { text: '还没有配置模型', params: [] },
   'workspace.member.channelOnly': { text: '成员面板只属于频道。', params: [] },
   'workspace.member.reason.disabled': { text: '已停用', params: [] },
   'workspace.member.reason.modelMissing': { text: '未配置模型', params: [] },

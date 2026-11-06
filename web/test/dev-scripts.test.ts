@@ -20,6 +20,8 @@ import { test } from 'node:test';
 const ROOT_PACKAGE = new URL('../../package.json', import.meta.url);
 const SHARED_PACKAGE = new URL('../../shared/package.json', import.meta.url);
 const DEPLOYMENT_DOC = new URL('../../docs/deployment.md', import.meta.url);
+const README = new URL('../../README.md', import.meta.url);
+const STRING_SOURCE = new URL('../../shared/src/strings/zh-CN.ts', import.meta.url);
 
 interface PackageManifest {
   scripts?: Record<string, string>;
@@ -38,6 +40,85 @@ function steps(script: string): string[] {
 /** 把单步命令按空白切成 argv（本文件里的命令都不带引号）。 */
 function argv(step: string): string[] {
   return step.split(/\s+/).filter((token) => token.length > 0);
+}
+
+/**
+ * 文档点名命令的两处落点：```sh 代码块的每一行，与行内代码（单行 span）。
+ * 只认 `sh` 块：其它语言的块里没有给 owner 照抄的命令。
+ */
+function shellBlockLines(doc: string): string[] {
+  return [...doc.matchAll(/```sh\n([\s\S]*?)```/g)].flatMap((match) =>
+    (match[1] ?? '').split('\n'),
+  );
+}
+
+function inlineCodeSpans(doc: string): string[] {
+  return [...doc.matchAll(/`([^`\n]+)`/g)].map((match) => match[1]!);
+}
+
+/**
+ * 把一行命令行切成单步命令：`&&` 分段、去掉 `$` 提示符与环境变量赋值前缀
+ * （`allibot_API_ORIGIN=… npm run dev:web` 里前置的那段不是命令本身）。
+ */
+function commandSteps(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\$\s+/, '')
+    .split('&&')
+    .map((step) => step.trim())
+    .map((step) => {
+      const tokens = argv(step);
+      while (tokens.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0]!)) {
+        tokens.shift();
+      }
+      return tokens.join(' ');
+    })
+    .filter((step) => step.length > 0);
+}
+
+/** 一条文档命令点名的 npm 脚本，以及它属于哪个 workspace（`null` = 根）。 */
+interface NpmScriptReference {
+  command: string;
+  script: string;
+  workspace: string | null;
+}
+
+/** `npm ci` / `npm install` 不是脚本，不需要出现在任何 `scripts` 里。 */
+const NPM_SUBCOMMANDS = new Set(['ci', 'install']);
+
+/** 从单步命令里认出 `npm run <script>` / `npm <script>`；不是 npm 命令就返回 null。 */
+function npmScriptReference(step: string): NpmScriptReference | null {
+  const tokens = argv(step);
+  if (tokens[0] !== 'npm') {
+    return null;
+  }
+  const subcommand = tokens[1];
+  if (subcommand === undefined || NPM_SUBCOMMANDS.has(subcommand)) {
+    return null;
+  }
+  const script = subcommand === 'run' ? tokens[2] : subcommand;
+  if (script === undefined || script.startsWith('-')) {
+    return null;
+  }
+  const flag = tokens.findIndex((token) => token === '--workspace' || token === '-w');
+  return { command: step, script, workspace: flag === -1 ? null : (tokens[flag + 1] ?? null) };
+}
+
+/** 文档里的 `--workspace <name>` 指向该 workspace 的 `scripts`；没写就是根。 */
+async function scriptsOf(workspace: string | null): Promise<Record<string, string>> {
+  const manifest = await readJson(
+    workspace === null ? ROOT_PACKAGE : new URL(`../../${workspace}/package.json`, import.meta.url),
+  );
+  return manifest.scripts ?? {};
+}
+
+/** 从词条源码里取出一个条目块的原文：键所在位置到下一个同级键之前。 */
+function catalogEntrySource(source: string, key: string): string {
+  const start = source.indexOf(`'${key}':`);
+  assert.notEqual(start, -1, `shared/src/strings/zh-CN.ts 里没有 ${key} 这个词条`);
+  const end = source.indexOf('\n  },', start);
+  assert.notEqual(end, -1, `${key} 的条目块没有正常结束`);
+  return source.slice(start, end);
 }
 
 /**
@@ -254,5 +335,107 @@ test('the deployment doc does not claim dev:web skips the shared build', async (
     doc.includes('shared/dist'),
     true,
     'docs/deployment.md must name shared/dist as what the web dev server actually loads',
+  );
+});
+
+/**
+ * 文档（README 与部署文档）让人照抄的 npm 命令必须真能跑：点名的脚本要么在根
+ * `package.json` 的 `scripts` 里，要么在被 `--workspace <name>` 指向的那个
+ * workspace 里。只断言名字存在，不断言脚本内容 —— 脚本内容由各条契约测试守。
+ */
+test('every npm script the docs name exists in the package it runs in', async () => {
+  const docs = [
+    { name: 'README.md', url: README },
+    { name: 'docs/deployment.md', url: DEPLOYMENT_DOC },
+  ];
+  const scriptTables = new Map<string, Record<string, string>>();
+  const missing: string[] = [];
+  let references = 0;
+
+  for (const doc of docs) {
+    const text = await readFile(doc.url, 'utf8');
+    const commands = [
+      ...shellBlockLines(text).flatMap(commandSteps),
+      ...inlineCodeSpans(text)
+        .filter((span) => span.includes('npm '))
+        .flatMap(commandSteps),
+    ];
+    for (const command of commands) {
+      const reference = npmScriptReference(command);
+      if (reference === null) {
+        continue;
+      }
+      references += 1;
+      const owner = reference.workspace ?? '.';
+      if (!scriptTables.has(owner)) {
+        scriptTables.set(owner, await scriptsOf(reference.workspace));
+      }
+      const scripts = scriptTables.get(owner)!;
+      if (!Object.hasOwn(scripts, reference.script)) {
+        missing.push(
+          `${doc.name}：${reference.command} —— ${owner === '.' ? '根 package.json' : `${owner}/package.json`} 的 scripts 里没有 ${reference.script}`,
+        );
+      }
+    }
+  }
+
+  // 抽取规则自己也会坏：一条命令都没抽到时，上面的循环会空过。
+  assert.ok(references > 0, 'README.md / docs/deployment.md 里没抽出任何 npm 命令');
+  assert.deepEqual(missing, [], `文档点名的 npm 脚本在仓库里不存在：\n${missing.join('\n')}`);
+});
+
+/**
+ * 根 `package.json` 没有 `bin` 字段，仓库里就没有 `allibot` 这个可执行文件
+ * （照抄只能得到 command not found）。所以 README 的 `sh` 代码块里不能出现以
+ * `allibot` 开头的命令行；只说仓库里真实存在的 `npm run …` / `node dist/cli.js …`。
+ * `allibot_API_ORIGIN=… npm run dev:web` 这类环境变量前缀不算（它后面跑的是 npm）。
+ */
+test('the README never hands the owner a global `allibot` command', async () => {
+  const readme = await readFile(README, 'utf8');
+  const lines = shellBlockLines(readme);
+  const npmSteps = lines.flatMap(commandSteps).filter((step) => argv(step)[0] === 'npm');
+  assert.ok(npmSteps.length > 0, 'README.md 的 sh 代码块里没抽出任何 npm 命令');
+
+  const offenders = lines.flatMap((line) =>
+    commandSteps(line)
+      .filter((step) => argv(step)[0] === 'allibot')
+      .map((step) => `${line.trim()} → ${step}`),
+  );
+  assert.deepEqual(
+    offenders,
+    [],
+    `README.md 让人跑一个本仓不存在的全局命令（根 package.json 没有 bin 字段）：\n${offenders.join('\n')}`,
+  );
+});
+
+/**
+ * `cli.schema.tooOld` 是 owner 照着敲的提示（规格 D8）：文案里点名的
+ * `npm run <script>` 必须真在根 `package.json` 里，脚本被删或改名时这条要红。
+ * 文案从 `shared/src/strings/zh-CN.ts` 的源码读，不读 `shared/dist`：
+ * `test:dev-scripts` 自己不构建 shared，读产物会在改了文案却忘了重建时静默通过。
+ * 脚本内容不逐字比，只要求它跑的是本仓 CLI 的迁移。
+ */
+test('the schema-too-old hint only names root scripts that exist', async () => {
+  const entry = catalogEntrySource(await readFile(STRING_SOURCE, 'utf8'), 'cli.schema.tooOld');
+  const references = inlineCodeSpans(entry)
+    .flatMap(commandSteps)
+    .map(npmScriptReference)
+    .filter((reference): reference is NpmScriptReference => reference !== null);
+  assert.ok(references.length > 0, 'cli.schema.tooOld 的文案里没有点名任何 npm run 脚本');
+
+  const scripts = await scriptsOf(null);
+  const missing = references
+    .filter((reference) => reference.workspace !== null || !Object.hasOwn(scripts, reference.script))
+    .map((reference) => reference.command);
+  assert.deepEqual(missing, [], `cli.schema.tooOld 点名的脚本在根 package.json 里不存在：${missing.join('、')}`);
+
+  const notTheMigration = references
+    .map((reference) => ({ reference, body: scripts[reference.script] ?? '' }))
+    .filter(({ body }) => !body.includes('dist/cli.js') || !body.includes('--migrate'))
+    .map(({ reference }) => `${reference.script}：${scripts[reference.script] ?? '(缺失)'}`);
+  assert.deepEqual(
+    notTheMigration,
+    [],
+    `cli.schema.tooOld 点名的脚本不是本仓 CLI 的迁移：${notTheMigration.join('、')}`,
   );
 });
