@@ -50,6 +50,22 @@ export async function submitInlineCreate(
   }
 }
 
+/**
+ * 表单按钮与提交事件的落点：先挂上「提交中」（按钮随之禁用，避免二次提交），
+ * 再把结果写回草稿。空名字在这里就被拦下，什么也不发。
+ */
+export async function runInlineCreate(
+  state: InlineCreateState,
+  create: InlineCreateAction,
+  setState: (next: InlineCreateState) => void,
+): Promise<void> {
+  if (!canCreateInline(state)) {
+    return;
+  }
+  setState({ ...state, submitting: true, failed: false });
+  setState(await submitInlineCreate(state, create));
+}
+
 export interface InlineCreateFormProps {
   state: InlineCreateState;
   locale: Locale;

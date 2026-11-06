@@ -54,7 +54,9 @@ import {
   canCreateInline,
   editInlineCreateName,
   initialInlineCreate,
+  runInlineCreate,
   submitInlineCreate,
+  type InlineCreateState,
 } from '../src/workspace/inline-create.ts';
 import { createChannel } from '../src/workspace-actions.ts';
 import { TargetNav } from '../src/workspace/TargetNav.ts';
@@ -628,6 +630,52 @@ test('the inline create form never posts an empty or invented name', async () =>
   assert.equal(canCreateInline(named), true);
   assert.deepEqual(await submitInlineCreate(named, create), initialInlineCreate());
   assert.deepEqual(posted, ['发布环'], 'the typed name is sent trimmed, never a default name');
+});
+
+test('the create entry marks submitting, then settles the draft it started from', async () => {
+  const states: InlineCreateState[] = [];
+  const posted: string[] = [];
+  const create = async (name: string): Promise<void> => {
+    posted.push(name);
+  };
+
+  await runInlineCreate(
+    editInlineCreateName(initialInlineCreate(), ' 发布环 '),
+    create,
+    (next) => states.push(next),
+  );
+
+  assert.deepEqual(posted, ['发布环'], 'the button path posts the typed name once');
+  assert.deepEqual(
+    states.map((state) => [state.submitting, state.failed, state.name]),
+    [
+      [true, false, ' 发布环 '],
+      [false, false, ''],
+    ],
+    'the button is disabled while the request is open, then the draft is cleared',
+  );
+
+  const failedStates: InlineCreateState[] = [];
+  await runInlineCreate(
+    editInlineCreateName(initialInlineCreate(), '发布环'),
+    async () => {
+      throw new Error('POST /api/channels failed with 400');
+    },
+    (next) => failedStates.push(next),
+  );
+  assert.deepEqual(
+    failedStates.map((state) => [state.submitting, state.failed, state.name]),
+    [
+      [true, false, '发布环'],
+      [false, true, '发布环'],
+    ],
+    'a rejected create keeps the name and flags the failure',
+  );
+
+  const emptyStates: InlineCreateState[] = [];
+  await runInlineCreate(initialInlineCreate(), create, (next) => emptyStates.push(next));
+  assert.deepEqual(emptyStates, [], 'an empty name never leaves the form');
+  assert.deepEqual(posted, ['发布环'], 'an empty name posts nothing');
 });
 
 test('the inline create form shows its error inside the empty state', () => {

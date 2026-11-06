@@ -3,11 +3,9 @@ import { createElement, useState, type ReactNode } from 'react';
 import type { AsyncAction1 } from '../async-action.ts';
 import {
   InlineCreateForm,
-  canCreateInline,
   editInlineCreateName,
   initialInlineCreate,
-  submitInlineCreate,
-  type InlineCreateState,
+  runInlineCreate,
 } from './inline-create.ts';
 import { buildWorkspaceNav, type TargetNavEntry } from './model.ts';
 import { StatusPoint } from './StatusPoint.ts';
@@ -52,20 +50,6 @@ export function TargetNav({
   const [channelCreate, setChannelCreate] = useState(initialInlineCreate);
   const [agentCreate, setAgentCreate] = useState(initialInlineCreate);
 
-  /** 提交一次内联创建：pending 先进状态，兑现 / 拒绝都落回同一个草稿。 */
-  function submitCreate(
-    state: InlineCreateState,
-    setState: (next: InlineCreateState) => void,
-    create: AsyncAction1<string>,
-  ): void {
-    if (!canCreateInline(state)) {
-      return;
-    }
-    const pending = { ...state, submitting: true, failed: false };
-    setState(pending);
-    void submitInlineCreate(pending, create).then(setState);
-  }
-
   /**
    * 空状态引导（D9）：先说下一步做什么，再给一个单行创建表单。表单只在
    * 列表真为空、且宿主提供了创建动作时出现；非空状态不给第二入口。
@@ -88,7 +72,9 @@ export function TargetNav({
           action: 'create-channel',
           onChange: (name: string) =>
             setChannelCreate(editInlineCreateName(channelCreate, name)),
-          onSubmit: () => submitCreate(channelCreate, setChannelCreate, onCreateChannel),
+          onSubmit: () => {
+            void runInlineCreate(channelCreate, onCreateChannel, setChannelCreate);
+          },
         }),
   );
 
@@ -109,7 +95,9 @@ export function TargetNav({
           submitLabel: t(locale, 'workspace.nav.createAgent'),
           action: 'create-agent',
           onChange: (name: string) => setAgentCreate(editInlineCreateName(agentCreate, name)),
-          onSubmit: () => submitCreate(agentCreate, setAgentCreate, onCreateAgent),
+          onSubmit: () => {
+            void runInlineCreate(agentCreate, onCreateAgent, setAgentCreate);
+          },
         }),
   );
 
