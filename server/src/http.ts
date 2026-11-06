@@ -98,6 +98,7 @@ import {
   scanSkillCandidates,
   setSkillEnabled,
 } from './skills.js';
+import { DEFAULT_WEB_ROOT, isStaticRequest, serveStaticRequest } from './static-host.js';
 import { listTeamRuns, parseTeamRunQuery, prepareTeamChangeWake } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
 import {
@@ -162,6 +163,8 @@ export async function startHttpServer(
     sseLifetimeMs?: number;
     /** The process environment credentials are read from; tests inject their own. */
     env?: NodeJS.ProcessEnv;
+    /** The built frontend hosted on non-`/api` GET / HEAD; tests inject their own (D6). */
+    webRoot?: string;
   } = {},
 ): Promise<StartedServer> {
   // The HTTP layer never selects a member-face adapter itself: the CLI resolves
@@ -175,6 +178,7 @@ export async function startHttpServer(
     env: options.env ?? process.env,
   };
   const writeError = options.writeError ?? defaultWriteError;
+  const webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
   // The CopilotKit multi-route handler owns everything under its base path;
   // its routes are not part of the human-face REST table below.
   const copilotKitHandler = createCopilotKitHandler(db, orchestration);
@@ -183,6 +187,16 @@ export async function startHttpServer(
     if (isCopilotKitPath(pathname)) {
       copilotKitHandler(request, response).catch((error: unknown) => {
         writeError('unhandled CopilotKit request failure', error);
+        if (!response.headersSent) {
+          response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+        }
+        response.end();
+      });
+      return;
+    }
+    if (isStaticRequest(request.method, pathname)) {
+      serveStaticRequest(request, response, pathname, webRoot).catch((error: unknown) => {
+        writeError('unhandled static request failure', error);
         if (!response.headersSent) {
           response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
         }
