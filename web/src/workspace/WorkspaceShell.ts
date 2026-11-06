@@ -124,6 +124,10 @@ export interface WorkspaceShellProps {
   onSettingsChange?: (patch: Partial<WorkspaceSettingsView>) => void;
   /** Join an Agent into the channel; resolves after the host updated its reading. */
   onJoinMember?: AsyncAction2<string, string>;
+  /** 空频道列表里的创建入口：名字由用户输入，成功后宿主已刷新读数。 */
+  onCreateChannel?: AsyncAction1<string>;
+  /** 空本机 Agent 列表里的创建入口，形状同 `onCreateChannel`。 */
+  onCreateAgent?: AsyncAction1<string>;
   /** Save the Agent's system prompt; resolves after the host re-read the Agent. */
   onSaveAgent?: AsyncAction2<string, { system_prompt: string }>;
   /** Read the channel's team config change; resolves after the host re-read it. */
@@ -198,6 +202,8 @@ export function WorkspaceShell({
   onTaskTransition,
   onSettingsChange,
   onJoinMember,
+  onCreateChannel,
+  onCreateAgent,
   onSaveAgent,
   onDeleteAgent,
   onChannelConfigChange,
@@ -295,6 +301,8 @@ export function WorkspaceShell({
       onSelectTarget: selectTarget,
       onOpenPanel: openPanel,
       onOpenAgentDetail: (agentId: string) => openPanel('agent-detail', agentId),
+      onCreateChannel,
+      onCreateAgent,
     }),
     createElement(SettingsPanel, { settings, onChange: onSettingsChange, saveFailed }),
   );

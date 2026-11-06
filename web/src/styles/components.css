@@ -584,6 +584,59 @@
   color: var(--faint);
 }
 
+/* 空状态里的单行创建表单（无频道 / 无 Agent）：一个名字输入 + 一个按钮。 */
+.target-nav__empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inline-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+}
+
+.inline-create__name {
+  flex: 1;
+  min-inline-size: 0;
+  block-size: 26px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+}
+
+.inline-create__submit {
+  flex: none;
+  block-size: 26px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: var(--hover);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.inline-create__submit:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+.inline-create__error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--error);
+}
+
 /* 状态点：6px 圆点 + 一圈同色光环，四态只换图形档 token。 */
 .status-point {
   display: inline-flex;

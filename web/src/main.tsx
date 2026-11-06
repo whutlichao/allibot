@@ -62,6 +62,8 @@ import {
 } from './workspace/sops.ts';
 import {
   confirmProviderDataFlow,
+  createAgent,
+  createChannel,
   deleteAgent,
   createSopDefinition,
   joinChannelMember,
@@ -77,6 +79,7 @@ import {
   importAllAgentSkills,
   installAgentSkill,
   readTargetMembers,
+  readWorkspace,
   setAgentSkillEnabled,
   saveAgentConfig,
   saveAgentMcp,
@@ -86,6 +89,7 @@ import {
 } from './workspace-actions.ts';
 import { applyJoinResult } from './workspace/member-reading.ts';
 import { readAgentRules } from './workspace/agent-rules.ts';
+import { createReadingTickets } from './workspace/reading-tickets.ts';
 
 const DEFAULT_SETTINGS: WorkspaceSettingsView = {
   locale: 'zh-CN',
@@ -105,7 +109,11 @@ let currentWorkspace: WorkspaceView | null = null;
 let currentSettings: WorkspaceSettingsView = DEFAULT_SETTINGS;
 let currentTargetId: string | null = null;
 let currentViewportWidth = window.innerWidth;
-let refreshGeneration = 0;
+/**
+ * 读数票据：每次刷新与每个创建动作都先 `begin()` 一次，旧读数在被采用之前就
+ * 按票据丢弃（见 `workspace/reading-tickets.ts`）。
+ */
+const readingTickets = createReadingTickets();
 /**
  * 两条失败路径各一位：`GET /api/workspace` 读不到与 `PATCH /api/settings` 写不落库
  * 是两条不同的失败，各用一条词条说明；合成一个标志会把读数失败说成写入失败。
@@ -399,6 +407,19 @@ async function deleteAgentAction(agentId: string): Promise<void> {
   await refreshWorkspace();
 }
 
+/**
+ * 空状态里的两个创建（D9）：动作自己带回刷新后的工作台读数，宿主直接采用，
+ * 不再多读一次；名字就是用户输入的名字，空名字已由表单拦下。采用走
+ * `adoptOwnedReading`，它不是一次刷新，不会与在飞的刷新抢同一个票据。
+ */
+async function createChannelAction(name: string): Promise<void> {
+  await adoptOwnedReading(await createChannel(fetch, name));
+}
+
+async function createAgentAction(name: string): Promise<void> {
+  await adoptOwnedReading(await createAgent(fetch, name));
+}
+
 /** One one-time provider consent; the workspace re-read refreshes the status point. */
 async function confirmProviderConsentAction(provider: AgentProvider): Promise<void> {
   await confirmProviderDataFlow(fetch, provider);
@@ -531,6 +552,8 @@ function render(): void {
             .catch(() => false)
         }
         onJoinMember={joinChannelMemberAction}
+        onCreateChannel={createChannelAction}
+        onCreateAgent={createAgentAction}
         onSaveAgent={saveAgentAction}
         onChannelConfigChange={channelConfigAction}
         onCreateSop={createSopAction}
@@ -636,21 +659,10 @@ function render(): void {
 }
 
 /**
- * Re-read the one workspace reading (D1.9): SSE frames carry facts, not the
- * reading itself, so unread / task / status changes re-fetch the snapshot
- * instead of growing a local count.
+ * 采用一份新的工作台读数：先换正本，再按需重读跟随它的读数（权限规则、
+ * 审批、远端数据流、当前 target 的成员表 / team / plan / SOP），最后渲染。
  */
-async function refreshWorkspace(): Promise<void> {
-  const generation = ++refreshGeneration;
-  const response = await fetch('/api/workspace');
-  if (!response.ok) {
-    throw new Error(`GET /api/workspace failed with ${response.status}`);
-  }
-  const reading = (await response.json()) as WorkspaceView;
-  if (generation !== refreshGeneration) {
-    return;
-  }
-
+async function adoptWorkspaceReading(reading: WorkspaceView): Promise<void> {
   currentWorkspace = reading;
   currentSettings = reading.settings;
   // 读数又读到了：兜底设置面的「设置读取失败」随之消失。
@@ -697,6 +709,33 @@ async function refreshWorkspace(): Promise<void> {
     }
   }
   render();
+}
+
+/**
+ * 采用一份自己拥有的读数（创建动作带回的那份）：**先**开一张新票据作废所有
+ * 在飞的刷新，**再**采用。顺序反了就等于没修：一次在创建之前起飞的刷新读到
+ * 的读数里还没有新频道，它若仍是最新票据，就会把刚建好的内容抹掉。
+ */
+async function adoptOwnedReading(reading: WorkspaceView): Promise<void> {
+  readingTickets.begin();
+  await adoptWorkspaceReading(reading);
+}
+
+/**
+ * Re-read the one workspace reading (D1.9): SSE frames carry facts, not the
+ * reading itself, so unread / task / status changes re-fetch the snapshot
+ * instead of growing a local count.
+ *
+ * 一次刷新只开一张票据；结果落地时票据已不是最新的（期间另一次刷新或创建
+ * 动作开了新票据），这份读数就在采用之前丢弃。
+ */
+async function refreshWorkspace(): Promise<void> {
+  const ticket = readingTickets.begin();
+  const reading = await readWorkspace(fetch);
+  if (!readingTickets.isCurrent(ticket)) {
+    return;
+  }
+  await adoptWorkspaceReading(reading);
 }
 
 window.addEventListener('resize', () => {

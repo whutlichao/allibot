@@ -22,6 +22,7 @@ import type {
   SopRunView,
   TargetMemberView,
   WorkspaceBackend,
+  WorkspaceView,
 } from '@allibot/shared';
 import type { PermissionScope } from './workspace/permissions.ts';
 
@@ -89,6 +90,12 @@ export async function confirmProviderDataFlow(
   return readJson<RemoteConsentView>(response, `POST ${provider} consent`);
 }
 
+/** `GET /api/workspace`: 工作台唯一的那份读数。 */
+export async function readWorkspace(fetchImpl: typeof fetch): Promise<WorkspaceView> {
+  const response = await fetchImpl('/api/workspace');
+  return readJson<WorkspaceView>(response, 'GET /api/workspace');
+}
+
 /** 加入频道：后端返回 `{joined}`；重复加入返回 `joined: false`，不抛错。 */
 export async function joinChannelMember(
   fetchImpl: typeof fetch,
@@ -108,6 +115,38 @@ export async function joinChannelMember(
     throw new Error('POST channel members returned no joined fact');
   }
   return { joined: body.joined };
+}
+
+/**
+ * 空状态里的两个创建动作（D9）：名字就是用户输入的名字，空名字由表单拦下，
+ * 这里不补默认名。写与读同一条动作：`POST` 成功后重读一次工作台读数，
+ * 返回刷新后的快照（后端是正本，前端不做乐观插入）。
+ */
+export async function createChannel(
+  fetchImpl: typeof fetch,
+  name: string,
+): Promise<WorkspaceView> {
+  const response = await fetchImpl('/api/channels', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  await readJson<ChannelView>(response, 'POST /api/channels');
+  return readWorkspace(fetchImpl);
+}
+
+/** 新建 Agent：模型留空，随后落到「缺模型」引导上。 */
+export async function createAgent(
+  fetchImpl: typeof fetch,
+  displayName: string,
+): Promise<WorkspaceView> {
+  const response = await fetchImpl('/api/agents', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ display_name: displayName }),
+  });
+  await readJson<AgentView>(response, 'POST /api/agents');
+  return readWorkspace(fetchImpl);
 }
 
 export async function saveAgentConfig(

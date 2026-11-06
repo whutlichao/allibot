@@ -84,6 +84,10 @@ export interface AppProps {
   /** The task board's write entry; the board itself never changes a task row. */
   onTaskTransition?: (task: TaskView, status: TaskStatus) => boolean | Promise<boolean>;
   onJoinMember?: AsyncAction2<string, string>;
+  /** 空频道列表里的创建入口：名字由用户输入，空名字不提交。 */
+  onCreateChannel?: AsyncAction1<string>;
+  /** 空本机 Agent 列表里的创建入口，形状同 `onCreateChannel`。 */
+  onCreateAgent?: AsyncAction1<string>;
   onSaveAgent?: AsyncAction2<string, { system_prompt: string }>;
   onDeleteAgent?: AsyncAction1<string>;
   onChannelConfigChange?: AsyncAction2<string, ChannelConfigPatch>;
@@ -145,6 +149,8 @@ export function App({
   onSelectTarget,
   onTaskTransition,
   onJoinMember,
+  onCreateChannel,
+  onCreateAgent,
   onSaveAgent,
   onDeleteAgent,
   onChannelConfigChange,
@@ -190,6 +196,8 @@ export function App({
       onTaskTransition,
       onSettingsChange,
       onJoinMember,
+      onCreateChannel,
+      onCreateAgent,
       onSaveAgent,
       onDeleteAgent,
       onChannelConfigChange,

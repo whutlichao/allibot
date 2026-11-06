@@ -83,6 +83,34 @@ test('every key string is a stable namespace-qualified key with no Avoid-word na
   }
 });
 
+/**
+ * 提示是给 owner 照抄执行的：仓库里没有 `allibot` 这个可执行文件（根
+ * `package.json` 没有 `bin` 字段），所以反引号里的命令行只能是仓库里真能跑
+ * 的根脚本或 `node dist/cli.js ...`（规格 D8）。
+ */
+test('no catalog copy hands the owner a backtick `allibot` command line', () => {
+  const offenders = Object.entries(catalog)
+    .filter(([, entry]) => /`allibot /.test(entry.text))
+    .map(([key]) => key);
+  assert.deepEqual(
+    offenders,
+    [],
+    `zh-CN copy points at a command that does not exist: ${offenders.join(', ')}`,
+  );
+});
+
+test('cli.schema.tooOld names the two migration commands that do exist', () => {
+  const entry = catalog['cli.schema.tooOld'];
+  assert.ok(entry !== undefined, 'zh-CN must define cli.schema.tooOld');
+  assert.match(entry.text, /仓库根/, 'the copy must say where the command runs');
+  assert.match(entry.text, /`npm run migrate`/, 'the default data dir uses the root script');
+  assert.match(
+    entry.text,
+    /`node dist\/cli\.js --migrate --data-dir \{data_dir\}`/,
+    'an explicit data dir uses the CLI entry that ships in this repo',
+  );
+});
+
 test('every catalog key used by the web and server source exists in zh-CN', async () => {
   const uses = (
     await Promise.all(WORKSPACES.map((workspace) => collectCatalogUses(path.join(REPO_ROOT, workspace))))

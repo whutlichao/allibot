@@ -98,6 +98,12 @@ import {
   scanSkillCandidates,
   setSkillEnabled,
 } from './skills.js';
+import {
+  assertWebRootBuilt,
+  DEFAULT_WEB_ROOT,
+  isStaticRequest,
+  serveStaticRequest,
+} from './static-host.js';
 import { listTeamRuns, parseTeamRunQuery, prepareTeamChangeWake } from './team-runs.js';
 import { markOwnerRead } from './unread.js';
 import {
@@ -162,6 +168,8 @@ export async function startHttpServer(
     sseLifetimeMs?: number;
     /** The process environment credentials are read from; tests inject their own. */
     env?: NodeJS.ProcessEnv;
+    /** The built frontend hosted on non-`/api` GET / HEAD; tests inject their own (D6). */
+    webRoot?: string;
   } = {},
 ): Promise<StartedServer> {
   // The HTTP layer never selects a member-face adapter itself: the CLI resolves
@@ -175,6 +183,16 @@ export async function startHttpServer(
     env: options.env ?? process.env,
   };
   const writeError = options.writeError ?? defaultWriteError;
+  const webRoot = options.webRoot ?? DEFAULT_WEB_ROOT;
+  // 静态根没有构建产物即失败 (M4 / D5 / D6)：`serve` 的启动闸门在 `cli.ts`
+  // 里（D5 的用户可观察失败由它承担，且在拿数据目录锁之前）；这一层再断言
+  // 解析后的静态根，任何调用方都启不了一个只有 API 的服务。
+  //
+  // 代价是 spawn CLI 的 server 套件隐含依赖 `web/dist`（gitignore 的构建产物）。
+  // 那是 D5 的必然结果而非本断言的副作用：实测把本断言收窄成「只在注入
+  // webRoot 时执行」后，拿掉 `web/dist` 仍让 `server/test/agents-http.test.ts`
+  // 9/9 失败 —— 因为 cli 的闸门同样要求产物存在。
+  assertWebRootBuilt(webRoot);
   // The CopilotKit multi-route handler owns everything under its base path;
   // its routes are not part of the human-face REST table below.
   const copilotKitHandler = createCopilotKitHandler(db, orchestration);
@@ -183,6 +201,16 @@ export async function startHttpServer(
     if (isCopilotKitPath(pathname)) {
       copilotKitHandler(request, response).catch((error: unknown) => {
         writeError('unhandled CopilotKit request failure', error);
+        if (!response.headersSent) {
+          response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+        }
+        response.end();
+      });
+      return;
+    }
+    if (isStaticRequest(request.method, pathname)) {
+      serveStaticRequest(request, response, pathname, webRoot).catch((error: unknown) => {
+        writeError('unhandled static request failure', error);
         if (!response.headersSent) {
           response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
         }

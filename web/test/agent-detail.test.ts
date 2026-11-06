@@ -31,10 +31,16 @@ import {
 } from '../src/workspace/member-reading.ts';
 import {
   confirmProviderDataFlow,
+  createAgent,
   joinChannelMember,
   readChannelMembers,
   readRemoteDataFlow,
 } from '../src/workspace-actions.ts';
+import {
+  editInlineCreateName,
+  initialInlineCreate,
+  submitInlineCreate,
+} from '../src/workspace/inline-create.ts';
 import { hydrateThread } from '../src/workspace/message-sync.ts';
 import { ContextPanel } from '../src/workspace/ContextPanel.ts';
 import { WorkspaceShell } from '../src/workspace/WorkspaceShell.ts';
@@ -333,6 +339,72 @@ test('the member panel splits joined and not-joined Agents with status, model an
   assert.doesNotMatch(joined, /data-action="join-member"/, 'joined rows carry no join control');
 });
 
+test('a missing model or credential names the credential source instead of 未配置', () => {
+  const fact = (html: string, field: string): string => {
+    const start = html.indexOf(`data-field="${field}"`);
+    assert.notEqual(start, -1, `missing the ${field} fact`);
+    const next = html.indexOf('data-field="', start + 1);
+    return html.slice(start, next === -1 ? undefined : next);
+  };
+
+  const noModel = renderToStaticMarkup(
+    createElement(AgentDetailPanel, {
+      agent: agent({
+        id: 'agent-8',
+        display_name: '阿白',
+        avatar_slot: 5,
+        model: null,
+        credential_status: 'missing',
+        status: 'offline',
+        offline_reason: 'model-missing',
+      }),
+      locale: 'zh-CN',
+      remoteDataFlow: REMOTE_DATA_FLOW,
+    }),
+  );
+  assert.ok(
+    fact(noModel, 'model').includes('模型密钥从环境变量读，不写库'),
+    'the model fact says where the key comes from',
+  );
+  assert.ok(
+    fact(noModel, 'model').includes('还没有配置模型'),
+    'the model fact states the missing model as a fact, not as 未配置',
+  );
+  for (const field of ['model', 'credential']) {
+    assert.ok(
+      !fact(noModel, field).includes('ANTHROPIC_API_KEY') &&
+        !fact(noModel, field).includes('OPENAI_API_KEY'),
+      `the ${field} fact names no credential variable for an unknown provider`,
+    );
+  }
+
+  const anthropicNoKey = renderToStaticMarkup(
+    createElement(AgentDetailPanel, {
+      agent: agent({
+        id: 'agent-7',
+        display_name: '阿紫',
+        avatar_slot: 6,
+        model: 'anthropic:claude-sonnet-5-5',
+        credential_status: 'missing',
+        status: 'offline',
+        offline_reason: 'credential-missing',
+      }),
+      locale: 'zh-CN',
+      remoteDataFlow: REMOTE_DATA_FLOW,
+    }),
+  );
+  const anthropicCredential = fact(anthropicNoKey, 'credential');
+  assert.ok(
+    anthropicCredential.includes('ANTHROPIC_API_KEY'),
+    'the credential fact names the provider variable from /api/remote-data-flow',
+  );
+  assert.ok(
+    anthropicCredential.includes('模型密钥从环境变量读，不写库'),
+    'the credential fact states where the key comes from',
+  );
+  assert.ok(anthropicCredential.includes('重启后端'), 'the credential fact says when it takes effect');
+});
+
 test('the Agent detail names the credential env and offers the consent entry', () => {
   const credential = renderToStaticMarkup(
     createElement(AgentDetailPanel, {
@@ -488,6 +560,72 @@ test('a join moves the row only after the backend answers with {joined}', async 
       headers: { 'content-type': 'application/json' },
     })) as typeof fetch;
   await assert.rejects(() => joinChannelMember(failed, CHANNEL_ID, NOT_JOINED_ID), 'a failed join rejects');
+});
+
+test('creating an Agent from the empty state posts the typed name and re-reads the workspace', async () => {
+  const calls: string[] = [];
+  const reading = workspace({
+    agents: [agent({ id: 'agent-9', display_name: '新同事', model: null, status: 'offline', offline_reason: 'model-missing' })],
+  });
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    calls.push(`${init?.method ?? 'GET'} ${url} ${String(init?.body ?? '')}`.trim());
+    if (url === '/api/agents' && init?.method === 'POST') {
+      return new Response(JSON.stringify(reading.agents[0]), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url === '/api/workspace') {
+      return new Response(JSON.stringify(reading), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    throw new Error(`unexpected request ${init?.method ?? 'GET'} ${url}`);
+  }) as typeof fetch;
+
+  const state = editInlineCreateName(initialInlineCreate(), '新同事');
+  const settled = await submitInlineCreate(state, async (name) => {
+    await createAgent(fetchImpl, name);
+  });
+
+  assert.equal(settled.failed, false, 'the create is reported as done');
+  assert.deepEqual(
+    calls,
+    ['POST /api/agents {"display_name":"新同事"}', 'GET /api/workspace'],
+    'the create posts the typed name, then re-reads the workspace snapshot',
+  );
+  assert.deepEqual(
+    await createAgent(fetchImpl, '新同事'),
+    reading,
+    'the action answers with the refreshed snapshot',
+  );
+  assert.equal(
+    reading.agents[0]?.model,
+    null,
+    'a new Agent has no model, which falls into the missing-model guidance',
+  );
+});
+
+test('a rejected Agent create stays in the empty state with its error', async () => {
+  const calls: string[] = [];
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    calls.push(`${init?.method ?? 'GET'} ${url} ${String(init?.body ?? '')}`.trim());
+    return new Response(JSON.stringify({ error: { code: 'validation', message: 'display_name' } }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+
+  const state = editInlineCreateName(initialInlineCreate(), '新同事');
+  const settled = await submitInlineCreate(state, async (name) => {
+    await createAgent(fetchImpl, name);
+  });
+
+  assert.equal(settled.failed, true, 'the failure stays in the empty state');
+  assert.deepEqual(calls, ['POST /api/agents {"display_name":"新同事"}'], 'no snapshot after a failure');
 });
 
 test('reading the channel member table uses GET /api/channels/{id}/members', async () => {
